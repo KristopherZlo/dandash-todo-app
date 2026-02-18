@@ -68,6 +68,7 @@ class ListItemController extends Controller
             'quantity' => ['nullable', 'numeric', 'min:0.01', 'max:99999999.99'],
             'unit' => ['nullable', 'string', 'max:24'],
             'due_at' => ['nullable', 'date'],
+            'priority' => ['nullable', Rule::in([ListItem::PRIORITY_URGENT, ListItem::PRIORITY_TODAY, ListItem::PRIORITY_LATER])],
         ]);
 
         $ownerId = (int) $validated['owner_id'];
@@ -98,6 +99,9 @@ class ListItemController extends Controller
                 )
                 : null,
             'due_at' => $type === ListItem::TYPE_TODO ? ($validated['due_at'] ?? null) : null,
+            'priority' => $type === ListItem::TYPE_TODO
+                ? $this->normalizePriority($validated['priority'] ?? null)
+                : null,
             'created_by_id' => $request->user()->id,
             'updated_by_id' => $request->user()->id,
         ]);
@@ -140,6 +144,61 @@ class ListItemController extends Controller
         ]);
     }
 
+    public function productStats(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'owner_id' => ['required', 'integer', 'exists:users,id'],
+            'link_id' => ['nullable', 'integer', 'exists:list_links,id'],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:200'],
+        ]);
+
+        $ownerId = (int) $validated['owner_id'];
+        $linkId = isset($validated['link_id']) ? (int) $validated['link_id'] : null;
+        $limit = (int) ($validated['limit'] ?? 50);
+
+        if ($linkId) {
+            $link = $this->resolveAccessibleLink($request, $linkId);
+            $ownerId = (int) $link->user_one_id;
+        } else {
+            $this->ensureCanAccess($request, $ownerId);
+        }
+
+        return response()->json([
+            'stats' => $this->listItemSuggestionService->productStatsForOwner($ownerId, $limit, $linkId),
+        ]);
+    }
+
+    public function resetSuggestionData(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'owner_id' => ['required', 'integer', 'exists:users,id'],
+            'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
+            'link_id' => ['nullable', 'integer', 'exists:list_links,id'],
+            'suggestion_key' => ['required', 'string', 'max:190'],
+        ]);
+
+        $ownerId = (int) $validated['owner_id'];
+        $type = (string) $validated['type'];
+        $linkId = isset($validated['link_id']) ? (int) $validated['link_id'] : null;
+
+        if ($linkId) {
+            $link = $this->resolveAccessibleLink($request, $linkId);
+            $ownerId = (int) $link->user_one_id;
+        } else {
+            $this->ensureCanAccess($request, $ownerId);
+        }
+
+        $this->listItemSuggestionService->resetSuggestionData(
+            $ownerId,
+            $type,
+            (string) $validated['suggestion_key']
+        );
+
+        return response()->json([
+            'status' => 'ok',
+        ]);
+    }
+
     public function dismissSuggestion(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -179,6 +238,7 @@ class ListItemController extends Controller
         $validated = $request->validate([
             'text' => ['sometimes', 'required', 'string', 'max:255'],
             'due_at' => ['nullable', 'date'],
+            'priority' => ['nullable', Rule::in([ListItem::PRIORITY_URGENT, ListItem::PRIORITY_TODAY, ListItem::PRIORITY_LATER])],
             'is_completed' => ['sometimes', 'boolean'],
             'sort_order' => ['sometimes', 'integer'],
             'quantity' => ['nullable', 'numeric', 'min:0.01', 'max:99999999.99'],
@@ -195,6 +255,12 @@ class ListItemController extends Controller
         if ($request->has('due_at')) {
             $item->due_at = $item->type === ListItem::TYPE_TODO
                 ? ($validated['due_at'] ?? null)
+                : null;
+        }
+
+        if ($request->has('priority')) {
+            $item->priority = $item->type === ListItem::TYPE_TODO
+                ? $this->normalizePriority($validated['priority'] ?? null)
                 : null;
         }
 
@@ -418,6 +484,9 @@ class ListItemController extends Controller
             'quantity' => $item->quantity !== null ? (float) $item->quantity : null,
             'unit' => $item->unit,
             'due_at' => optional($item->due_at)->toISOString(),
+            'priority' => $item->type === ListItem::TYPE_TODO
+                ? $this->normalizePriority($item->priority)
+                : null,
             'is_completed' => (bool) $item->is_completed,
             'completed_at' => optional($item->completed_at)->toISOString(),
             'created_at' => optional($item->created_at)->toISOString(),
@@ -437,6 +506,20 @@ class ListItemController extends Controller
         }
 
         return round($quantity, 2);
+    }
+
+    private function normalizePriority(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        $priority = mb_strtolower(trim($value), 'UTF-8');
+
+        return match ($priority) {
+            ListItem::PRIORITY_URGENT, ListItem::PRIORITY_TODAY, ListItem::PRIORITY_LATER => $priority,
+            default => null,
+        };
     }
 
     private function normalizeUnit(mixed $value): ?string

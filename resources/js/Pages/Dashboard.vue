@@ -68,14 +68,18 @@ const searchQuery = ref('');
 const searchResults = ref([]);
 const searchBusy = ref(false);
 
-const statusMessage = ref('');
-const errorMessage = ref('');
+const toasts = ref([]);
+
+const productStatsModalOpen = ref(false);
 const smartSuggestionsNoticeVisible = ref(true);
 const productSuggestionsOpen = ref(true);
 const todoSuggestionsOpen = ref(true);
 const batchRemovingItemKeys = ref([]);
 const batchRemovalAnimating = ref(false);
 const deleteFeedbackBursts = ref([]);
+const productSuggestionStats = ref([]);
+const productSuggestionStatsLoading = ref(false);
+const resettingSuggestionKeys = ref([]);
 
 const profileForm = reactive({
     name: localUser.name,
@@ -126,6 +130,9 @@ let handleOnlineEvent = null;
 let handleOfflineEvent = null;
 let nextDeleteFeedbackBurstId = 1;
 let skipTodoBlurSaveUntil = 0;
+let queuedUpdateTouchedAt = 0;
+let queuedUpdateSyncTimer = null;
+let nextToastId = 1;
 
 function normalizeLinkId(value) {
     const parsed = Number(value);
@@ -259,136 +266,130 @@ const canShowRemoveCompletedButton = computed(() => {
 
 const SWIPE_UNDO_WINDOW_MS = 4500;
 const BATCH_REMOVE_CARD_ANIMATION_MS = 190;
+const UPDATE_SYNC_COALESCE_MS = 1000;
+const TOAST_AUTO_CLOSE_MS = 3200;
+const TOAST_SWIPE_DISMISS_THRESHOLD = 64;
 const PRODUCT_UNIT_ALIASES = {
     // Pieces
-    '??': '??',
-    '?????': '??',
-    '?????': '??',
-    '????': '??',
-    '??????': '??',
-    '??????': '??',
-    '??????': '??',
-    '??': '??',
-    '????': '??',
-    '???????': '??',
-    '???????': '??',
-    '??????': '??',
-    'pc': '??',
-    'pcs': '??',
-    'piece': '??',
-    'pieces': '??',
+    '\u0448\u0442': '\u0448\u0442',
+    '\u0448\u0442\u0443\u043a\u0430': '\u0448\u0442',
+    '\u0448\u0442\u0443\u043a\u0438': '\u0448\u0442',
+    '\u0448\u0442\u0443\u043a': '\u0448\u0442',
+    '\u0448\u0442\u0443\u0447\u043a\u0430': '\u0448\u0442',
+    '\u0448\u0442\u0443\u0447\u043a\u0438': '\u0448\u0442',
+    '\u0448\u0442\u0443\u0447\u0435\u043a': '\u0448\u0442',
+    '\u0435\u0434': '\u0448\u0442',
+    '\u0435\u0434\u0438\u043d\u0438\u0446\u0430': '\u0448\u0442',
+    '\u0435\u0434\u0438\u043d\u0438\u0446\u044b': '\u0448\u0442',
+    '\u0435\u0434\u0438\u043d\u0438\u0446': '\u0448\u0442',
+    'pc': '\u0448\u0442',
+    'pcs': '\u0448\u0442',
+    'piece': '\u0448\u0442',
+    'pieces': '\u0448\u0442',
 
     // Weight
-    '??': '??',
-    'kg': '??',
-    'kilo': '??',
-    'kilos': '??',
-    '????': '??',
-    '?????????': '??',
-    '??????????': '??',
-    '???????????': '??',
-    '?': '?',
-    '??': '?',
-    'gram': '?',
-    'grams': '?',
-    '?????': '?',
-    '??????': '?',
-    '???????': '?',
+    '\u043a\u0433': '\u043a\u0433',
+    '\u043a\u0438\u043b\u043e': '\u043a\u0433',
+    '\u043a\u0438\u043b\u043e\u0433\u0440\u0430\u043c\u043c': '\u043a\u0433',
+    '\u043a\u0438\u043b\u043e\u0433\u0440\u0430\u043c\u043c\u0430': '\u043a\u0433',
+    '\u043a\u0438\u043b\u043e\u0433\u0440\u0430\u043c\u043c\u043e\u0432': '\u043a\u0433',
+    'kg': '\u043a\u0433',
+    'kilo': '\u043a\u0433',
+    'kilos': '\u043a\u0433',
+
+    '\u0433': '\u0433',
+    '\u0433\u0440': '\u0433',
+    '\u0433\u0440\u0430\u043c\u043c': '\u0433',
+    '\u0433\u0440\u0430\u043c\u043c\u0430': '\u0433',
+    '\u0433\u0440\u0430\u043c\u043c\u043e\u0432': '\u0433',
+    'gram': '\u0433',
+    'grams': '\u0433',
 
     // Volume
-    '?': '?',
-    'l': '?',
-    'liter': '?',
-    'liters': '?',
-    '????': '?',
-    '?????': '?',
-    '??????': '?',
-    '??': '??',
-    'ml': '??',
-    'milliliter': '??',
-    'milliliters': '??',
-    '?????????': '??',
-    '??????????': '??',
-    '???????????': '??',
+    '\u043b': '\u043b',
+    '\u043b\u0438\u0442\u0440': '\u043b',
+    '\u043b\u0438\u0442\u0440\u0430': '\u043b',
+    '\u043b\u0438\u0442\u0440\u043e\u0432': '\u043b',
+    'l': '\u043b',
+    'liter': '\u043b',
+    'liters': '\u043b',
 
-    // Packs and packages
-    '??': '??',
-    '????': '??',
-    '??????': '??',
-    '????????': '??',
-    '????????': '??',
-    '????????': '??',
-    'pack': '??',
-    'packs': '??',
-    'package': '??',
-    'packages': '??',
-    'pkg': '??',
+    '\u043c\u043b': '\u043c\u043b',
+    '\u043c\u0438\u043b\u043b\u0438\u043b\u0438\u0442\u0440': '\u043c\u043b',
+    '\u043c\u0438\u043b\u043b\u0438\u043b\u0438\u0442\u0440\u0430': '\u043c\u043b',
+    '\u043c\u0438\u043b\u043b\u0438\u043b\u0438\u0442\u0440\u043e\u0432': '\u043c\u043b',
+    'ml': '\u043c\u043b',
+    'milliliter': '\u043c\u043b',
+    'milliliters': '\u043c\u043b',
 
-    // Pouch / packet / ?????
-    '???': '???',
-    '?????': '???',
-    '?????': '???',
-    '?????': '???',
-    '??????': '???',
+    // Packs / packages
+    '\u0443\u043f': '\u0443\u043f',
+    '\u0443\u043f\u0430\u043a': '\u0443\u043f',
+    '\u0443\u043f\u0430\u043a\u043e\u0432\u043a\u0430': '\u0443\u043f',
+    '\u0443\u043f\u0430\u043a\u043e\u0432\u043a\u0438': '\u0443\u043f',
+    '\u0443\u043f\u0430\u043a\u043e\u0432\u043e\u043a': '\u0443\u043f',
+    'pack': '\u0443\u043f',
+    'packs': '\u0443\u043f',
+    'package': '\u0443\u043f',
+    'packages': '\u0443\u043f',
+    'pkg': '\u0443\u043f',
 
-    // Bag / packet
-    '???': '???',
-    '?????': '???',
-    '??????': '???',
-    '???????': '???',
-    '???????': '???',
-    '????????': '???',
-    'packet': '???',
-    'packets': '???',
+    '\u043f\u0430\u0447': '\u043f\u0430\u0447',
+    '\u043f\u0430\u0447\u043a\u0430': '\u043f\u0430\u0447',
+    '\u043f\u0430\u0447\u043a\u0438': '\u043f\u0430\u0447',
+    '\u043f\u0430\u0447\u0435\u043a': '\u043f\u0430\u0447',
 
-    // Bottles
-    '???': '???',
-    '???????': '???',
-    '???????': '???',
-    '???????': '???',
-    'bottle': '???',
-    'bottles': '???',
+    '\u043f\u0430\u043a': '\u043f\u0430\u043a',
+    '\u043f\u0430\u043a\u0435\u0442': '\u043f\u0430\u043a',
+    '\u043f\u0430\u043a\u0435\u0442\u0430': '\u043f\u0430\u043a',
+    '\u043f\u0430\u043a\u0435\u0442\u043e\u0432': '\u043f\u0430\u043a',
+    'packet': '\u043f\u0430\u043a',
+    'packets': '\u043f\u0430\u043a',
 
-    // Jars / cans
-    '???': '???',
-    '?????': '???',
-    '?????': '???',
-    '?????': '???',
-    'jar': '???',
-    'jars': '???',
+    // Containers
+    '\u0431\u0443\u0442': '\u0431\u0443\u0442',
+    '\u0431\u0443\u0442\u044b\u043b\u043a\u0430': '\u0431\u0443\u0442',
+    '\u0431\u0443\u0442\u044b\u043b\u043a\u0438': '\u0431\u0443\u0442',
+    '\u0431\u0443\u0442\u044b\u043b\u043e\u043a': '\u0431\u0443\u0442',
+    'bottle': '\u0431\u0443\u0442',
+    'bottles': '\u0431\u0443\u0442',
 
-    // Boxes
-    '???': '???',
-    '???????': '???',
-    '???????': '???',
-    '???????': '???',
-    'box': '???',
-    'boxes': '???',
+    '\u0431\u0430\u043d': '\u0431\u0430\u043d',
+    '\u0431\u0430\u043d\u043a\u0430': '\u0431\u0430\u043d',
+    '\u0431\u0430\u043d\u043a\u0438': '\u0431\u0430\u043d',
+    '\u0431\u0430\u043d\u043e\u043a': '\u0431\u0430\u043d',
+    'jar': '\u0431\u0430\u043d',
+    'jars': '\u0431\u0430\u043d',
 
-    // Rolls
-    '???': '???',
-    '?????': '???',
-    '??????': '???',
-    '???????': '???',
-    'roll': '???',
-    'rolls': '???',
+    '\u043a\u043e\u0440': '\u043a\u043e\u0440',
+    '\u043a\u043e\u0440\u043e\u0431\u043a\u0430': '\u043a\u043e\u0440',
+    '\u043a\u043e\u0440\u043e\u0431\u043a\u0438': '\u043a\u043e\u0440',
+    '\u043a\u043e\u0440\u043e\u0431\u043e\u043a': '\u043a\u043e\u0440',
+    'box': '\u043a\u043e\u0440',
+    'boxes': '\u043a\u043e\u0440',
 
-    // Dozen
-    '???': '???',
-    '??????': '???',
-    '??????': '???',
-    '?????': '???',
-    'dozen': '???',
-    'dozens': '???',
-    'dz': '???',
+    '\u0440\u0443\u043b': '\u0440\u0443\u043b',
+    '\u0440\u0443\u043b\u043e\u043d': '\u0440\u0443\u043b',
+    '\u0440\u0443\u043b\u043e\u043d\u0430': '\u0440\u0443\u043b',
+    '\u0440\u0443\u043b\u043e\u043d\u043e\u0432': '\u0440\u0443\u043b',
+    'roll': '\u0440\u0443\u043b',
+    'rolls': '\u0440\u0443\u043b',
 
-    // Portion
-    '????': '????',
-    '??????': '????',
-    '??????': '????',
-    '??????': '????',
-    'portion': '????',
-    'portions': '????',
+    // Dozen / portion
+    '\u0434\u044e\u0436': '\u0434\u044e\u0436',
+    '\u0434\u044e\u0436\u0438\u043d\u0430': '\u0434\u044e\u0436',
+    '\u0434\u044e\u0436\u0438\u043d\u044b': '\u0434\u044e\u0436',
+    '\u0434\u044e\u0436\u0438\u043d': '\u0434\u044e\u0436',
+    'dozen': '\u0434\u044e\u0436',
+    'dozens': '\u0434\u044e\u0436',
+    'dz': '\u0434\u044e\u0436',
+
+    '\u043f\u043e\u0440\u0446': '\u043f\u043e\u0440\u0446',
+    '\u043f\u043e\u0440\u0446\u0438\u044f': '\u043f\u043e\u0440\u0446',
+    '\u043f\u043e\u0440\u0446\u0438\u0438': '\u043f\u043e\u0440\u0446',
+    '\u043f\u043e\u0440\u0446\u0438\u0439': '\u043f\u043e\u0440\u0446',
+    'portion': '\u043f\u043e\u0440\u0446',
+    'portions': '\u043f\u043e\u0440\u0446',
 };
 const PRODUCT_UNIT_PATTERN = Object.keys(PRODUCT_UNIT_ALIASES)
     .map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
@@ -534,6 +535,10 @@ function areItemsEquivalent(leftItems, rightItems) {
             return false;
         }
 
+        if (normalizeComparableValue(leftItem.priority) !== normalizeComparableValue(rightItem.priority)) {
+            return false;
+        }
+
         if (Boolean(leftItem.is_completed) !== Boolean(rightItem.is_completed)) {
             return false;
         }
@@ -587,6 +592,7 @@ function normalizeItem(item, localIdOverride = null, context = {}) {
         list_link_id: normalizeLinkId(linkIdOverride ?? item?.list_link_id),
         sort_order: normalizeSortOrderValue(item?.sort_order, 1000),
         local_id: localIdOverride ?? item.local_id ?? `srv-${item.id}`,
+        priority: item?.type === 'todo' ? normalizeTodoPriority(item?.priority) : null,
         pending_sync: false,
     };
 }
@@ -756,6 +762,7 @@ function createOptimisticItem({
     type,
     text,
     dueAt = null,
+    priority = null,
     quantity = null,
     unit = null,
     sortOrder = 1000,
@@ -775,6 +782,7 @@ function createOptimisticItem({
         quantity: type === 'product' ? quantity : null,
         unit: type === 'product' ? unit : null,
         due_at: dueAt,
+        priority: type === 'todo' ? normalizeTodoPriority(priority, inferTodoPriorityFromDueAt(dueAt)) : null,
         is_completed: false,
         completed_at: null,
         created_at: now,
@@ -841,6 +849,43 @@ function hasPendingOperations(ownerId, type, linkId = undefined) {
     );
 }
 
+
+function getQueuedUpdateQuietRemainingMs() {
+    if (queuedUpdateTouchedAt <= 0) {
+        return 0;
+    }
+
+    const elapsedMs = Date.now() - queuedUpdateTouchedAt;
+    if (elapsedMs >= UPDATE_SYNC_COALESCE_MS) {
+        return 0;
+    }
+
+    return UPDATE_SYNC_COALESCE_MS - elapsedMs;
+}
+
+function scheduleQueuedUpdateSync(delayMs = UPDATE_SYNC_COALESCE_MS) {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    if (queuedUpdateSyncTimer) {
+        clearTimeout(queuedUpdateSyncTimer);
+    }
+
+    const safeDelay = Math.max(0, Number(delayMs) || 0);
+    queuedUpdateSyncTimer = window.setTimeout(() => {
+        queuedUpdateSyncTimer = null;
+        syncOfflineQueue().catch((error) => {
+            showError(error);
+        });
+    }, safeDelay);
+}
+
+function markQueuedUpdateTouched() {
+    queuedUpdateTouchedAt = Date.now();
+    scheduleQueuedUpdateSync(UPDATE_SYNC_COALESCE_MS);
+}
+
 function enqueueOperation(operation) {
     offlineQueue.value.push({
         op_id: `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -899,6 +944,7 @@ function queueCreate(ownerId, type, item, linkId = undefined) {
             quantity: item.quantity ?? null,
             unit: item.unit ?? null,
             due_at: item.due_at ?? null,
+            priority: item.type === 'todo' ? normalizeTodoPriority(item.priority) : null,
             is_completed: !!item.is_completed,
         },
     });
@@ -964,6 +1010,7 @@ function queueUpdate(ownerId, type, itemId, payload, linkId = undefined) {
             },
         };
         persistQueue();
+        markQueuedUpdateTouched();
         return;
     }
 
@@ -983,6 +1030,7 @@ function queueUpdate(ownerId, type, itemId, payload, linkId = undefined) {
             },
         };
         persistQueue();
+        markQueuedUpdateTouched();
         return;
     }
 
@@ -994,6 +1042,7 @@ function queueUpdate(ownerId, type, itemId, payload, linkId = undefined) {
         item_id: numericItemId,
         payload: { ...payload },
     });
+    markQueuedUpdateTouched();
 }
 
 function queueDelete(ownerId, type, itemId, linkId = undefined) {
@@ -1052,6 +1101,21 @@ function queueDelete(ownerId, type, itemId, linkId = undefined) {
             (operation) => operation.action !== 'reorder'
                 || (Array.isArray(operation.payload?.order) && operation.payload.order.length > 0),
         );
+
+    const queuedDeleteIndex = findQueueIndexFromEnd(
+        (operation) =>
+            operation.action === 'delete'
+            && Number(operation.owner_id) === Number(ownerId)
+            && String(operation.type) === String(type)
+            && Number(operation.item_id) === numericItemId
+            && normalizeLinkId(operation.link_id) === resolvedLinkId,
+    );
+
+    if (queuedDeleteIndex !== -1) {
+        persistQueue();
+        return;
+    }
+
     persistQueue();
 
     enqueueOperation({
@@ -1366,6 +1430,7 @@ async function syncOfflineQueue() {
                         quantity: operation.type === 'product' ? (operation.payload.quantity ?? null) : null,
                         unit: operation.type === 'product' ? (operation.payload.unit ?? null) : null,
                         due_at: operation.type === 'todo' ? (operation.payload.due_at ?? null) : null,
+                        priority: operation.type === 'todo' ? normalizeTodoPriority(operation.payload.priority) : null,
                     }));
 
                     let syncedItem = normalizeItem(response.data.item, `srv-${response.data.item.id}`, {
@@ -1409,6 +1474,12 @@ async function syncOfflineQueue() {
                     if (Number(operation.item_id) <= 0) {
                         dropQueueOperation(operation.op_id);
                         continue;
+                    }
+
+                    const quietRemainingMs = getQueuedUpdateQuietRemainingMs();
+                    if (quietRemainingMs > 0) {
+                        scheduleQueuedUpdateSync(quietRemainingMs);
+                        break;
                     }
 
                     const response = await requestApi(() => window.axios.patch(`api/items/${operation.item_id}`, {
@@ -1465,6 +1536,19 @@ async function syncOfflineQueue() {
                     break;
                 }
 
+                const statusCode = Number(error?.response?.status ?? 0);
+
+                if (operation.action === 'delete' && statusCode === 404) {
+                    dropQueueOperation(operation.op_id);
+                    continue;
+                }
+
+                if (operation.action === 'update' && statusCode === 404) {
+                    removeLocalItem(operation.owner_id, operation.type, operation.item_id, operation.link_id);
+                    dropQueueOperation(operation.op_id);
+                    continue;
+                }
+
                 if (operation.action === 'create') {
                     removeLocalItem(operation.owner_id, operation.type, operation.item_id, operation.link_id);
                 }
@@ -1484,20 +1568,153 @@ async function syncOfflineQueue() {
 }
 
 function resetMessages() {
-    statusMessage.value = '';
-    errorMessage.value = '';
+    // Toast-based notifications do not need hard resets.
+}
+
+function clearToastTimer(toast) {
+    if (!toast || typeof window === 'undefined') {
+        return;
+    }
+
+    if (toast.timerId) {
+        clearTimeout(toast.timerId);
+        toast.timerId = null;
+    }
+}
+
+function removeToast(toastId) {
+    const numericId = Number(toastId);
+    const toast = toasts.value.find((entry) => Number(entry.id) === numericId);
+    if (toast) {
+        clearToastTimer(toast);
+    }
+
+    toasts.value = toasts.value.filter((entry) => Number(entry.id) !== numericId);
+}
+
+function scheduleToastAutoclose(toast, duration = TOAST_AUTO_CLOSE_MS) {
+    if (!toast || typeof window === 'undefined') {
+        return;
+    }
+
+    clearToastTimer(toast);
+    const safeDuration = Math.max(900, Number(duration) || TOAST_AUTO_CLOSE_MS);
+
+    toast.timerId = window.setTimeout(() => {
+        removeToast(toast.id);
+    }, safeDuration);
+}
+
+function pushToast(message, type = 'info', duration = TOAST_AUTO_CLOSE_MS) {
+    const normalizedMessage = String(message ?? '').trim();
+    if (!normalizedMessage) {
+        return;
+    }
+
+    const toast = {
+        id: nextToastId,
+        type,
+        message: normalizedMessage,
+        deltaX: 0,
+        startX: 0,
+        dragging: false,
+        timerId: null,
+        duration: Math.max(900, Number(duration) || TOAST_AUTO_CLOSE_MS),
+    };
+    nextToastId += 1;
+
+    toasts.value = [...toasts.value, toast];
+    scheduleToastAutoclose(toast, toast.duration);
+}
+
+function resolvePointerClientX(event) {
+    if (!event) {
+        return null;
+    }
+
+    if (typeof event.clientX === 'number') {
+        return Number(event.clientX);
+    }
+
+    if ('touches' in event && event.touches?.length > 0) {
+        return Number(event.touches[0].clientX);
+    }
+
+    if ('changedTouches' in event && event.changedTouches?.length > 0) {
+        return Number(event.changedTouches[0].clientX);
+    }
+
+    return null;
+}
+
+function findToastById(toastId) {
+    const numericId = Number(toastId);
+    return toasts.value.find((entry) => Number(entry.id) === numericId) ?? null;
+}
+
+function onToastPointerDown(toastId, event) {
+    const toast = findToastById(toastId);
+    if (!toast) {
+        return;
+    }
+
+    const clientX = resolvePointerClientX(event);
+    if (clientX === null) {
+        return;
+    }
+
+    toast.dragging = true;
+    toast.startX = clientX;
+    toast.deltaX = 0;
+    clearToastTimer(toast);
+}
+
+function onToastPointerMove(toastId, event) {
+    const toast = findToastById(toastId);
+    if (!toast || !toast.dragging) {
+        return;
+    }
+
+    const clientX = resolvePointerClientX(event);
+    if (clientX === null) {
+        return;
+    }
+
+    const delta = clientX - toast.startX;
+    toast.deltaX = Math.max(-220, Math.min(220, delta));
+}
+
+function onToastPointerUp(toastId) {
+    const toast = findToastById(toastId);
+    if (!toast) {
+        return;
+    }
+
+    const dismiss = Math.abs(toast.deltaX) >= TOAST_SWIPE_DISMISS_THRESHOLD;
+
+    if (dismiss) {
+        removeToast(toast.id);
+        return;
+    }
+
+    toast.dragging = false;
+    toast.deltaX = 0;
+    scheduleToastAutoclose(toast, toast.duration);
+}
+
+function onToastPointerCancel(toastId) {
+    onToastPointerUp(toastId);
 }
 
 function showStatus(message) {
-    statusMessage.value = message;
-    errorMessage.value = '';
+    pushToast(message, 'success', TOAST_AUTO_CLOSE_MS);
 }
 
 function showError(error) {
-    const fallback = 'Произошла ошибка. Повторите действие.';
+    const fallback = '\u041f\u0440\u043e\u0438\u0437\u043e\u0448\u043b\u0430 \u043e\u0448\u0438\u0431\u043a\u0430. \u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u0435\u0449\u0451 \u0440\u0430\u0437.';
     const responseErrors = error?.response?.data?.errors;
     const firstError = responseErrors ? Object.values(responseErrors)[0]?.[0] : null;
-    errorMessage.value = firstError || error?.response?.data?.message || fallback;
+    pushToast(firstError || error?.response?.data?.message || fallback, 'error', 4400);
 }
 
 function formatDueAt(isoValue) {
@@ -1714,8 +1931,18 @@ function buildProductEditableText(item) {
     return `${text} ${quantity}`.trim();
 }
 
-function getTodoPriority(item) {
-    const dueAt = item?.due_at ? new Date(item.due_at) : null;
+function normalizeTodoPriority(value, fallback = null) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+
+    if (normalized === 'urgent' || normalized === 'today' || normalized === 'later') {
+        return normalized;
+    }
+
+    return fallback;
+}
+
+function inferTodoPriorityFromDueAt(isoValue) {
+    const dueAt = isoValue ? new Date(isoValue) : null;
     if (!dueAt || Number.isNaN(dueAt.getTime())) {
         return 'later';
     }
@@ -1735,18 +1962,22 @@ function getTodoPriority(item) {
     return 'later';
 }
 
+function getTodoPriority(item) {
+    return normalizeTodoPriority(item?.priority, inferTodoPriorityFromDueAt(item?.due_at));
+}
+
 function todoPriorityLabel(item) {
     const priority = getTodoPriority(item);
 
     if (priority === 'urgent') {
-        return 'Срочно';
+        return '\u0421\u0440\u043e\u0447\u043d\u043e';
     }
 
     if (priority === 'today') {
-        return 'Сегодня';
+        return '\u0421\u0435\u0433\u043e\u0434\u043d\u044f';
     }
 
-    return 'Потом';
+    return '\u041f\u043e\u0442\u043e\u043c';
 }
 
 function todoPriorityClass(item) {
@@ -1775,30 +2006,6 @@ function nextTodoPriority(priority) {
     return 'urgent';
 }
 
-function buildDueAtByPriority(priority) {
-    const now = new Date();
-    const target = new Date(now);
-
-    if (priority === 'urgent') {
-        target.setMinutes(target.getMinutes() + 90);
-        return target.toISOString();
-    }
-
-    if (priority === 'today') {
-        target.setHours(20, 0, 0, 0);
-
-        if (target <= now) {
-            target.setTime(now.getTime() + (4 * 60 * 60 * 1000));
-        }
-
-        return target.toISOString();
-    }
-
-    target.setDate(target.getDate() + 3);
-    target.setHours(12, 0, 0, 0);
-    return target.toISOString();
-}
-
 async function cycleTodoPriority(item) {
     if (item?.type !== 'todo' || item?.is_completed) {
         return;
@@ -1806,21 +2013,20 @@ async function cycleTodoPriority(item) {
 
     const currentPriority = getTodoPriority(item);
     const targetPriority = nextTodoPriority(currentPriority);
-    const nextDueAt = buildDueAtByPriority(targetPriority);
     const { ownerId, linkId } = resolveItemContext(item);
 
     resetMessages();
 
     upsertLocalItem(ownerId, 'todo', {
         ...item,
-        due_at: nextDueAt,
+        priority: targetPriority,
         pending_sync: true,
         updated_at: new Date().toISOString(),
     }, {
         linkId,
     });
     queueUpdate(ownerId, 'todo', item.id, {
-        due_at: nextDueAt,
+        priority: targetPriority,
     }, linkId);
 
     await syncOfflineQueue();
@@ -2087,6 +2293,7 @@ async function createItemOptimistically(type, text, dueAt = null, options = {}) 
         type,
         text: normalizedText,
         dueAt: type === 'todo' ? (dueAt ?? null) : null,
+        priority: type === 'todo' ? normalizeTodoPriority(options.priority, inferTodoPriorityFromDueAt(dueAt)) : null,
         quantity: normalizedQuantity,
         unit: normalizedUnit,
         sortOrder: nextSortOrder,
@@ -2272,6 +2479,112 @@ async function loadAllItems() {
 
 async function loadAllSuggestions() {
     await Promise.all([loadSuggestions('product'), loadSuggestions('todo')]);
+}
+
+async function loadProductSuggestionStats(showErrors = false) {
+    if (productSuggestionStatsLoading.value) {
+        return;
+    }
+
+    if (browserOffline.value) {
+        return;
+    }
+
+    productSuggestionStatsLoading.value = true;
+
+    try {
+        const response = await requestApi(() => window.axios.get('api/items/suggestions/stats', {
+            params: {
+                owner_id: selectedOwnerId.value,
+                link_id: selectedListLinkId.value,
+                limit: 50,
+            },
+        }));
+
+        productSuggestionStats.value = Array.isArray(response.data?.stats)
+            ? response.data.stats
+            : [];
+    } catch (error) {
+        if (isConnectivityError(error)) {
+            return;
+        }
+
+        if (showErrors) {
+            showError(error);
+        }
+    } finally {
+        productSuggestionStatsLoading.value = false;
+    }
+}
+
+function formatProductStatsInterval(seconds) {
+    const numeric = Number(seconds);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+        return '\u2014';
+    }
+
+    return formatIntervalSeconds(numeric);
+}
+
+function formatProductStatsDate(isoValue) {
+    if (!isoValue) {
+        return '\u2014';
+    }
+
+    const parsed = new Date(isoValue);
+    if (Number.isNaN(parsed.getTime())) {
+        return '\u2014';
+    }
+
+    return new Intl.DateTimeFormat('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    }).format(parsed);
+}
+
+function isResettingSuggestionKey(suggestionKey) {
+    return resettingSuggestionKeys.value.includes(String(suggestionKey ?? ''));
+}
+
+async function openProductStatsModal() {
+    productStatsModalOpen.value = true;
+    await loadProductSuggestionStats(false);
+}
+
+async function resetProductSuggestionStatsRow(entry) {
+    const suggestionKey = String(entry?.suggestion_key ?? '').trim();
+    if (!suggestionKey || isResettingSuggestionKey(suggestionKey)) {
+        return;
+    }
+
+    resettingSuggestionKeys.value = [...resettingSuggestionKeys.value, suggestionKey];
+
+    try {
+        await requestApi(() => window.axios.post('api/items/suggestions/reset', {
+            owner_id: selectedOwnerId.value,
+            link_id: selectedListLinkId.value,
+            type: 'product',
+            suggestion_key: suggestionKey,
+        }));
+
+        await Promise.all([
+            loadProductSuggestionStats(false),
+            loadSuggestions('product'),
+        ]);
+
+        showStatus('\u0414\u0430\u043d\u043d\u044b\u0435 \u043f\u043e\u0434\u0441\u043a\u0430\u0437\u043e\u043a \u0441\u0431\u0440\u043e\u0448\u0435\u043d\u044b.');
+    } catch (error) {
+        if (isConnectivityError(error)) {
+            return;
+        }
+
+        showError(error);
+    } finally {
+        resettingSuggestionKeys.value = resettingSuggestionKeys.value.filter((key) => key !== suggestionKey);
+    }
 }
 
 function beginEdit(item) {
@@ -2746,11 +3059,19 @@ watch(selectedOwnerId, async (ownerId) => {
 
     subscribeListChannel(ownerId);
     await Promise.all([loadAllItems(), loadAllSuggestions()]);
+
+    if (activeTab.value === 'profile') {
+        await loadProductSuggestionStats();
+    }
 });
 
-watch(activeTab, async () => {
+watch(activeTab, async (tab) => {
     listDropdownOpen.value = false;
     await Promise.all([loadActiveTabItems(), loadActiveTabSuggestions()]);
+
+    if (tab === 'profile') {
+        await loadProductSuggestionStats();
+    }
 });
 
 onMounted(async () => {
@@ -2764,6 +3085,10 @@ onMounted(async () => {
     await syncOfflineQueue();
     await refreshState(false, true);
     await Promise.all([loadAllItems(), loadAllSuggestions()]);
+
+    if (activeTab.value === 'profile') {
+        await loadProductSuggestionStats();
+    }
 
     smartSuggestionsNoticeTimer = window.setTimeout(() => {
         smartSuggestionsNoticeVisible.value = false;
@@ -2846,6 +3171,11 @@ onBeforeUnmount(() => {
         clearTimeout(smartSuggestionsNoticeTimer);
     }
 
+    if (queuedUpdateSyncTimer) {
+        clearTimeout(queuedUpdateSyncTimer);
+        queuedUpdateSyncTimer = null;
+    }
+
     if (typeof window !== 'undefined' && handleOnlineEvent) {
         window.removeEventListener('online', handleOnlineEvent);
         handleOnlineEvent = null;
@@ -2871,19 +3201,6 @@ onBeforeUnmount(() => {
 
     <div class="min-h-screen bg-[#19181a] text-[#fcfcfa]">
         <div class="mx-auto flex min-h-screen w-full max-w-md flex-col px-4 pb-28 pt-4">
-            <div
-                v-if="statusMessage"
-                class="mb-3 rounded-2xl border border-[#a5d774]/55 bg-[#a5d774]/14 px-3 py-2 text-sm text-[#a5d774]"
-            >
-                {{ statusMessage }}
-            </div>
-
-            <div
-                v-if="errorMessage"
-                class="mb-3 rounded-2xl border border-[#ee5c81]/60 bg-[#ee5c81]/12 px-3 py-2 text-sm text-[#ee5c81]"
-            >
-                {{ errorMessage }}
-            </div>
 
             <div
                 v-if="offlineMode"
@@ -3284,6 +3601,17 @@ onBeforeUnmount(() => {
                     Мои приглашения ({{ pendingInvitationsCount }})
                 </button>
 
+                <button
+                    type="button"
+                    class="flex w-full items-center justify-between gap-3 rounded-2xl border border-[#403e41] bg-[#221f22] px-4 py-3 text-left text-sm font-semibold text-[#fcfcfa]"
+                    @click="openProductStatsModal"
+                >
+                    <span>{{ '\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u043f\u043e\u043a\u0443\u043f\u043a\u0430\u043c' }}</span>
+                    <span class="text-xs text-[#9f9a9d]">
+                        {{ productSuggestionStats.length }} {{ '\u043f\u043e\u0437\u0438\u0446\u0438\u0439' }}
+                    </span>
+                </button>
+
                 <div class="rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                     <h3 class="mb-3 text-sm font-semibold text-[#fcfcfa]">
                         Настройки аккаунта
@@ -3467,6 +3795,29 @@ onBeforeUnmount(() => {
             </div>
         </Transition>
 
+        <TransitionGroup
+            name="toast"
+            tag="div"
+            class="pointer-events-none fixed top-3 left-1/2 z-[70] flex w-[calc(100%-20px)] max-w-md -translate-x-1/2 flex-col gap-2"
+        >
+            <div
+                v-for="toast in toasts"
+                :key="`toast-${toast.id}`"
+                class="toast-card pointer-events-auto select-none rounded-2xl border px-3 py-2 text-sm shadow-xl backdrop-blur"
+                :class="toast.type === 'error'
+                    ? 'border-[#ee5c81]/60 bg-[#221f22]/96 text-[#ee5c81]'
+                    : 'border-[#a5d774]/55 bg-[#221f22]/96 text-[#a5d774]'"
+                :style="{ transform: `translateX(${toast.deltaX || 0}px)` }"
+                @pointerdown="onToastPointerDown(toast.id, $event)"
+                @pointermove="onToastPointerMove(toast.id, $event)"
+                @pointerup="onToastPointerUp(toast.id)"
+                @pointercancel="onToastPointerCancel(toast.id)"
+                @pointerleave="onToastPointerUp(toast.id)"
+            >
+                <p class="truncate">{{ toast.message }}</p>
+            </div>
+        </TransitionGroup>
+
         <nav
             class="fixed bottom-3 left-1/2 z-40 flex w-[calc(100%-20px)] max-w-md -translate-x-1/2 rounded-3xl border border-[#403e41] bg-[#221f22]/95 p-2 backdrop-blur"
         >
@@ -3499,8 +3850,9 @@ onBeforeUnmount(() => {
             </button>
         </nav>
 
-        <div v-if="shareModalOpen" class="fixed inset-0 z-50 bg-[#19181a]/90 p-2.5">
-            <div class="flex h-full flex-col rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
+        <Transition name="app-modal">
+            <div v-if="shareModalOpen" class="fixed inset-0 z-50 bg-[#19181a]/90 p-2.5" @click.self="shareModalOpen = false">
+                <div class="flex h-full flex-col rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                 <div class="mb-3 flex items-center justify-between">
                     <h2 class="text-base font-semibold">
                         Поделиться списками
@@ -3556,10 +3908,12 @@ onBeforeUnmount(() => {
                         </button>
                     </div>
                 </div>
+                </div>
             </div>
-        </div>
+        </Transition>
 
-        <div v-if="inviteModalOpen" class="fixed inset-0 z-50 bg-[#19181a]/90 p-2.5">
+        <Transition name="app-modal">
+            <div v-if="inviteModalOpen" class="fixed inset-0 z-50 bg-[#19181a]/90 p-2.5" @click.self="inviteModalOpen = false">
             <div class="flex h-full flex-col rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                 <div class="mb-3 flex items-center justify-between">
                     <h2 class="text-base font-semibold">
@@ -3660,8 +4014,50 @@ onBeforeUnmount(() => {
                         </div>
                     </div>
                 </div>
+                </div>
             </div>
-        </div>
+        </Transition>
+
+        <Transition name="app-modal">
+            <div v-if="productStatsModalOpen" class="fixed inset-0 z-50 bg-[#19181a]/90 p-2.5" @click.self="productStatsModalOpen = false">
+                <div class="flex h-full flex-col rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
+                    <div class="mb-3 flex items-center justify-between">
+                        <h2 class="text-base font-semibold">{{ '\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u043f\u043e\u043a\u0443\u043f\u043e\u043a' }}</h2>
+                        <button type="button" class="rounded-xl border border-[#403e41] p-2 text-[#bcb7ba]" @click="productStatsModalOpen = false">
+                            <X class="h-4 w-4" />
+                        </button>
+                    </div>
+
+                    <p v-if="productSuggestionStatsLoading" class="text-xs text-[#9f9a9d]">{{ '\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435\u2026' }}</p>
+                    <p v-else-if="productSuggestionStats.length === 0" class="text-xs text-[#9f9a9d]">{{ '\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445 \u043f\u043e \u043f\u043e\u043a\u0443\u043f\u043a\u0430\u043c.' }}</p>
+
+                    <div v-else class="flex-1 space-y-2 overflow-y-auto">
+                        <div
+                            v-for="entry in productSuggestionStats"
+                            :key="`stats-modal-${entry.suggestion_key}`"
+                            class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-3"
+                        >
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <p class="truncate text-sm font-semibold text-[#fcfcfa]">{{ entry.text }}</p>
+                                    <p class="mt-1 text-[11px] text-[#9f9a9d]">{{ entry.occurrences }} {{ '\u0440\u0430\u0437' }} / {{ '\u0441\u0440.' }} {{ formatProductStatsInterval(entry.average_interval_seconds) }}</p>
+                                    <p class="text-[11px] text-[#9f9a9d]">{{ '\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u044f\u044f \u043f\u043e\u043a\u0443\u043f\u043a\u0430:' }} {{ formatProductStatsDate(entry.last_completed_at) }}</p>
+                                </div>
+
+                                <button
+                                    type="button"
+                                    class="shrink-0 rounded-xl border border-[#403e41] bg-[#2d2a2c] px-2.5 py-1.5 text-[11px] font-semibold text-[#fcfcfa] transition hover:border-[#fcfcfa]/45 disabled:cursor-not-allowed disabled:opacity-55"
+                                    :disabled="isResettingSuggestionKey(entry.suggestion_key)"
+                                    @click="resetProductSuggestionStatsRow(entry)"
+                                >
+                                    {{ isResettingSuggestionKey(entry.suggestion_key) ? '\u2026' : '\u0421\u0431\u0440\u043e\u0441\u0438\u0442\u044c' }}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </Transition>
     </div>
 </template>
 
@@ -3699,7 +4095,7 @@ onBeforeUnmount(() => {
 
 .todo-due-modal-enter-active,
 .todo-due-modal-leave-active {
-    transition: opacity 0.2s ease;
+    transition: opacity 0.24s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .todo-due-modal-enter-from,
@@ -3709,13 +4105,53 @@ onBeforeUnmount(() => {
 
 .todo-due-modal-enter-active > div,
 .todo-due-modal-leave-active > div {
-    transition: transform 0.22s ease, opacity 0.22s ease;
+    transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.28s ease;
 }
 
 .todo-due-modal-enter-from > div,
 .todo-due-modal-leave-to > div {
-    transform: translateY(10px) scale(0.985);
+    transform: translateY(16px) scale(0.97);
     opacity: 0;
+}
+
+.app-modal-enter-active,
+.app-modal-leave-active {
+    transition: opacity 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.app-modal-enter-from,
+.app-modal-leave-to {
+    opacity: 0;
+}
+
+.app-modal-enter-active > div,
+.app-modal-leave-active > div {
+    transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.28s ease;
+}
+
+.app-modal-enter-from > div,
+.app-modal-leave-to > div {
+    transform: translateY(12px) scale(0.985);
+    opacity: 0;
+}
+
+.toast-enter-active,
+.toast-leave-active {
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.toast-enter-from,
+.toast-leave-to {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+}
+
+.toast-move {
+    transition: transform 0.2s ease;
+}
+
+.toast-card {
+    touch-action: pan-y;
 }
 
 .drag-handle {

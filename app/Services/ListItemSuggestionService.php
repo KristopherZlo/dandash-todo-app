@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\ListItem;
 use App\Models\ListItemSuggestionState;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 class ListItemSuggestionService
@@ -67,6 +68,12 @@ class ListItemSuggestionService
 
         $items = $itemsQuery->get(['id', 'text', 'created_at', 'is_completed']);
 
+        $statesByKey = ListItemSuggestionState::query()
+            ->forOwner($ownerId)
+            ->ofType($type)
+            ->get()
+            ->keyBy('suggestion_key');
+
         $clusters = [];
 
         foreach ($items as $item) {
@@ -117,7 +124,17 @@ class ListItemSuggestionService
                 continue;
             }
 
+            $state = $this->resolveClusterStateForSamples($statesByKey, $cluster['normalized_samples']);
+            $resetAt = $state?->reset_at?->toImmutable();
+
             $timestamps = $cluster['timestamps'];
+            if ($resetAt !== null) {
+                $timestamps = array_values(array_filter(
+                    $timestamps,
+                    static fn (CarbonImmutable $timestamp): bool => $timestamp->greaterThanOrEqualTo($resetAt),
+                ));
+            }
+
             usort($timestamps, static fn (CarbonImmutable $left, CarbonImmutable $right): int => $left->getTimestamp() <=> $right->getTimestamp());
             $occurrences = count($timestamps);
 
@@ -207,6 +224,193 @@ class ListItemSuggestionService
         return array_slice($filtered, 0, max(1, $limit));
     }
 
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function productStatsForOwner(int $ownerId, int $limit = 50, ?int $listLinkId = null): array
+    {
+        $limit = max(1, min(200, $limit));
+
+        $itemsQuery = ListItem::query()
+            ->forOwner($ownerId)
+            ->ofType(ListItem::TYPE_PRODUCT)
+            ->where('is_completed', true)
+            ->orderBy('completed_at')
+            ->orderBy('created_at');
+
+        if ($listLinkId) {
+            $itemsQuery->where('list_link_id', $listLinkId);
+        } else {
+            $itemsQuery->whereNull('list_link_id');
+        }
+
+        $items = $itemsQuery->get(['id', 'text', 'created_at', 'completed_at']);
+
+        $statesByKey = ListItemSuggestionState::query()
+            ->forOwner($ownerId)
+            ->ofType(ListItem::TYPE_PRODUCT)
+            ->get()
+            ->keyBy('suggestion_key');
+
+        $clusters = [];
+
+        foreach ($items as $item) {
+            $normalized = $this->normalizeText((string) $item->text);
+            if ($normalized === '') {
+                continue;
+            }
+
+            $clusterIndex = $this->resolveClusterIndex($clusters, $normalized);
+
+            if ($clusterIndex === null) {
+                $clusters[] = [
+                    'normalized_samples' => [$normalized],
+                    'entries' => [],
+                ];
+
+                $clusterIndex = array_key_last($clusters);
+            }
+
+            if (! in_array($normalized, $clusters[$clusterIndex]['normalized_samples'], true)) {
+                $clusters[$clusterIndex]['normalized_samples'][] = $normalized;
+            }
+
+            $timestamp = $item->completed_at?->toImmutable() ?? $item->created_at?->toImmutable();
+            if ($timestamp === null) {
+                continue;
+            }
+
+            $text = trim((string) $item->text);
+            if ($text === '') {
+                continue;
+            }
+
+            $clusters[$clusterIndex]['entries'][] = [
+                'text' => $text,
+                'timestamp' => $timestamp,
+            ];
+        }
+
+        $stats = [];
+
+        foreach ($clusters as $cluster) {
+            $state = $this->resolveClusterStateForSamples($statesByKey, $cluster['normalized_samples']);
+            $resetAt = $state?->reset_at?->toImmutable();
+
+            $entries = array_values(array_filter(
+                $cluster['entries'],
+                static function (array $entry) use ($resetAt): bool {
+                    $timestamp = $entry['timestamp'] ?? null;
+                    if (! $timestamp instanceof CarbonImmutable) {
+                        return false;
+                    }
+
+                    return $resetAt === null || $timestamp->greaterThanOrEqualTo($resetAt);
+                }
+            ));
+
+            if ($entries === []) {
+                continue;
+            }
+
+            usort(
+                $entries,
+                static fn (array $left, array $right): int => ($left['timestamp'])->getTimestamp() <=> ($right['timestamp'])->getTimestamp(),
+            );
+
+            $occurrences = count($entries);
+            $intervals = [];
+
+            for ($index = 1; $index < $occurrences; $index++) {
+                /** @var CarbonImmutable $current */
+                $current = $entries[$index]['timestamp'];
+                /** @var CarbonImmutable $previous */
+                $previous = $entries[$index - 1]['timestamp'];
+
+                $delta = $current->diffInSeconds($previous, true);
+                if ($delta > 0) {
+                    $intervals[] = $delta;
+                }
+            }
+
+            $averageIntervalSeconds = $intervals !== []
+                ? (int) round(array_sum($intervals) / count($intervals))
+                : null;
+
+            $variantCounts = [];
+            foreach ($entries as $entry) {
+                $entryText = (string) ($entry['text'] ?? '');
+                if ($entryText === '') {
+                    continue;
+                }
+
+                $variantCounts[$entryText] = ($variantCounts[$entryText] ?? 0) + 1;
+            }
+
+            $sortedVariants = $this->sortVariants($variantCounts);
+            $lastEntry = $entries[$occurrences - 1];
+            /** @var CarbonImmutable $lastTimestamp */
+            $lastTimestamp = $lastEntry['timestamp'];
+            $displayText = (string) ($lastEntry['text'] ?? '');
+
+            if ($displayText === '') {
+                $displayText = (string) (array_key_first($sortedVariants) ?? '');
+            }
+
+            if ($displayText === '') {
+                continue;
+            }
+
+            $stats[] = [
+                'suggestion_key' => (string) ($cluster['normalized_samples'][0] ?? $this->normalizeText($displayText)),
+                'text' => $displayText,
+                'occurrences' => $occurrences,
+                'average_interval_seconds' => $averageIntervalSeconds,
+                'last_completed_at' => $lastTimestamp->toISOString(),
+                'variants' => array_slice(array_keys($sortedVariants), 0, 4),
+                'dismissed_count' => (int) ($state?->dismissed_count ?? 0),
+                'hidden_until' => $state?->hidden_until?->toISOString(),
+                'retired_at' => $state?->retired_at?->toISOString(),
+                'reset_at' => $state?->reset_at?->toISOString(),
+            ];
+        }
+
+        usort($stats, static function (array $left, array $right): int {
+            if (($left['occurrences'] ?? 0) !== ($right['occurrences'] ?? 0)) {
+                return ($right['occurrences'] ?? 0) <=> ($left['occurrences'] ?? 0);
+            }
+
+            return strcmp(
+                (string) ($right['last_completed_at'] ?? ''),
+                (string) ($left['last_completed_at'] ?? ''),
+            );
+        });
+
+        return array_slice($stats, 0, $limit);
+    }
+
+    public function resetSuggestionData(int $ownerId, string $type, string $suggestionKey): void
+    {
+        $normalizedKey = $this->normalizeSuggestionKey($suggestionKey);
+
+        if ($normalizedKey === '') {
+            return;
+        }
+
+        $state = ListItemSuggestionState::query()->firstOrNew([
+            'owner_id' => $ownerId,
+            'type' => $type,
+            'suggestion_key' => $normalizedKey,
+        ]);
+
+        $state->dismissed_count = 0;
+        $state->hidden_until = null;
+        $state->retired_at = null;
+        $state->reset_at = now();
+        $state->save();
+    }
+
     public function normalizeSuggestionKey(string $value): string
     {
         return $this->normalizeText($value);
@@ -254,6 +458,37 @@ class ListItemSuggestionService
         $state->hidden_until = $now->addSeconds($hideSeconds);
         $state->retired_at = null;
         $state->save();
+    }
+
+
+    private function resolveClusterStateForSamples(Collection $statesByKey, array $samples): ?ListItemSuggestionState
+    {
+        $resolvedState = null;
+
+        foreach ($samples as $sample) {
+            if (! is_string($sample) || $sample === '') {
+                continue;
+            }
+
+            $candidate = $statesByKey->get($sample);
+            if (! $candidate instanceof ListItemSuggestionState) {
+                continue;
+            }
+
+            if (! $resolvedState instanceof ListItemSuggestionState) {
+                $resolvedState = $candidate;
+                continue;
+            }
+
+            $resolvedResetAt = $resolvedState->reset_at?->getTimestamp() ?? 0;
+            $candidateResetAt = $candidate->reset_at?->getTimestamp() ?? 0;
+
+            if ($candidateResetAt > $resolvedResetAt) {
+                $resolvedState = $candidate;
+            }
+        }
+
+        return $resolvedState;
     }
 
     /**

@@ -15,6 +15,7 @@ class ListItemSuggestionState extends Model
         'dismissed_count',
         'hidden_until',
         'retired_at',
+        'reset_at',
     ];
 
     protected function casts(): array
@@ -23,6 +24,7 @@ class ListItemSuggestionState extends Model
             'dismissed_count' => 'integer',
             'hidden_until' => 'datetime',
             'retired_at' => 'datetime',
+            'reset_at' => 'datetime',
         ];
     }
 

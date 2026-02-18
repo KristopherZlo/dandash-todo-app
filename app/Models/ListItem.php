@@ -11,6 +11,10 @@ class ListItem extends Model
     public const TYPE_PRODUCT = 'product';
     public const TYPE_TODO = 'todo';
 
+    public const PRIORITY_URGENT = 'urgent';
+    public const PRIORITY_TODAY = 'today';
+    public const PRIORITY_LATER = 'later';
+
     protected $fillable = [
         'owner_id',
         'list_link_id',
@@ -20,6 +24,7 @@ class ListItem extends Model
         'quantity',
         'unit',
         'due_at',
+        'priority',
         'is_completed',
         'completed_at',
         'created_by_id',
@@ -33,6 +38,7 @@ class ListItem extends Model
             'list_link_id' => 'integer',
             'quantity' => 'decimal:2',
             'due_at' => 'datetime',
+            'priority' => 'string',
             'is_completed' => 'boolean',
             'completed_at' => 'datetime',
         ];

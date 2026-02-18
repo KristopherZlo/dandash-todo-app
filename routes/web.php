@@ -31,7 +31,9 @@ Route::middleware('auth')->group(function () {
 
         Route::get('/items', [ListItemController::class, 'index']);
         Route::get('/items/suggestions', [ListItemController::class, 'suggestions']);
+        Route::get('/items/suggestions/stats', [ListItemController::class, 'productStats']);
         Route::post('/items/suggestions/dismiss', [ListItemController::class, 'dismissSuggestion']);
+        Route::post('/items/suggestions/reset', [ListItemController::class, 'resetSuggestionData']);
         Route::post('/items', [ListItemController::class, 'store']);
         Route::post('/items/reorder', [ListItemController::class, 'reorder']);
         Route::patch('/items/{item}', [ListItemController::class, 'update']);
