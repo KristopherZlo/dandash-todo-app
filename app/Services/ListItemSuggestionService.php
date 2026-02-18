@@ -4,9 +4,9 @@ namespace App\Services;
 
 use App\Models\ListItem;
 use App\Models\ListItemSuggestionState;
+use App\Services\ListItemSuggestions\SuggestionTextNormalizer;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Str;
 
 class ListItemSuggestionService
 {
@@ -14,41 +14,11 @@ class ListItemSuggestionService
     private const DUE_RATIO_THRESHOLD = 0.9;
     private const UPCOMING_RATIO_THRESHOLD = 0.75;
     private const DAY_SECONDS = 86400;
-    private const CYRILLIC_TO_LATIN = [
-        'а' => 'a',
-        'б' => 'b',
-        'в' => 'v',
-        'г' => 'g',
-        'д' => 'd',
-        'е' => 'e',
-        'ё' => 'e',
-        'ж' => 'zh',
-        'з' => 'z',
-        'и' => 'i',
-        'й' => 'y',
-        'к' => 'k',
-        'л' => 'l',
-        'м' => 'm',
-        'н' => 'n',
-        'о' => 'o',
-        'п' => 'p',
-        'р' => 'r',
-        'с' => 's',
-        'т' => 't',
-        'у' => 'u',
-        'ф' => 'f',
-        'х' => 'h',
-        'ц' => 'ts',
-        'ч' => 'ch',
-        'ш' => 'sh',
-        'щ' => 'shch',
-        'ы' => 'y',
-        'э' => 'e',
-        'ю' => 'yu',
-        'я' => 'ya',
-        'ь' => '',
-        'ъ' => '',
-    ];
+
+    public function __construct(
+        private readonly SuggestionTextNormalizer $textNormalizer
+    ) {
+    }
 
     /**
      * @return array<int, array<string, mixed>>
@@ -77,7 +47,7 @@ class ListItemSuggestionService
         $clusters = [];
 
         foreach ($items as $item) {
-            $normalized = $this->normalizeText((string) $item->text);
+            $normalized = $this->textNormalizer->normalizeText((string) $item->text);
 
             if ($normalized === '') {
                 continue;
@@ -182,7 +152,7 @@ class ListItemSuggestionService
 
             $suggestions[] = [
                 'suggested_text' => $displayText,
-                'suggestion_key' => (string) ($cluster['normalized_samples'][0] ?? $this->normalizeText($displayText)),
+                'suggestion_key' => (string) ($cluster['normalized_samples'][0] ?? $this->textNormalizer->normalizeText($displayText)),
                 'type' => $type,
                 'occurrences' => $occurrences,
                 'average_interval_seconds' => $averageIntervalSeconds,
@@ -256,7 +226,7 @@ class ListItemSuggestionService
         $clusters = [];
 
         foreach ($items as $item) {
-            $normalized = $this->normalizeText((string) $item->text);
+            $normalized = $this->textNormalizer->normalizeText((string) $item->text);
             if ($normalized === '') {
                 continue;
             }
@@ -363,7 +333,7 @@ class ListItemSuggestionService
             }
 
             $stats[] = [
-                'suggestion_key' => (string) ($cluster['normalized_samples'][0] ?? $this->normalizeText($displayText)),
+                'suggestion_key' => (string) ($cluster['normalized_samples'][0] ?? $this->textNormalizer->normalizeText($displayText)),
                 'text' => $displayText,
                 'occurrences' => $occurrences,
                 'average_interval_seconds' => $averageIntervalSeconds,
@@ -392,7 +362,7 @@ class ListItemSuggestionService
 
     public function resetSuggestionData(int $ownerId, string $type, string $suggestionKey): void
     {
-        $normalizedKey = $this->normalizeSuggestionKey($suggestionKey);
+        $normalizedKey = $this->textNormalizer->normalizeSuggestionKey($suggestionKey);
 
         if ($normalizedKey === '') {
             return;
@@ -413,7 +383,7 @@ class ListItemSuggestionService
 
     public function normalizeSuggestionKey(string $value): string
     {
-        return $this->normalizeText($value);
+        return $this->textNormalizer->normalizeSuggestionKey($value);
     }
 
     public function dismissSuggestion(
@@ -422,7 +392,7 @@ class ListItemSuggestionService
         string $suggestionKey,
         int $averageIntervalSeconds
     ): void {
-        $normalizedKey = $this->normalizeSuggestionKey($suggestionKey);
+        $normalizedKey = $this->textNormalizer->normalizeSuggestionKey($suggestionKey);
 
         if ($normalizedKey === '') {
             return;
@@ -498,124 +468,13 @@ class ListItemSuggestionService
     {
         foreach ($clusters as $index => $cluster) {
             foreach ($cluster['normalized_samples'] as $sample) {
-                if ($sample === $normalized || $this->isFuzzyMatch($sample, $normalized)) {
+                if ($sample === $normalized || $this->textNormalizer->isFuzzyMatch($sample, $normalized)) {
                     return $index;
                 }
             }
         }
 
         return null;
-    }
-
-    private function normalizeText(string $value): string
-    {
-        $normalized = Str::of($this->transliterateToLatin($value))
-            ->lower()
-            ->ascii()
-            ->replaceMatches('/[^a-z0-9\s]+/', ' ')
-            ->squish()
-            ->value();
-
-        if ($normalized === '') {
-            $normalized = Str::of($value)
-                ->lower()
-                ->replaceMatches('/[^\p{L}\p{N}\s]+/u', ' ')
-                ->squish()
-                ->value();
-
-            if ($normalized === '') {
-                return '';
-            }
-        }
-
-        $tokens = array_values(array_filter(explode(' ', $normalized), static fn (string $token): bool => $token !== ''));
-        if ($tokens === []) {
-            return '';
-        }
-
-        $tokens = array_map([$this, 'normalizeToken'], $tokens);
-        $tokens = array_values(array_unique(array_filter($tokens, static fn (string $token): bool => $token !== '')));
-
-        sort($tokens);
-
-        return implode(' ', $tokens);
-    }
-
-    private function normalizeToken(string $token): string
-    {
-        if (! preg_match('/^[a-z0-9]+$/', $token)) {
-            return $token;
-        }
-
-        $length = strlen($token);
-
-        if ($length <= 3) {
-            return $token;
-        }
-
-        if ($length > 4 && str_ends_with($token, 'ies')) {
-            return substr($token, 0, -3).'y';
-        }
-
-        if ($length > 4 && str_ends_with($token, 'es')) {
-            return substr($token, 0, -2);
-        }
-
-        if ($length > 4 && str_ends_with($token, 's')) {
-            return substr($token, 0, -1);
-        }
-
-        return $token;
-    }
-
-    private function transliterateToLatin(string $value): string
-    {
-        $lower = mb_strtolower($value, 'UTF-8');
-
-        return strtr($lower, self::CYRILLIC_TO_LATIN);
-    }
-
-    private function isFuzzyMatch(string $first, string $second): bool
-    {
-        if ($first === $second) {
-            return true;
-        }
-
-        $maxLength = max(strlen($first), strlen($second));
-        $minLength = min(strlen($first), strlen($second));
-
-        if ($maxLength === 0) {
-            return false;
-        }
-
-        if ($maxLength >= 5 && (str_contains($first, $second) || str_contains($second, $first))) {
-            if ($minLength / $maxLength >= 0.75) {
-                return true;
-            }
-        }
-
-        $distance = levenshtein($first, $second);
-        $distanceThreshold = max(1, (int) floor($maxLength * 0.22));
-        if ($distance <= $distanceThreshold) {
-            return true;
-        }
-
-        similar_text($first, $second, $percent);
-        if ($percent >= 78.0) {
-            return true;
-        }
-
-        $firstTokens = array_values(array_filter(explode(' ', $first), static fn (string $token): bool => $token !== ''));
-        $secondTokens = array_values(array_filter(explode(' ', $second), static fn (string $token): bool => $token !== ''));
-
-        if ($firstTokens === [] || $secondTokens === []) {
-            return false;
-        }
-
-        $intersection = count(array_intersect($firstTokens, $secondTokens));
-        $union = count(array_unique([...$firstTokens, ...$secondTokens]));
-
-        return $union > 0 && ($intersection / $union) >= 0.6;
     }
 
     /**
@@ -753,7 +612,7 @@ class ListItemSuggestionService
 
             $suggestions[] = [
                 'suggested_text' => $text,
-                'suggestion_key' => $this->normalizeSuggestionKey($text),
+                'suggestion_key' => $this->textNormalizer->normalizeSuggestionKey($text),
                 'type' => $type,
                 'occurrences' => 3 + $index,
                 'average_interval_seconds' => 86400 + ($index * 7200),
@@ -771,3 +630,7 @@ class ListItemSuggestionService
         return $suggestions;
     }
 }
+
+
+
+

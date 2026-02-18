@@ -1,5 +1,25 @@
 <script setup>
 import SwipeListItem from '@/Components/SwipeListItem.vue';
+import { useToasts } from '@/composables/useToasts';
+import {
+    buildProductEditableText,
+    formatProductMeasure,
+    getProductDisplayText,
+    normalizeProductComparableText,
+    normalizeQuantityInput,
+    normalizeUnitInput,
+    parseProductTextPayload,
+} from '@/modules/dashboard/productText';
+import { formatIntervalSeconds, suggestionStatusText } from '@/modules/dashboard/suggestionFormat';
+import {
+    getTodoPriority,
+    inferTodoPriorityFromDueAt,
+    nextTodoPriority,
+    normalizeTodoPriority,
+    todoPriorityClass,
+    todoPriorityLabel,
+} from '@/modules/dashboard/todoPriority';
+import { normalizeTodoComparableText } from '@/modules/dashboard/textNormalize';
 import { Head, usePage } from '@inertiajs/vue3';
 import {
     CalendarDays,
@@ -68,8 +88,6 @@ const searchQuery = ref('');
 const searchResults = ref([]);
 const searchBusy = ref(false);
 
-const toasts = ref([]);
-
 const productStatsModalOpen = ref(false);
 const smartSuggestionsNoticeVisible = ref(true);
 const productSuggestionsOpen = ref(true);
@@ -80,6 +98,18 @@ const deleteFeedbackBursts = ref([]);
 const productSuggestionStats = ref([]);
 const productSuggestionStatsLoading = ref(false);
 const resettingSuggestionKeys = ref([]);
+
+const {
+    toasts,
+    resetMessages,
+    showStatus,
+    showError,
+    onToastPointerDown,
+    onToastPointerMove,
+    onToastPointerUp,
+    onToastPointerCancel,
+    disposeToasts,
+} = useToasts();
 
 const profileForm = reactive({
     name: localUser.name,
@@ -132,7 +162,6 @@ let nextDeleteFeedbackBurstId = 1;
 let skipTodoBlurSaveUntil = 0;
 let queuedUpdateTouchedAt = 0;
 let queuedUpdateSyncTimer = null;
-let nextToastId = 1;
 
 function normalizeLinkId(value) {
     const parsed = Number(value);
@@ -267,134 +296,6 @@ const canShowRemoveCompletedButton = computed(() => {
 const SWIPE_UNDO_WINDOW_MS = 4500;
 const BATCH_REMOVE_CARD_ANIMATION_MS = 190;
 const UPDATE_SYNC_COALESCE_MS = 1000;
-const TOAST_AUTO_CLOSE_MS = 3200;
-const TOAST_SWIPE_DISMISS_THRESHOLD = 64;
-const PRODUCT_UNIT_ALIASES = {
-    // Pieces
-    '\u0448\u0442': '\u0448\u0442',
-    '\u0448\u0442\u0443\u043a\u0430': '\u0448\u0442',
-    '\u0448\u0442\u0443\u043a\u0438': '\u0448\u0442',
-    '\u0448\u0442\u0443\u043a': '\u0448\u0442',
-    '\u0448\u0442\u0443\u0447\u043a\u0430': '\u0448\u0442',
-    '\u0448\u0442\u0443\u0447\u043a\u0438': '\u0448\u0442',
-    '\u0448\u0442\u0443\u0447\u0435\u043a': '\u0448\u0442',
-    '\u0435\u0434': '\u0448\u0442',
-    '\u0435\u0434\u0438\u043d\u0438\u0446\u0430': '\u0448\u0442',
-    '\u0435\u0434\u0438\u043d\u0438\u0446\u044b': '\u0448\u0442',
-    '\u0435\u0434\u0438\u043d\u0438\u0446': '\u0448\u0442',
-    'pc': '\u0448\u0442',
-    'pcs': '\u0448\u0442',
-    'piece': '\u0448\u0442',
-    'pieces': '\u0448\u0442',
-
-    // Weight
-    '\u043a\u0433': '\u043a\u0433',
-    '\u043a\u0438\u043b\u043e': '\u043a\u0433',
-    '\u043a\u0438\u043b\u043e\u0433\u0440\u0430\u043c\u043c': '\u043a\u0433',
-    '\u043a\u0438\u043b\u043e\u0433\u0440\u0430\u043c\u043c\u0430': '\u043a\u0433',
-    '\u043a\u0438\u043b\u043e\u0433\u0440\u0430\u043c\u043c\u043e\u0432': '\u043a\u0433',
-    'kg': '\u043a\u0433',
-    'kilo': '\u043a\u0433',
-    'kilos': '\u043a\u0433',
-
-    '\u0433': '\u0433',
-    '\u0433\u0440': '\u0433',
-    '\u0433\u0440\u0430\u043c\u043c': '\u0433',
-    '\u0433\u0440\u0430\u043c\u043c\u0430': '\u0433',
-    '\u0433\u0440\u0430\u043c\u043c\u043e\u0432': '\u0433',
-    'gram': '\u0433',
-    'grams': '\u0433',
-
-    // Volume
-    '\u043b': '\u043b',
-    '\u043b\u0438\u0442\u0440': '\u043b',
-    '\u043b\u0438\u0442\u0440\u0430': '\u043b',
-    '\u043b\u0438\u0442\u0440\u043e\u0432': '\u043b',
-    'l': '\u043b',
-    'liter': '\u043b',
-    'liters': '\u043b',
-
-    '\u043c\u043b': '\u043c\u043b',
-    '\u043c\u0438\u043b\u043b\u0438\u043b\u0438\u0442\u0440': '\u043c\u043b',
-    '\u043c\u0438\u043b\u043b\u0438\u043b\u0438\u0442\u0440\u0430': '\u043c\u043b',
-    '\u043c\u0438\u043b\u043b\u0438\u043b\u0438\u0442\u0440\u043e\u0432': '\u043c\u043b',
-    'ml': '\u043c\u043b',
-    'milliliter': '\u043c\u043b',
-    'milliliters': '\u043c\u043b',
-
-    // Packs / packages
-    '\u0443\u043f': '\u0443\u043f',
-    '\u0443\u043f\u0430\u043a': '\u0443\u043f',
-    '\u0443\u043f\u0430\u043a\u043e\u0432\u043a\u0430': '\u0443\u043f',
-    '\u0443\u043f\u0430\u043a\u043e\u0432\u043a\u0438': '\u0443\u043f',
-    '\u0443\u043f\u0430\u043a\u043e\u0432\u043e\u043a': '\u0443\u043f',
-    'pack': '\u0443\u043f',
-    'packs': '\u0443\u043f',
-    'package': '\u0443\u043f',
-    'packages': '\u0443\u043f',
-    'pkg': '\u0443\u043f',
-
-    '\u043f\u0430\u0447': '\u043f\u0430\u0447',
-    '\u043f\u0430\u0447\u043a\u0430': '\u043f\u0430\u0447',
-    '\u043f\u0430\u0447\u043a\u0438': '\u043f\u0430\u0447',
-    '\u043f\u0430\u0447\u0435\u043a': '\u043f\u0430\u0447',
-
-    '\u043f\u0430\u043a': '\u043f\u0430\u043a',
-    '\u043f\u0430\u043a\u0435\u0442': '\u043f\u0430\u043a',
-    '\u043f\u0430\u043a\u0435\u0442\u0430': '\u043f\u0430\u043a',
-    '\u043f\u0430\u043a\u0435\u0442\u043e\u0432': '\u043f\u0430\u043a',
-    'packet': '\u043f\u0430\u043a',
-    'packets': '\u043f\u0430\u043a',
-
-    // Containers
-    '\u0431\u0443\u0442': '\u0431\u0443\u0442',
-    '\u0431\u0443\u0442\u044b\u043b\u043a\u0430': '\u0431\u0443\u0442',
-    '\u0431\u0443\u0442\u044b\u043b\u043a\u0438': '\u0431\u0443\u0442',
-    '\u0431\u0443\u0442\u044b\u043b\u043e\u043a': '\u0431\u0443\u0442',
-    'bottle': '\u0431\u0443\u0442',
-    'bottles': '\u0431\u0443\u0442',
-
-    '\u0431\u0430\u043d': '\u0431\u0430\u043d',
-    '\u0431\u0430\u043d\u043a\u0430': '\u0431\u0430\u043d',
-    '\u0431\u0430\u043d\u043a\u0438': '\u0431\u0430\u043d',
-    '\u0431\u0430\u043d\u043e\u043a': '\u0431\u0430\u043d',
-    'jar': '\u0431\u0430\u043d',
-    'jars': '\u0431\u0430\u043d',
-
-    '\u043a\u043e\u0440': '\u043a\u043e\u0440',
-    '\u043a\u043e\u0440\u043e\u0431\u043a\u0430': '\u043a\u043e\u0440',
-    '\u043a\u043e\u0440\u043e\u0431\u043a\u0438': '\u043a\u043e\u0440',
-    '\u043a\u043e\u0440\u043e\u0431\u043e\u043a': '\u043a\u043e\u0440',
-    'box': '\u043a\u043e\u0440',
-    'boxes': '\u043a\u043e\u0440',
-
-    '\u0440\u0443\u043b': '\u0440\u0443\u043b',
-    '\u0440\u0443\u043b\u043e\u043d': '\u0440\u0443\u043b',
-    '\u0440\u0443\u043b\u043e\u043d\u0430': '\u0440\u0443\u043b',
-    '\u0440\u0443\u043b\u043e\u043d\u043e\u0432': '\u0440\u0443\u043b',
-    'roll': '\u0440\u0443\u043b',
-    'rolls': '\u0440\u0443\u043b',
-
-    // Dozen / portion
-    '\u0434\u044e\u0436': '\u0434\u044e\u0436',
-    '\u0434\u044e\u0436\u0438\u043d\u0430': '\u0434\u044e\u0436',
-    '\u0434\u044e\u0436\u0438\u043d\u044b': '\u0434\u044e\u0436',
-    '\u0434\u044e\u0436\u0438\u043d': '\u0434\u044e\u0436',
-    'dozen': '\u0434\u044e\u0436',
-    'dozens': '\u0434\u044e\u0436',
-    'dz': '\u0434\u044e\u0436',
-
-    '\u043f\u043e\u0440\u0446': '\u043f\u043e\u0440\u0446',
-    '\u043f\u043e\u0440\u0446\u0438\u044f': '\u043f\u043e\u0440\u0446',
-    '\u043f\u043e\u0440\u0446\u0438\u0438': '\u043f\u043e\u0440\u0446',
-    '\u043f\u043e\u0440\u0446\u0438\u0439': '\u043f\u043e\u0440\u0446',
-    'portion': '\u043f\u043e\u0440\u0446',
-    'portions': '\u043f\u043e\u0440\u0446',
-};
-const PRODUCT_UNIT_PATTERN = Object.keys(PRODUCT_UNIT_ALIASES)
-    .map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    .sort((left, right) => right.length - left.length)
-    .join('|');
 
 function getSuggestionKey(suggestion) {
     if (typeof suggestion?.suggestion_key === 'string' && suggestion.suggestion_key.trim() !== '') {
@@ -1567,156 +1468,6 @@ async function syncOfflineQueue() {
     }
 }
 
-function resetMessages() {
-    // Toast-based notifications do not need hard resets.
-}
-
-function clearToastTimer(toast) {
-    if (!toast || typeof window === 'undefined') {
-        return;
-    }
-
-    if (toast.timerId) {
-        clearTimeout(toast.timerId);
-        toast.timerId = null;
-    }
-}
-
-function removeToast(toastId) {
-    const numericId = Number(toastId);
-    const toast = toasts.value.find((entry) => Number(entry.id) === numericId);
-    if (toast) {
-        clearToastTimer(toast);
-    }
-
-    toasts.value = toasts.value.filter((entry) => Number(entry.id) !== numericId);
-}
-
-function scheduleToastAutoclose(toast, duration = TOAST_AUTO_CLOSE_MS) {
-    if (!toast || typeof window === 'undefined') {
-        return;
-    }
-
-    clearToastTimer(toast);
-    const safeDuration = Math.max(900, Number(duration) || TOAST_AUTO_CLOSE_MS);
-
-    toast.timerId = window.setTimeout(() => {
-        removeToast(toast.id);
-    }, safeDuration);
-}
-
-function pushToast(message, type = 'info', duration = TOAST_AUTO_CLOSE_MS) {
-    const normalizedMessage = String(message ?? '').trim();
-    if (!normalizedMessage) {
-        return;
-    }
-
-    const toast = {
-        id: nextToastId,
-        type,
-        message: normalizedMessage,
-        deltaX: 0,
-        startX: 0,
-        dragging: false,
-        timerId: null,
-        duration: Math.max(900, Number(duration) || TOAST_AUTO_CLOSE_MS),
-    };
-    nextToastId += 1;
-
-    toasts.value = [...toasts.value, toast];
-    scheduleToastAutoclose(toast, toast.duration);
-}
-
-function resolvePointerClientX(event) {
-    if (!event) {
-        return null;
-    }
-
-    if (typeof event.clientX === 'number') {
-        return Number(event.clientX);
-    }
-
-    if ('touches' in event && event.touches?.length > 0) {
-        return Number(event.touches[0].clientX);
-    }
-
-    if ('changedTouches' in event && event.changedTouches?.length > 0) {
-        return Number(event.changedTouches[0].clientX);
-    }
-
-    return null;
-}
-
-function findToastById(toastId) {
-    const numericId = Number(toastId);
-    return toasts.value.find((entry) => Number(entry.id) === numericId) ?? null;
-}
-
-function onToastPointerDown(toastId, event) {
-    const toast = findToastById(toastId);
-    if (!toast) {
-        return;
-    }
-
-    const clientX = resolvePointerClientX(event);
-    if (clientX === null) {
-        return;
-    }
-
-    toast.dragging = true;
-    toast.startX = clientX;
-    toast.deltaX = 0;
-    clearToastTimer(toast);
-}
-
-function onToastPointerMove(toastId, event) {
-    const toast = findToastById(toastId);
-    if (!toast || !toast.dragging) {
-        return;
-    }
-
-    const clientX = resolvePointerClientX(event);
-    if (clientX === null) {
-        return;
-    }
-
-    const delta = clientX - toast.startX;
-    toast.deltaX = Math.max(-220, Math.min(220, delta));
-}
-
-function onToastPointerUp(toastId) {
-    const toast = findToastById(toastId);
-    if (!toast) {
-        return;
-    }
-
-    const dismiss = Math.abs(toast.deltaX) >= TOAST_SWIPE_DISMISS_THRESHOLD;
-
-    if (dismiss) {
-        removeToast(toast.id);
-        return;
-    }
-
-    toast.dragging = false;
-    toast.deltaX = 0;
-    scheduleToastAutoclose(toast, toast.duration);
-}
-
-function onToastPointerCancel(toastId) {
-    onToastPointerUp(toastId);
-}
-
-function showStatus(message) {
-    pushToast(message, 'success', TOAST_AUTO_CLOSE_MS);
-}
-
-function showError(error) {
-    const fallback = '\u041f\u0440\u043e\u0438\u0437\u043e\u0448\u043b\u0430 \u043e\u0448\u0438\u0431\u043a\u0430. \u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u0435\u0449\u0451 \u0440\u0430\u0437.';
-    const responseErrors = error?.response?.data?.errors;
-    const firstError = responseErrors ? Object.values(responseErrors)[0]?.[0] : null;
-    pushToast(firstError || error?.response?.data?.message || fallback, 'error', 4400);
-}
-
 function formatDueAt(isoValue) {
     if (!isoValue) {
         return 'Без дедлайна';
@@ -1728,282 +1479,6 @@ function formatDueAt(isoValue) {
         hour: '2-digit',
         minute: '2-digit',
     }).format(new Date(isoValue));
-}
-
-function normalizeQuantityInput(value) {
-    const raw = String(value ?? '').trim().replace(',', '.');
-    if (raw === '') {
-        return null;
-    }
-
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-        return null;
-    }
-
-    return Math.round(parsed * 100) / 100;
-}
-
-function normalizeUnitInput(value) {
-    const rawUnit = String(value ?? '')
-        .trim()
-        .toLowerCase()
-        .replace(/\u0451/g, '\u0435')
-        .replace(/[.,;:]+$/g, '');
-
-    if (rawUnit === '') {
-        return null;
-    }
-
-    const normalized = PRODUCT_UNIT_ALIASES[rawUnit];
-    if (!normalized) {
-        return null;
-    }
-
-    return normalized;
-}
-
-function parseProductTextPayload(rawText) {
-    const source = String(rawText ?? '').trim();
-    if (source === '') {
-        return {
-            text: '',
-            quantity: null,
-            unit: null,
-        };
-    }
-
-    const numberPattern = '(\\d+(?:[\\.,]\\d{1,2})?)';
-    const unitPattern = `(${PRODUCT_UNIT_PATTERN})`;
-    const separatorPattern = '[\\.,;:]?';
-    const prefixMatcher = new RegExp(`^${numberPattern}\\s*${unitPattern}${separatorPattern}\\s+(.+)$`, 'iu');
-    const suffixMatcher = new RegExp(`^(.+?)\\s+${numberPattern}\\s*${unitPattern}${separatorPattern}$`, 'iu');
-
-    let text = source;
-    let quantity = null;
-    let unit = null;
-
-    const prefixMatch = source.match(prefixMatcher);
-    if (prefixMatch) {
-        quantity = normalizeQuantityInput(prefixMatch[1]);
-        unit = normalizeUnitInput(prefixMatch[2]);
-        text = String(prefixMatch[3] ?? '').trim();
-    } else {
-        const suffixMatch = source.match(suffixMatcher);
-        if (suffixMatch) {
-            text = String(suffixMatch[1] ?? '').trim();
-            quantity = normalizeQuantityInput(suffixMatch[2]);
-            unit = normalizeUnitInput(suffixMatch[3]);
-        }
-    }
-
-    if (quantity === null || unit === null || text === '') {
-        return {
-            text: source,
-            quantity: null,
-            unit: null,
-        };
-    }
-
-    return {
-        text,
-        quantity,
-        unit,
-    };
-}
-
-function normalizeProductComparableText(value) {
-    const source = String(value ?? '').trim();
-    if (source === '') {
-        return '';
-    }
-
-    const parsed = parseProductTextPayload(source);
-    const baseText = String(parsed.text ?? source).trim();
-
-    return baseText
-        .toLowerCase()
-        .replace(/\u0451/g, '\u0435')
-        .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-
-function normalizeTodoComparableText(value) {
-    const source = String(value ?? '').trim();
-    if (source === '') {
-        return '';
-    }
-
-    return source
-        .toLowerCase()
-        .replace(/\u0451/g, '\u0435')
-        .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-
-function formatQuantityValue(value) {
-    const quantity = Number(value);
-    if (!Number.isFinite(quantity)) {
-        return '';
-    }
-
-    if (Number.isInteger(quantity)) {
-        return String(quantity);
-    }
-
-    return String(Math.round(quantity * 100) / 100).replace(/\.?0+$/, '');
-}
-
-function getProductDisplayParts(item) {
-    const sourceText = String(item?.text ?? '').trim();
-    const explicitQuantity = normalizeQuantityInput(item?.quantity);
-    const explicitUnitRaw = String(item?.unit ?? '').trim();
-    const explicitUnitNormalized = explicitQuantity !== null ? normalizeUnitInput(item?.unit) : null;
-    const explicitUnit = explicitQuantity !== null
-        ? (explicitUnitNormalized ?? (explicitUnitRaw === '' ? null : explicitUnitRaw.slice(0, 24)))
-        : null;
-
-    if (explicitQuantity !== null) {
-        return {
-            text: sourceText,
-            quantity: explicitQuantity,
-            unit: explicitUnit,
-        };
-    }
-
-    const parsed = parseProductTextPayload(sourceText);
-    if (parsed.quantity !== null && parsed.text !== '') {
-        return parsed;
-    }
-
-    return {
-        text: sourceText,
-        quantity: null,
-        unit: null,
-    };
-}
-
-function getProductDisplayText(item) {
-    const parts = getProductDisplayParts(item);
-    return parts.text;
-}
-
-function formatProductMeasure(item) {
-    if (item?.type !== 'product') {
-        return '';
-    }
-
-    const parts = getProductDisplayParts(item);
-    const quantity = parts.quantity !== null ? formatQuantityValue(parts.quantity) : '';
-    const unit = parts.unit;
-
-    if (quantity && unit) {
-        return `${quantity} ${unit}`;
-    }
-
-    if (quantity) {
-        return quantity;
-    }
-
-    if (unit) {
-        return unit;
-    }
-
-    return '';
-}
-
-function buildProductEditableText(item) {
-    const parts = getProductDisplayParts(item);
-    const text = parts.text;
-    const quantity = parts.quantity !== null ? formatQuantityValue(parts.quantity) : '';
-    const unit = parts.unit;
-
-    if (!quantity) {
-        return text;
-    }
-
-    if (unit) {
-        return `${text} ${quantity} ${unit}`.trim();
-    }
-
-    return `${text} ${quantity}`.trim();
-}
-
-function normalizeTodoPriority(value, fallback = null) {
-    const normalized = String(value ?? '').trim().toLowerCase();
-
-    if (normalized === 'urgent' || normalized === 'today' || normalized === 'later') {
-        return normalized;
-    }
-
-    return fallback;
-}
-
-function inferTodoPriorityFromDueAt(isoValue) {
-    const dueAt = isoValue ? new Date(isoValue) : null;
-    if (!dueAt || Number.isNaN(dueAt.getTime())) {
-        return 'later';
-    }
-
-    const now = new Date();
-    const diffMs = dueAt.getTime() - now.getTime();
-    const isToday = dueAt.toDateString() === now.toDateString();
-
-    if (diffMs <= 2 * 60 * 60 * 1000) {
-        return 'urgent';
-    }
-
-    if (isToday || diffMs <= 24 * 60 * 60 * 1000) {
-        return 'today';
-    }
-
-    return 'later';
-}
-
-function getTodoPriority(item) {
-    return normalizeTodoPriority(item?.priority, inferTodoPriorityFromDueAt(item?.due_at));
-}
-
-function todoPriorityLabel(item) {
-    const priority = getTodoPriority(item);
-
-    if (priority === 'urgent') {
-        return '\u0421\u0440\u043e\u0447\u043d\u043e';
-    }
-
-    if (priority === 'today') {
-        return '\u0421\u0435\u0433\u043e\u0434\u043d\u044f';
-    }
-
-    return '\u041f\u043e\u0442\u043e\u043c';
-}
-
-function todoPriorityClass(item) {
-    const priority = getTodoPriority(item);
-
-    if (priority === 'urgent') {
-        return 'border-[#ee5c81]/55 bg-[#ee5c81]/14 text-[#ee5c81]';
-    }
-
-    if (priority === 'today') {
-        return 'border-[#d4b06e]/55 bg-[#d4b06e]/14 text-[#d4b06e]';
-    }
-
-    return 'border-[#a5d774]/50 bg-[#a5d774]/12 text-[#a5d774]';
-}
-
-function nextTodoPriority(priority) {
-    if (priority === 'urgent') {
-        return 'today';
-    }
-
-    if (priority === 'today') {
-        return 'later';
-    }
-
-    return 'urgent';
 }
 
 async function cycleTodoPriority(item) {
@@ -2034,28 +1509,6 @@ async function cycleTodoPriority(item) {
     if (!hasPendingOperations(ownerId, 'todo', linkId)) {
         await loadSuggestions('todo');
     }
-}
-
-function formatIntervalSeconds(rawSeconds) {
-    const seconds = Math.max(0, Number(rawSeconds) || 0);
-
-    if (seconds >= 86400) {
-        return `${Math.round((seconds / 86400) * 10) / 10} \u0434\u043d.`;
-    }
-
-    if (seconds >= 3600) {
-        return `${Math.round((seconds / 3600) * 10) / 10} \u0447`;
-    }
-
-    return `${Math.max(1, Math.round(seconds / 60))} \u043c\u0438\u043d`;
-}
-
-function suggestionStatusText(suggestion, type) {
-    if (suggestion.is_due || Number(suggestion.seconds_until_expected) <= 0) {
-        return type === 'product' ? 'Пора купить снова' : 'Пора запланировать снова';
-    }
-
-    return `Через ${formatIntervalSeconds(suggestion.seconds_until_expected)}`;
 }
 
 async function applySuggestionToList(type, suggestion) {
@@ -3150,6 +2603,7 @@ onBeforeUnmount(() => {
     batchRemovingItemKeys.value = [];
     batchRemovalAnimating.value = false;
     deleteFeedbackBursts.value = [];
+    disposeToasts();
 
     if (itemsPollTimer) {
         clearInterval(itemsPollTimer);
@@ -4233,5 +3687,6 @@ onBeforeUnmount(() => {
     }
 }
 </style>
+
 
 
