@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\ListItemController;
 use App\Http\Controllers\Api\ProfileSettingsController;
 use App\Http\Controllers\Api\SharingController;
+use App\Http\Controllers\Api\SyncChunkController;
 use App\Http\Controllers\AppController;
 use App\Http\Controllers\ProfileController;
 use Illuminate\Http\Request;
@@ -22,6 +23,7 @@ Route::middleware('auth')->group(function () {
     Route::prefix('/api')->group(function () {
         Route::get('/sync/state', [SharingController::class, 'state']);
         Route::post('/sync/default-owner', [SharingController::class, 'setDefaultOwner']);
+        Route::post('/sync/chunk', [SyncChunkController::class, 'sync']);
         Route::get('/users/search', [SharingController::class, 'searchUsers']);
         Route::post('/invitations', [SharingController::class, 'sendInvitation']);
         Route::post('/invitations/{invitation}/accept', [SharingController::class, 'acceptInvitation']);

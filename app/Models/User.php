@@ -22,6 +22,11 @@ class User extends Authenticatable
         'name',
         'tag',
         'preferred_owner_id',
+        'xp_progress',
+        'productivity_score',
+        'productivity_reward_history',
+        'xp_color_seed',
+        'gamification_updated_at',
         'email',
         'password',
     ];
@@ -46,6 +51,11 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'xp_progress' => 'float',
+            'productivity_score' => 'integer',
+            'productivity_reward_history' => 'array',
+            'xp_color_seed' => 'integer',
+            'gamification_updated_at' => 'datetime',
         ];
     }
 

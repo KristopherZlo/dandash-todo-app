@@ -79,7 +79,11 @@ class ListItemController extends Controller
             $link = $this->resolveAccessibleLink($request, $linkId);
             $ownerId = (int) $link->user_one_id;
         } else {
-            abort_unless($request->user()->id === $ownerId, 403, 'You do not have access to this list.');
+            if ($request->user()->id !== $ownerId) {
+                $link = $this->resolveAccessibleLinkByOwner($request, $ownerId);
+                $linkId = (int) $link->id;
+                $ownerId = (int) $link->user_one_id;
+            }
         }
 
         $item = ListItem::query()->create([
@@ -105,6 +109,7 @@ class ListItemController extends Controller
             'created_by_id' => $request->user()->id,
             'updated_by_id' => $request->user()->id,
         ]);
+        $this->listItemSuggestionService->recordAddedEvent($item);
 
         $this->dispatchListItemsChangedSafely(
             $item->owner_id,
@@ -163,9 +168,9 @@ class ListItemController extends Controller
             $this->ensureCanAccess($request, $ownerId);
         }
 
-        return response()->json([
-            'stats' => $this->listItemSuggestionService->productStatsForOwner($ownerId, $limit, $linkId),
-        ]);
+        return response()->json(
+            $this->listItemSuggestionService->productStatsPayloadForOwner($ownerId, $limit, $linkId)
+        );
     }
 
     public function resetSuggestionData(Request $request): JsonResponse
@@ -286,9 +291,17 @@ class ListItemController extends Controller
 
         if ($request->has('is_completed')) {
             $isCompleted = (bool) $validated['is_completed'];
-            $completionChanged = $isCompleted !== (bool) $item->is_completed;
+            $wasCompleted = (bool) $item->is_completed;
+            $completionChanged = $isCompleted !== $wasCompleted;
             $item->is_completed = $isCompleted;
-            $item->completed_at = $isCompleted ? now() : null;
+
+            if ($isCompleted) {
+                if ($completionChanged || $item->completed_at === null) {
+                    $item->completed_at = now();
+                }
+            } else {
+                $item->completed_at = null;
+            }
         }
 
         if ($request->has('sort_order')) {
@@ -302,8 +315,18 @@ class ListItemController extends Controller
             );
         }
 
+        if (! $item->isDirty()) {
+            return response()->json([
+                'item' => $this->serializeItem($item),
+            ]);
+        }
+
         $item->updated_by_id = $request->user()->id;
         $item->save();
+
+        if ($completionChanged && (bool) $item->is_completed) {
+            $this->listItemSuggestionService->recordCompletedEvent($item);
+        }
 
         $this->dispatchListItemsChangedSafely(
             $item->owner_id,
@@ -468,6 +491,24 @@ class ListItemController extends Controller
             403,
             'You do not have access to this shared list.'
         );
+
+        return $link;
+    }
+
+    private function resolveAccessibleLinkByOwner(Request $request, int $ownerId): ListLink
+    {
+        $currentUserId = (int) $request->user()->id;
+
+        $link = ListLink::query()
+            ->where('is_active', true)
+            ->where('user_one_id', $ownerId)
+            ->where(function ($query) use ($currentUserId): void {
+                $query->where('user_one_id', $currentUserId)
+                    ->orWhere('user_two_id', $currentUserId);
+            })
+            ->first();
+
+        abort_unless($link, 403, 'You do not have access to this shared list.');
 
         return $link;
     }

@@ -194,6 +194,111 @@ class ListItemSuggestionTest extends TestCase
             ->assertJsonCount(0, 'suggestions');
     }
 
+    public function test_suggestions_are_not_reset_after_items_are_fully_deleted(): void
+    {
+        $user = User::factory()->create();
+        $itemIds = [];
+
+        foreach ([
+            CarbonImmutable::parse('2026-02-01 10:00:00'),
+            CarbonImmutable::parse('2026-02-04 10:00:00'),
+            CarbonImmutable::parse('2026-02-07 10:00:00'),
+        ] as $createdAt) {
+            Carbon::setTestNow($createdAt);
+
+            $itemIds[] = (int) $this->actingAs($user)
+                ->postJson('/api/items', [
+                    'owner_id' => $user->id,
+                    'type' => ListItem::TYPE_PRODUCT,
+                    'text' => 'milk',
+                ])
+                ->assertCreated()
+                ->json('item.id');
+        }
+
+        foreach ($itemIds as $itemId) {
+            $this->actingAs($user)
+                ->deleteJson('/api/items/'.$itemId)
+                ->assertOk();
+        }
+
+        $this->assertSame(0, ListItem::query()->where('owner_id', $user->id)->count());
+
+        Carbon::setTestNow(CarbonImmutable::parse('2026-02-17 12:00:00'));
+
+        $response = $this->actingAs($user)
+            ->getJson('/api/items/suggestions?owner_id='.$user->id.'&type=product')
+            ->assertOk();
+
+        $this->assertGreaterThan(0, count($response->json('suggestions')));
+        $this->assertSame('milk', $response->json('suggestions.0.suggested_text'));
+        $this->assertSame(3, $response->json('suggestions.0.occurrences'));
+    }
+
+    public function test_product_stats_response_contains_user_summary(): void
+    {
+        $user = User::factory()->create();
+
+        Carbon::setTestNow(CarbonImmutable::parse('2026-02-10 10:00:00'));
+        $firstItemId = (int) $this->actingAs($user)
+            ->postJson('/api/items', [
+                'owner_id' => $user->id,
+                'type' => ListItem::TYPE_PRODUCT,
+                'text' => 'Milk',
+            ])
+            ->assertCreated()
+            ->json('item.id');
+
+        Carbon::setTestNow(CarbonImmutable::parse('2026-02-12 10:00:00'));
+        $this->actingAs($user)
+            ->postJson('/api/items', [
+                'owner_id' => $user->id,
+                'type' => ListItem::TYPE_PRODUCT,
+                'text' => 'Bread',
+            ])
+            ->assertCreated();
+
+        Carbon::setTestNow(CarbonImmutable::parse('2026-02-13 10:00:00'));
+        $this->actingAs($user)
+            ->patchJson('/api/items/'.$firstItemId, [
+                'is_completed' => true,
+            ])
+            ->assertOk();
+
+        $response = $this->actingAs($user)
+            ->getJson('/api/items/suggestions/stats?owner_id='.$user->id.'&limit=50')
+            ->assertOk();
+
+        $response
+            ->assertJsonStructure([
+                'stats',
+                'summary' => [
+                    'total_added',
+                    'total_completed',
+                    'unique_products',
+                    'due_suggestions',
+                    'upcoming_suggestions',
+                    'last_activity_at',
+                ],
+            ])
+            ->assertJsonPath('summary.total_added', 2)
+            ->assertJsonPath('summary.total_completed', 1);
+    }
+
+    public function test_product_stats_summary_does_not_include_mock_suggestions(): void
+    {
+        $user = User::factory()->create();
+
+        $this->actingAs($user)
+            ->getJson('/api/items/suggestions/stats?owner_id='.$user->id.'&limit=50')
+            ->assertOk()
+            ->assertJsonPath('summary.total_added', 0)
+            ->assertJsonPath('summary.total_completed', 0)
+            ->assertJsonPath('summary.unique_products', 0)
+            ->assertJsonPath('summary.due_suggestions', 0)
+            ->assertJsonPath('summary.upcoming_suggestions', 0);
+    }
+
     protected function tearDown(): void
     {
         Carbon::setTestNow();

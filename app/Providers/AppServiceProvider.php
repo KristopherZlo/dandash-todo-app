@@ -20,6 +20,17 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        Vite::createAssetPathsUsing(function (string $path, ?bool $secure = null): string {
+            if (app()->runningInConsole()) {
+                return asset($path, $secure);
+            }
+
+            $request = request();
+            $base = rtrim($request->getSchemeAndHttpHost().$request->getBaseUrl(), '/');
+
+            return $base.'/'.ltrim($path, '/');
+        });
+
         Vite::prefetch(concurrency: 3);
     }
 }

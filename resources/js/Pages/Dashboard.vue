@@ -89,13 +89,39 @@ const searchResults = ref([]);
 const searchBusy = ref(false);
 
 const productStatsModalOpen = ref(false);
-const smartSuggestionsNoticeVisible = ref(true);
 const productSuggestionsOpen = ref(true);
 const todoSuggestionsOpen = ref(true);
 const batchRemovingItemKeys = ref([]);
 const batchRemovalAnimating = ref(false);
+const batchCollapseHiddenItemKeys = ref([]);
+const batchCollapseScene = ref(null);
 const deleteFeedbackBursts = ref([]);
+const xpStars = ref([]);
+const progressBarRef = ref(null);
+const megaCardRef = ref(null);
+const xpProgress = ref(0);
+const xpVisualProgress = ref(0);
+const productivityScore = ref(0);
+const xpProgressInstant = ref(false);
+const xpProgressFillDurationMs = ref(240);
+const xpLevelUpBackdropVisible = ref(false);
+const xpLevelUpRaised = ref(false);
+const xpLevelUpImpact = ref(false);
+const xpRewardVisible = ref(false);
+const xpRewardAmount = ref(0);
+const xpColorSeed = ref(1);
+const xpProgressLevel = ref(1);
+const animationSkipEpoch = ref(0);
+const soundEnabled = ref(true);
 const productSuggestionStats = ref([]);
+const productStatsSummary = ref({
+    total_added: 0,
+    total_completed: 0,
+    unique_products: 0,
+    due_suggestions: 0,
+    upcoming_suggestions: 0,
+    last_activity_at: null,
+});
 const productSuggestionStatsLoading = ref(false);
 const resettingSuggestionKeys = ref([]);
 
@@ -139,11 +165,24 @@ const isBrowserOnline = ref(typeof window !== 'undefined' ? window.navigator.onL
 const serverReachable = ref(true);
 const offlineQueue = ref([]);
 const cachedItemsByList = ref({});
+const cachedSuggestionsByList = ref({});
+const cachedProductStatsByList = ref({});
+const cachedUserSearchByQuery = ref({});
+const cachedSyncState = ref(null);
 
 const CACHE_VERSION = 'v1';
 const OFFLINE_QUEUE_STORAGE_KEY = `dandash:offline-queue:${CACHE_VERSION}:user-${localUser.id}`;
 const ITEMS_CACHE_STORAGE_KEY = `dandash:items-cache:${CACHE_VERSION}:user-${localUser.id}`;
+const SUGGESTIONS_CACHE_STORAGE_KEY = `dandash:suggestions-cache:${CACHE_VERSION}:user-${localUser.id}`;
+const PRODUCT_STATS_CACHE_STORAGE_KEY = `dandash:product-stats-cache:${CACHE_VERSION}:user-${localUser.id}`;
+const USER_SEARCH_CACHE_STORAGE_KEY = `dandash:user-search-cache:${CACHE_VERSION}:user-${localUser.id}`;
+const SYNC_STATE_CACHE_STORAGE_KEY = `dandash:sync-state:${CACHE_VERSION}:user-${localUser.id}`;
 const LOCAL_DEFAULT_OWNER_KEY = `dandash:default-owner:${CACHE_VERSION}:user-${localUser.id}`;
+const XP_PROGRESS_STORAGE_KEY = `dandash:xp-progress:${CACHE_VERSION}:user-${localUser.id}`;
+const PRODUCTIVITY_STORAGE_KEY = `dandash:productivity:${CACHE_VERSION}:user-${localUser.id}`;
+const PRODUCTIVITY_REWARD_HISTORY_STORAGE_KEY = `dandash:productivity-reward-history:${CACHE_VERSION}:user-${localUser.id}`;
+const XP_COLOR_SEED_STORAGE_KEY = `dandash:xp-color-seed:${CACHE_VERSION}:user-${localUser.id}`;
+const GAMIFICATION_UPDATED_AT_STORAGE_KEY = `dandash:gamification-updated-at:${CACHE_VERSION}:user-${localUser.id}`;
 
 let itemsPollTimer = null;
 let statePollTimer = null;
@@ -151,7 +190,6 @@ let suggestionsPollTimer = null;
 let queueSyncTimer = null;
 let listChannelName = null;
 let userChannelName = null;
-let smartSuggestionsNoticeTimer = null;
 let swipeUndoTimer = null;
 let lastPersistedOwnerId = Number(props.initialState.default_owner_id ?? localUser.id);
 let queueSyncInProgress = false;
@@ -159,9 +197,37 @@ let nextTempId = -1;
 let handleOnlineEvent = null;
 let handleOfflineEvent = null;
 let nextDeleteFeedbackBurstId = 1;
+let nextXpStarId = 1;
+let nextXpGainSourceId = 1;
+let nextBatchCollapseSceneId = 1;
+let nextBatchCollapseIncomingId = 1;
 let skipTodoBlurSaveUntil = 0;
 let queuedUpdateTouchedAt = 0;
 let queuedUpdateSyncTimer = null;
+let queueRetryAt = 0;
+let syncInFlightOperationIds = new Set();
+let xpGainProcessing = false;
+let pendingXpGain = 0;
+let lastXpGainSoundAt = 0;
+let localGamificationUpdatedAtMs = 0;
+let gamificationSyncEnabled = false;
+let suppressGamificationQueueDepth = 0;
+let gamificationSyncTimer = null;
+let dashboardSoundMutedUntil = 0;
+let scrollLockActive = false;
+let previousBodyOverflowStyle = '';
+let previousBodyTouchActionStyle = '';
+let previousHtmlOverflowStyle = '';
+let previousHtmlOverscrollBehaviorStyle = '';
+let productivityRewardHistory = [];
+const effectTimeouts = new Set();
+const itemCardElements = new Map();
+const soundPools = new Map();
+const listSyncVersions = new Map();
+const deletedItemTombstones = new Map();
+const xpGainSources = new Map();
+const xpGainSourceCleanupTimeouts = new Map();
+let megaCardImpactAnimation = null;
 
 function normalizeLinkId(value) {
     const parsed = Number(value);
@@ -227,9 +293,18 @@ const visibleProductSuggestions = computed(() => {
             .map((item) => normalizeProductComparableText(item?.text))
             .filter((value) => value !== ''),
     );
+    const seenSuggestions = new Set();
 
     return productSuggestions.value.filter((suggestion) => {
         const comparableSuggestion = normalizeProductComparableText(suggestion?.suggested_text);
+
+        if (comparableSuggestion !== '' && seenSuggestions.has(comparableSuggestion)) {
+            return false;
+        }
+
+        if (comparableSuggestion !== '') {
+            seenSuggestions.add(comparableSuggestion);
+        }
 
         if (comparableSuggestion === '') {
             return true;
@@ -248,9 +323,18 @@ const visibleTodoSuggestions = computed(() => {
             .map((item) => normalizeTodoComparableText(item?.text))
             .filter((value) => value !== ''),
     );
+    const seenSuggestions = new Set();
 
     return todoSuggestions.value.filter((suggestion) => {
         const comparableSuggestion = normalizeTodoComparableText(suggestion?.suggested_text);
+
+        if (comparableSuggestion !== '' && seenSuggestions.has(comparableSuggestion)) {
+            return false;
+        }
+
+        if (comparableSuggestion !== '') {
+            seenSuggestions.add(comparableSuggestion);
+        }
 
         if (comparableSuggestion === '') {
             return true;
@@ -292,10 +376,71 @@ const canShowRemoveCompletedButton = computed(() => {
         && !batchRemovalAnimating.value,
     );
 });
+const xpProgressPercent = computed(() => Math.round(Math.max(0, Math.min(1, Number(xpVisualProgress.value))) * 1000) / 10);
+const xpProgressFillPalette = computed(() => computeXpProgressPalette(xpProgressLevel.value));
+const isSkippableAnimationPlaying = computed(() => Boolean(
+    batchCollapseScene.value
+    || xpLevelUpBackdropVisible.value
+    || xpLevelUpRaised.value
+    || xpLevelUpImpact.value
+    || xpRewardVisible.value,
+));
 
 const SWIPE_UNDO_WINDOW_MS = 4500;
 const BATCH_REMOVE_CARD_ANIMATION_MS = 190;
+const BATCH_CINEMATIC_REMOVE_THRESHOLD = 4;
+const BATCH_CINEMATIC_WHITEN_MS = 1000;
+const BATCH_CINEMATIC_TRAVEL_MS = 640;
+const BATCH_CINEMATIC_GLOW_MS = 420;
+const BATCH_CINEMATIC_BURST_MS = 170;
+const BATCH_CINEMATIC_INCOMING_TARGET_SCALE = 0.42;
+const BATCH_CINEMATIC_INCOMING_EASING = Object.freeze({
+    x1: 0.2,
+    y1: 0.88,
+    x2: 0.34,
+    y2: 1,
+});
+const BATCH_CINEMATIC_IMPACT_SAMPLE_COUNT = 132;
+const BATCH_CINEMATIC_IMPACT_REFINE_STEPS = 10;
+const XP_REWARD_SCALE_DIVISOR = 3;
+const XP_PROGRESS_PER_TOGGLE = 0.018 / XP_REWARD_SCALE_DIVISOR;
+const XP_BATCH_TOTAL_GAIN_PER_ITEM = 0.06 / XP_REWARD_SCALE_DIVISOR;
+const XP_BATCH_TOTAL_GAIN_MIN = 0.18 / XP_REWARD_SCALE_DIVISOR;
+const XP_BATCH_TOTAL_GAIN_MAX = 0.45 / XP_REWARD_SCALE_DIVISOR;
+const XP_STAR_MIN_DURATION_MS = 360;
+const XP_STAR_MAX_DURATION_MS = 980;
+const XP_PROGRESS_FILL_NORMAL_MS = 240;
+const XP_LEVELUP_PREPARE_MS = 180;
+const XP_LEVELUP_MIN_FILL_MS = 260;
+const XP_LEVELUP_MAX_FILL_MS = 780;
+const XP_LEVELUP_REWARD_MS = 2000;
+const XP_LEVELUP_SETTLE_MS = 260;
+const PRODUCTIVITY_REWARD_BASE_PER_LEVEL = 8;
+const PRODUCTIVITY_REWARD_RANDOM_MAX_BONUS = 5;
+const XP_STAR_SOURCE_RETENTION_MS = SWIPE_UNDO_WINDOW_MS + 1200;
+const XP_GAIN_SOUND_THROTTLE_MS = 90;
+const SOUND_POOL_LIMIT_PER_KEY = 6;
+const SOUND_SKIP_MUTE_MS = 3000;
+const ITEM_DELETE_TOMBSTONE_TTL_MS = 180000;
+const DASHBOARD_SOUND_PATHS = Object.freeze({
+    // Put your custom files into: public/sounds/dashboard/
+    white_card_appear: 'sounds/dashboard/white-card-appear.mp3',
+    white_card_impact: 'sounds/dashboard/white-card-impact.mp3',
+    level_up: 'sounds/dashboard/level-up.mp3',
+    xp_gain: 'sounds/dashboard/xp-gain.mp3',
+});
+const QUEUE_RETRY_DELAY_MS = 4000;
+const SYNC_CHUNK_MAX_OPERATIONS = 24;
+const GAMIFICATION_SYNC_DEBOUNCE_MS = 320;
 const UPDATE_SYNC_COALESCE_MS = 1000;
+const COALESCED_UPDATE_KEYS = new Set([
+    'text',
+    'quantity',
+    'unit',
+    'due_at',
+    'priority',
+]);
+const resolvedSoundUrlCache = new Map();
 
 function getSuggestionKey(suggestion) {
     if (typeof suggestion?.suggestion_key === 'string' && suggestion.suggestion_key.trim() !== '') {
@@ -318,6 +463,56 @@ function parseJson(value, fallback) {
     }
 }
 
+function asPlainObject(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+
+    return value;
+}
+
+function cloneEntries(entries) {
+    if (!Array.isArray(entries)) {
+        return [];
+    }
+
+    return entries
+        .filter((entry) => entry && typeof entry === 'object')
+        .map((entry) => ({ ...entry }));
+}
+
+function persistSuggestionsCache() {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    window.localStorage.setItem(SUGGESTIONS_CACHE_STORAGE_KEY, JSON.stringify(cachedSuggestionsByList.value));
+}
+
+function persistProductStatsCache() {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    window.localStorage.setItem(PRODUCT_STATS_CACHE_STORAGE_KEY, JSON.stringify(cachedProductStatsByList.value));
+}
+
+function persistUserSearchCache() {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    window.localStorage.setItem(USER_SEARCH_CACHE_STORAGE_KEY, JSON.stringify(cachedUserSearchByQuery.value));
+}
+
+function persistSyncStateCache(state) {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    window.localStorage.setItem(SYNC_STATE_CACHE_STORAGE_KEY, JSON.stringify(state));
+}
+
 function cloneItems(items) {
     if (!Array.isArray(items)) {
         return [];
@@ -331,6 +526,473 @@ function listCacheKey(ownerId, type, linkId = null) {
     return `${Number(ownerId)}:${normalizedLinkId ? `link-${normalizedLinkId}` : 'personal'}:${type}`;
 }
 
+function suggestionsCacheKey(ownerId, type, linkId = undefined) {
+    return listCacheKey(ownerId, type, resolveLinkIdForOwner(ownerId, linkId));
+}
+
+function productStatsCacheKey(ownerId, linkId = undefined) {
+    const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    return `${Number(ownerId)}:${normalizedLinkId ? `link-${normalizedLinkId}` : 'personal'}`;
+}
+
+function suggestionDeduplicationKey(suggestion) {
+    const bySuggestionKey = String(suggestion?.suggestion_key ?? '').trim().toLowerCase();
+    if (bySuggestionKey !== '') {
+        return `key:${bySuggestionKey}`;
+    }
+
+    const byText = String(suggestion?.suggested_text ?? '').trim().toLowerCase();
+    if (byText !== '') {
+        return `text:${byText}`;
+    }
+
+    return '';
+}
+
+function normalizeSuggestions(entries) {
+    const source = cloneEntries(entries);
+    if (source.length === 0) {
+        return [];
+    }
+
+    const seen = new Set();
+    const deduplicated = [];
+
+    for (const suggestion of source) {
+        const dedupKey = suggestionDeduplicationKey(suggestion);
+        if (dedupKey !== '' && seen.has(dedupKey)) {
+            continue;
+        }
+
+        if (dedupKey !== '') {
+            seen.add(dedupKey);
+        }
+        deduplicated.push(suggestion);
+    }
+
+    return deduplicated;
+}
+
+function normalizeProductStatsPayload(payload) {
+    const source = asPlainObject(payload);
+    const rawSummary = asPlainObject(source.summary);
+
+    return {
+        stats: cloneEntries(source.stats),
+        summary: {
+            total_added: Math.max(0, Number(rawSummary.total_added) || 0),
+            total_completed: Math.max(0, Number(rawSummary.total_completed) || 0),
+            unique_products: Math.max(0, Number(rawSummary.unique_products) || 0),
+            due_suggestions: Math.max(0, Number(rawSummary.due_suggestions) || 0),
+            upcoming_suggestions: Math.max(0, Number(rawSummary.upcoming_suggestions) || 0),
+            last_activity_at: typeof rawSummary.last_activity_at === 'string' ? rawSummary.last_activity_at : null,
+        },
+    };
+}
+
+function setVisibleSuggestions(type, suggestions) {
+    const nextSuggestions = normalizeSuggestions(suggestions);
+    if (type === 'product') {
+        productSuggestions.value = nextSuggestions;
+        return;
+    }
+
+    todoSuggestions.value = nextSuggestions;
+}
+
+function readSuggestionsFromCache(ownerId, type, linkId = undefined) {
+    const key = suggestionsCacheKey(ownerId, type, linkId);
+    return normalizeSuggestions(cachedSuggestionsByList.value[key]);
+}
+
+function writeSuggestionsToCache(ownerId, type, suggestions, linkId = undefined) {
+    const key = suggestionsCacheKey(ownerId, type, linkId);
+    const normalized = normalizeSuggestions(suggestions);
+    const previous = normalizeSuggestions(cachedSuggestionsByList.value[key]);
+    const changed = JSON.stringify(previous) !== JSON.stringify(normalized);
+
+    if (changed) {
+        cachedSuggestionsByList.value[key] = normalized;
+        persistSuggestionsCache();
+    }
+
+    if (isCurrentListContext(ownerId, resolveLinkIdForOwner(ownerId, linkId))) {
+        setVisibleSuggestions(type, normalized);
+    }
+}
+
+function readProductStatsFromCache(ownerId, linkId = undefined) {
+    const key = productStatsCacheKey(ownerId, linkId);
+    return normalizeProductStatsPayload(cachedProductStatsByList.value[key]);
+}
+
+function writeProductStatsToCache(ownerId, payload, linkId = undefined) {
+    const key = productStatsCacheKey(ownerId, linkId);
+    const normalized = normalizeProductStatsPayload(payload);
+    const previous = normalizeProductStatsPayload(cachedProductStatsByList.value[key]);
+    const changed = JSON.stringify(previous) !== JSON.stringify(normalized);
+
+    if (changed) {
+        cachedProductStatsByList.value[key] = normalized;
+        persistProductStatsCache();
+    }
+
+    if (isCurrentListContext(ownerId, resolveLinkIdForOwner(ownerId, linkId))) {
+        productSuggestionStats.value = normalized.stats;
+        productStatsSummary.value = normalized.summary;
+    }
+}
+
+function normalizeSearchQuery(query) {
+    return String(query ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/^@+/, '');
+}
+
+function readUserSearchFromCache(query) {
+    const normalizedQuery = normalizeSearchQuery(query);
+    if (normalizedQuery === '') {
+        return [];
+    }
+
+    return cloneEntries(cachedUserSearchByQuery.value[normalizedQuery]);
+}
+
+function writeUserSearchToCache(query, users) {
+    const normalizedQuery = normalizeSearchQuery(query);
+    if (normalizedQuery === '') {
+        return;
+    }
+
+    cachedUserSearchByQuery.value[normalizedQuery] = cloneEntries(users);
+    persistUserSearchCache();
+}
+
+function persistGamificationUpdatedAtMs() {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    if (!Number.isFinite(localGamificationUpdatedAtMs) || localGamificationUpdatedAtMs <= 0) {
+        window.localStorage.removeItem(GAMIFICATION_UPDATED_AT_STORAGE_KEY);
+        return;
+    }
+
+    window.localStorage.setItem(
+        GAMIFICATION_UPDATED_AT_STORAGE_KEY,
+        String(Math.round(localGamificationUpdatedAtMs)),
+    );
+}
+
+function normalizeGamificationStatePayload(payload) {
+    const source = asPlainObject(payload);
+    const xpProgress = clampValue(Number(source.xp_progress) || 0, 0, 0.999999);
+    const productivityScore = Math.max(0, Math.round(Number(source.productivity_score) || 0));
+    const rewardHistory = normalizeProductivityRewardHistory(source.productivity_reward_history);
+    const xpColorSeedValue = Number(source.xp_color_seed);
+    const xpColorSeedNormalized = Number.isFinite(xpColorSeedValue) && xpColorSeedValue > 0
+        ? ((Math.floor(xpColorSeedValue) >>> 0) || 1)
+        : 1;
+    const updatedAtMsRaw = Number(source.updated_at_ms);
+    const updatedAtMs = Number.isFinite(updatedAtMsRaw) && updatedAtMsRaw > 0
+        ? Math.round(updatedAtMsRaw)
+        : null;
+
+    return {
+        xp_progress: xpProgress,
+        productivity_score: productivityScore,
+        productivity_reward_history: rewardHistory,
+        xp_color_seed: xpColorSeedNormalized,
+        updated_at_ms: updatedAtMs,
+    };
+}
+
+function buildCurrentGamificationStatePayload() {
+    return normalizeGamificationStatePayload({
+        xp_progress: xpProgress.value,
+        productivity_score: productivityScore.value,
+        productivity_reward_history: productivityRewardHistory,
+        xp_color_seed: xpColorSeed.value,
+        updated_at_ms: localGamificationUpdatedAtMs || null,
+    });
+}
+
+function withGamificationSyncSuppressed(callback) {
+    suppressGamificationQueueDepth += 1;
+    try {
+        return callback();
+    } finally {
+        suppressGamificationQueueDepth = Math.max(0, suppressGamificationQueueDepth - 1);
+    }
+}
+
+function shouldQueueGamificationSync() {
+    return gamificationSyncEnabled && suppressGamificationQueueDepth === 0;
+}
+
+function hasPendingGamificationOperation(excludeOpId = null) {
+    return offlineQueue.value.some((operation) => (
+        operation.action === 'sync_gamification'
+        && (
+            !excludeOpId
+            || String(operation?.op_id ?? '') !== String(excludeOpId)
+        )
+    ));
+}
+
+function scheduleGamificationSync() {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    if (gamificationSyncTimer) {
+        clearTimeout(gamificationSyncTimer);
+    }
+
+    gamificationSyncTimer = window.setTimeout(() => {
+        gamificationSyncTimer = null;
+        syncOfflineQueue().catch(() => {});
+    }, GAMIFICATION_SYNC_DEBOUNCE_MS);
+}
+
+function queueGamificationState(payload) {
+    const normalizedPayload = normalizeGamificationStatePayload(payload);
+    if (!Number.isFinite(normalizedPayload.updated_at_ms) || normalizedPayload.updated_at_ms <= 0) {
+        return;
+    }
+
+    const existingIndex = findQueueIndexFromEnd(
+        (operation) => operation.action === 'sync_gamification',
+    );
+
+    if (existingIndex !== -1 && !isOperationBeingSynced(offlineQueue.value[existingIndex]?.op_id)) {
+        offlineQueue.value[existingIndex] = {
+            ...offlineQueue.value[existingIndex],
+            payload: normalizedPayload,
+        };
+        persistQueue();
+        return;
+    }
+
+    enqueueOperation({
+        action: 'sync_gamification',
+        payload: normalizedPayload,
+    });
+}
+
+function notifyGamificationStateChanged() {
+    if (!shouldQueueGamificationSync()) {
+        return;
+    }
+
+    localGamificationUpdatedAtMs = Date.now();
+    persistGamificationUpdatedAtMs();
+
+    queueGamificationState({
+        ...buildCurrentGamificationStatePayload(),
+        updated_at_ms: localGamificationUpdatedAtMs,
+    });
+    scheduleGamificationSync();
+}
+
+function applyGamificationStateFromServer(payload, options = {}) {
+    const { force = false } = options;
+    const normalized = normalizeGamificationStatePayload(payload);
+    const serverUpdatedAtMs = Number(normalized.updated_at_ms || 0);
+
+    if (!force && serverUpdatedAtMs > 0 && serverUpdatedAtMs < localGamificationUpdatedAtMs) {
+        return;
+    }
+
+    if (!force && hasPendingGamificationOperation() && serverUpdatedAtMs <= localGamificationUpdatedAtMs) {
+        return;
+    }
+
+    withGamificationSyncSuppressed(() => {
+        xpProgress.value = normalized.xp_progress;
+        xpVisualProgress.value = normalized.xp_progress;
+        productivityScore.value = normalized.productivity_score;
+        productivityRewardHistory = normalized.productivity_reward_history;
+        xpColorSeed.value = normalized.xp_color_seed;
+
+        if (typeof window !== 'undefined') {
+            window.localStorage.setItem(XP_PROGRESS_STORAGE_KEY, String(xpProgress.value));
+            window.localStorage.setItem(PRODUCTIVITY_STORAGE_KEY, String(productivityScore.value));
+            window.localStorage.setItem(
+                PRODUCTIVITY_REWARD_HISTORY_STORAGE_KEY,
+                JSON.stringify(productivityRewardHistory),
+            );
+            window.localStorage.setItem(XP_COLOR_SEED_STORAGE_KEY, String(xpColorSeed.value));
+        }
+
+        syncXpProgressLevel();
+    });
+
+    if (serverUpdatedAtMs > 0) {
+        localGamificationUpdatedAtMs = serverUpdatedAtMs;
+        persistGamificationUpdatedAtMs();
+    }
+}
+
+function normalizeSyncStatePayload(state) {
+    const source = asPlainObject(state);
+    const invitations = cloneEntries(source.invitations);
+    const links = cloneEntries(source.links);
+    const listOptions = cloneEntries(source.list_options);
+    const gamificationSource = source.gamification && typeof source.gamification === 'object'
+        ? source.gamification
+        : null;
+
+    return {
+        pending_invitations_count: Math.max(0, Number(source.pending_invitations_count) || 0),
+        invitations,
+        links,
+        list_options: listOptions,
+        default_owner_id: Number(source.default_owner_id) || Number(localUser.id),
+        gamification: gamificationSource ? normalizeGamificationStatePayload(gamificationSource) : null,
+    };
+}
+
+function buildCurrentSyncStatePayload() {
+    return normalizeSyncStatePayload({
+        pending_invitations_count: pendingInvitationsCount.value,
+        invitations: invitations.value,
+        links: links.value,
+        list_options: listOptions.value,
+        default_owner_id: selectedOwnerId.value,
+        gamification: buildCurrentGamificationStatePayload(),
+    });
+}
+
+function persistCurrentSyncStateCache() {
+    const snapshot = buildCurrentSyncStatePayload();
+    cachedSyncState.value = snapshot;
+    persistSyncStateCache(snapshot);
+}
+
+function applyCachedSyncState(syncSelection = false) {
+    if (!cachedSyncState.value || typeof cachedSyncState.value !== 'object') {
+        return;
+    }
+
+    applyState(cachedSyncState.value, { syncSelection });
+}
+
+function listSyncVersionKey(ownerId, type, linkId = undefined) {
+    const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    return listCacheKey(ownerId, type, resolvedLinkId);
+}
+
+function getListSyncVersion(ownerId, type, linkId = undefined) {
+    return Number(listSyncVersions.get(listSyncVersionKey(ownerId, type, linkId)) ?? 0);
+}
+
+function bumpListSyncVersion(ownerId, type, linkId = undefined) {
+    const versionKey = listSyncVersionKey(ownerId, type, linkId);
+    const nextVersion = getListSyncVersion(ownerId, type, linkId) + 1;
+    listSyncVersions.set(versionKey, nextVersion);
+    return nextVersion;
+}
+
+function deletedItemTombstoneKey(ownerId, type, itemId, linkId = undefined) {
+    const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    return `${listCacheKey(ownerId, type, resolvedLinkId)}::${Number(itemId)}`;
+}
+
+function cleanupDeletedItemTombstones(nowMs = Date.now()) {
+    for (const [tombstoneKey, tombstone] of deletedItemTombstones.entries()) {
+        const expiresAt = Number(
+            typeof tombstone === 'number'
+                ? tombstone
+                : tombstone?.expiresAt,
+        );
+        if (expiresAt <= nowMs) {
+            deletedItemTombstones.delete(tombstoneKey);
+        }
+    }
+}
+
+function markItemsAsDeleted(ownerId, type, itemIds, linkId = undefined, options = {}) {
+    if (!Array.isArray(itemIds) || itemIds.length === 0) {
+        return;
+    }
+
+    cleanupDeletedItemTombstones();
+    const deletedAtMs = Number(options?.deletedAtMs);
+    const deletedAt = Number.isFinite(deletedAtMs) ? deletedAtMs : Date.now();
+    const expiresAt = deletedAt + ITEM_DELETE_TOMBSTONE_TTL_MS;
+    for (const itemId of itemIds) {
+        const numericItemId = Number(itemId);
+        if (!Number.isFinite(numericItemId) || numericItemId <= 0) {
+            continue;
+        }
+
+        deletedItemTombstones.set(
+            deletedItemTombstoneKey(ownerId, type, numericItemId, linkId),
+            {
+                expiresAt,
+                deletedAt,
+            },
+        );
+    }
+}
+
+function getDeletedItemTombstone(ownerId, type, itemId, linkId = undefined) {
+    cleanupDeletedItemTombstones();
+    const numericItemId = Number(itemId);
+    if (!Number.isFinite(numericItemId) || numericItemId <= 0) {
+        return null;
+    }
+
+    const tombstoneKey = deletedItemTombstoneKey(ownerId, type, numericItemId, linkId);
+    const rawTombstone = deletedItemTombstones.get(tombstoneKey);
+    if (!rawTombstone) {
+        return null;
+    }
+
+    const expiresAt = Number(
+        typeof rawTombstone === 'number'
+            ? rawTombstone
+            : rawTombstone?.expiresAt,
+    );
+    if (expiresAt <= Date.now()) {
+        deletedItemTombstones.delete(tombstoneKey);
+        return null;
+    }
+
+    if (typeof rawTombstone === 'number') {
+        return {
+            expiresAt,
+            deletedAt: expiresAt - ITEM_DELETE_TOMBSTONE_TTL_MS,
+        };
+    }
+
+    return {
+        expiresAt,
+        deletedAt: Number(rawTombstone?.deletedAt) || (expiresAt - ITEM_DELETE_TOMBSTONE_TTL_MS),
+    };
+}
+
+function clearDeletedItemTombstone(ownerId, type, itemId, linkId = undefined) {
+    const numericItemId = Number(itemId);
+    if (!Number.isFinite(numericItemId) || numericItemId <= 0) {
+        return;
+    }
+
+    deletedItemTombstones.delete(deletedItemTombstoneKey(ownerId, type, numericItemId, linkId));
+}
+
+function clearDeletedTombstonesForItems(ownerId, type, items, linkId = undefined) {
+    for (const item of Array.isArray(items) ? items : []) {
+        clearDeletedItemTombstone(ownerId, type, item?.id, linkId);
+    }
+}
+
+function isItemRecentlyDeleted(ownerId, type, itemId, linkId = undefined) {
+    return Boolean(getDeletedItemTombstone(ownerId, type, itemId, linkId));
+}
+
 function isCurrentListContext(ownerId, linkId = null) {
     return Number(ownerId) === Number(selectedOwnerId.value)
         && normalizeLinkId(linkId) === normalizeLinkId(selectedListLinkId.value);
@@ -340,8 +1002,749 @@ function itemViewKey(item) {
     return String(item?.local_id ?? item?.id ?? '');
 }
 
+function clampValue(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+
+function itemCardRefKey(type, item) {
+    return `${String(type)}:${itemViewKey(item)}`;
+}
+
+function isHtmlElement(value) {
+    return typeof HTMLElement !== 'undefined' && value instanceof HTMLElement;
+}
+
+function setItemCardRef(type, item, element) {
+    const key = itemCardRefKey(type, item);
+    if (isHtmlElement(element)) {
+        itemCardElements.set(key, element);
+        return;
+    }
+
+    itemCardElements.delete(key);
+}
+
 function isBatchRemovingItem(item) {
     return batchRemovingItemKeys.value.includes(itemViewKey(item));
+}
+
+function isBatchCollapseHiddenItem(item) {
+    return batchCollapseHiddenItemKeys.value.includes(itemViewKey(item));
+}
+
+function scheduleEffectTimeout(callback, delayMs) {
+    const timeoutId = window.setTimeout(() => {
+        effectTimeouts.delete(timeoutId);
+        callback();
+    }, Math.max(0, Math.round(delayMs)));
+    effectTimeouts.add(timeoutId);
+    return timeoutId;
+}
+
+function clearEffectTimeouts() {
+    for (const timeoutId of effectTimeouts) {
+        clearTimeout(timeoutId);
+    }
+    effectTimeouts.clear();
+}
+
+function randomPlaybackRateBySemitone(maxSemitoneDelta = 1.2) {
+    const boundedDelta = Math.max(0, Number(maxSemitoneDelta) || 0);
+    const semitoneDelta = ((Math.random() * 2) - 1) * boundedDelta;
+    return 2 ** (semitoneDelta / 12);
+}
+
+function resolvePublicAssetUrl(relativePath) {
+    const normalizedPath = String(relativePath ?? '').replace(/^\/+/, '');
+    if (normalizedPath === '' || typeof window === 'undefined') {
+        return normalizedPath;
+    }
+
+    const { origin, pathname } = window.location;
+    const publicToken = '/public';
+    const publicIndex = pathname.indexOf(publicToken);
+    if (publicIndex !== -1) {
+        const basePath = pathname.slice(0, publicIndex + publicToken.length);
+        return new URL(normalizedPath, `${origin}${basePath}/`).toString();
+    }
+
+    return new URL(`/${normalizedPath}`, origin).toString();
+}
+
+function getDashboardSoundSource(soundKey) {
+    if (resolvedSoundUrlCache.has(soundKey)) {
+        return resolvedSoundUrlCache.get(soundKey);
+    }
+
+    const configuredPath = DASHBOARD_SOUND_PATHS[soundKey];
+    if (!configuredPath) {
+        return null;
+    }
+
+    const resolvedPath = resolvePublicAssetUrl(configuredPath);
+    resolvedSoundUrlCache.set(soundKey, resolvedPath);
+    return resolvedPath;
+}
+
+function getSoundPool(soundKey) {
+    const existingPool = soundPools.get(soundKey);
+    if (Array.isArray(existingPool)) {
+        return existingPool;
+    }
+
+    const nextPool = [];
+    soundPools.set(soundKey, nextPool);
+    return nextPool;
+}
+
+function createSoundInstance(source) {
+    if (typeof Audio === 'undefined') {
+        return null;
+    }
+
+    const audio = new Audio(source);
+    audio.preload = 'auto';
+    return audio;
+}
+
+function getSoundInstance(soundKey, source) {
+    const pool = getSoundPool(soundKey);
+    const available = pool.find((audio) => audio && (audio.paused || audio.ended));
+    if (available) {
+        return available;
+    }
+
+    if (pool.length < SOUND_POOL_LIMIT_PER_KEY) {
+        const created = createSoundInstance(source);
+        if (created) {
+            pool.push(created);
+        }
+        return created;
+    }
+
+    return pool[0] ?? null;
+}
+
+function playDashboardSound(soundKey, options = {}) {
+    if (!soundEnabled.value || typeof window === 'undefined') {
+        return;
+    }
+    if (Date.now() < dashboardSoundMutedUntil) {
+        return;
+    }
+
+    const source = getDashboardSoundSource(soundKey);
+    if (!source) {
+        return;
+    }
+
+    const audio = getSoundInstance(soundKey, source);
+    if (!audio) {
+        return;
+    }
+
+    const { volume = 0.7, playbackRate = 1 } = options;
+
+    audio.volume = clampValue(Number(volume) || 0, 0, 1);
+    audio.playbackRate = clampValue(Number(playbackRate) || 1, 0.5, 2);
+
+    try {
+        audio.currentTime = 0;
+    } catch {
+        // ignore seek errors for not-yet-loaded media
+    }
+
+    const maybePromise = audio.play();
+    if (maybePromise && typeof maybePromise.catch === 'function') {
+        maybePromise.catch(() => {});
+    }
+}
+
+function playXpGainSound() {
+    const now = Date.now();
+    if (now - lastXpGainSoundAt < XP_GAIN_SOUND_THROTTLE_MS) {
+        return;
+    }
+
+    lastXpGainSoundAt = now;
+    playDashboardSound('xp_gain', {
+        volume: 0.46,
+        playbackRate: randomPlaybackRateBySemitone(0.45),
+    });
+}
+
+function stopDashboardSounds() {
+    for (const pool of soundPools.values()) {
+        for (const audio of pool) {
+            if (!audio) {
+                continue;
+            }
+
+            try {
+                audio.pause();
+                audio.currentTime = 0;
+            } catch {
+                // ignore media cleanup errors
+            }
+        }
+    }
+}
+
+function megaCardShadowStyle(scene) {
+    if (!scene?.glowing) {
+        return null;
+    }
+
+    const glowBoost = clampValue(Number(scene?.glowBoost) || 0, 0, 1.5);
+    const ringOpacity = clampValue(0.2 + (glowBoost * 0.2), 0.2, 0.72);
+    const haloOpacity = clampValue(0.18 + (glowBoost * 0.24), 0.18, 0.82);
+    const haloSize = Math.round(24 + (glowBoost * 20));
+
+    return [
+        `0 0 0 1px rgb(252 252 250 / ${Math.round(ringOpacity * 100)}%)`,
+        `0 0 ${haloSize}px rgb(252 252 250 / ${Math.round(haloOpacity * 100)}%)`,
+        '0 16px 40px rgb(0 0 0 / 34%)',
+    ].join(', ');
+}
+
+function megaCardFilterStyle(scene) {
+    if (!scene?.glowing) {
+        return null;
+    }
+
+    const glowBoost = clampValue(Number(scene?.glowBoost) || 0, 0, 1.5);
+    return `brightness(${(1 + (glowBoost * 0.16)).toFixed(3)})`;
+}
+
+function intensifyMegaCardGlow(sceneId, amount = 0.2) {
+    if (!batchCollapseScene.value || batchCollapseScene.value.id !== sceneId) {
+        return;
+    }
+
+    batchCollapseScene.value.glowBoost = clampValue(
+        Number(batchCollapseScene.value.glowBoost ?? 0) + amount,
+        0,
+        1.5,
+    );
+
+    scheduleEffectTimeout(() => {
+        if (!batchCollapseScene.value || batchCollapseScene.value.id !== sceneId) {
+            return;
+        }
+
+        batchCollapseScene.value.glowBoost = clampValue(
+            Number(batchCollapseScene.value.glowBoost ?? 0) - (amount * 0.68),
+            0,
+            1.5,
+        );
+    }, 210);
+}
+
+function clearSoundPools() {
+    stopDashboardSounds();
+    soundPools.clear();
+    resolvedSoundUrlCache.clear();
+}
+
+function randomInteger(min, max) {
+    const normalizedMin = Math.ceil(Number(min) || 0);
+    const normalizedMax = Math.floor(Number(max) || 0);
+    if (normalizedMax <= normalizedMin) {
+        return normalizedMin;
+    }
+
+    return Math.floor(Math.random() * (normalizedMax - normalizedMin + 1)) + normalizedMin;
+}
+
+function hashStringToUInt32(input) {
+    const source = String(input ?? '');
+    let hash = 2166136261;
+
+    for (let index = 0; index < source.length; index += 1) {
+        hash ^= source.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+
+    return hash >>> 0;
+}
+
+function createSeededRandom(seed) {
+    let state = (Number(seed) >>> 0) || 1;
+
+    return () => {
+        state = (state + 0x6D2B79F5) >>> 0;
+        let mixed = Math.imul(state ^ (state >>> 15), 1 | state);
+        mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed);
+        return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+function generateXpColorSeed() {
+    if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+        const buffer = new Uint32Array(1);
+        window.crypto.getRandomValues(buffer);
+        return (Number(buffer[0]) >>> 0) || 1;
+    }
+
+    return (Math.floor(Math.random() * 0xFFFFFFFF) >>> 0) || 1;
+}
+
+function persistXpColorSeed() {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    window.localStorage.setItem(XP_COLOR_SEED_STORAGE_KEY, String((Number(xpColorSeed.value) >>> 0) || 1));
+    notifyGamificationStateChanged();
+}
+
+function syncXpProgressLevel() {
+    xpProgressLevel.value = Math.max(1, productivityRewardHistory.length + 1);
+}
+
+function computeXpProgressPalette(level) {
+    const safeLevel = Math.max(1, Math.round(Number(level) || 1));
+    const levelSeed = (Number(xpColorSeed.value) ^ hashStringToUInt32(`xp-level-${safeLevel}`)) >>> 0;
+    const random = createSeededRandom(levelSeed);
+
+    const hue = Math.round(random() * 359);
+    const saturation = 72 + Math.round(random() * 22);
+    const lightness = 46 + Math.round(random() * 14);
+
+    return {
+        start: `hsl(${hue} ${saturation}% ${lightness}%)`,
+        ring: `hsl(${hue} ${Math.max(58, saturation - 16)}% ${Math.min(80, lightness + 20)}% / 0.45)`,
+        glow: `hsl(${hue} ${Math.max(64, saturation - 8)}% ${Math.min(78, lightness + 14)}% / 0.68)`,
+    };
+}
+
+function normalizeProductivityRewardHistory(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    return value
+        .map((entry) => Math.round(Number(entry) || 0))
+        .filter((entry) => Number.isFinite(entry) && entry > 0);
+}
+
+function persistProductivityScore() {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    window.localStorage.setItem(PRODUCTIVITY_STORAGE_KEY, String(productivityScore.value));
+    notifyGamificationStateChanged();
+}
+
+function persistProductivityRewardHistory() {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    window.localStorage.setItem(
+        PRODUCTIVITY_REWARD_HISTORY_STORAGE_KEY,
+        JSON.stringify(productivityRewardHistory),
+    );
+    notifyGamificationStateChanged();
+}
+
+function grantProductivityRewardForLevelUp() {
+    const reward = PRODUCTIVITY_REWARD_BASE_PER_LEVEL
+        + randomInteger(0, PRODUCTIVITY_REWARD_RANDOM_MAX_BONUS);
+
+    productivityScore.value = Math.max(0, Math.round(productivityScore.value + reward));
+    productivityRewardHistory.push(reward);
+    xpRewardAmount.value = reward;
+    persistProductivityScore();
+    persistProductivityRewardHistory();
+
+    return reward;
+}
+
+function revokeLatestProductivityReward() {
+    if (productivityRewardHistory.length === 0) {
+        syncXpProgressLevel();
+        return 0;
+    }
+
+    const reward = Math.max(0, Math.round(Number(productivityRewardHistory.pop()) || 0));
+    if (reward > 0) {
+        productivityScore.value = Math.max(0, Math.round(productivityScore.value - reward));
+        persistProductivityScore();
+    }
+    persistProductivityRewardHistory();
+    syncXpProgressLevel();
+
+    return reward;
+}
+
+function persistXpProgress() {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    window.localStorage.setItem(XP_PROGRESS_STORAGE_KEY, String(xpProgress.value));
+    notifyGamificationStateChanged();
+}
+
+function calculateBatchRemovalXpGain(removedCount) {
+    const totalRemoved = Math.max(1, Number(removedCount) || 1);
+    return clampValue(
+        totalRemoved * XP_BATCH_TOTAL_GAIN_PER_ITEM,
+        XP_BATCH_TOTAL_GAIN_MIN,
+        XP_BATCH_TOTAL_GAIN_MAX,
+    );
+}
+
+function buildXpGainSourceId() {
+    const sourceId = `xp-source-${Date.now()}-${nextXpGainSourceId}`;
+    nextXpGainSourceId += 1;
+    return sourceId;
+}
+
+function clearXpGainSourceCleanupTimer(sourceId) {
+    const normalizedSourceId = String(sourceId ?? '').trim();
+    if (normalizedSourceId === '') {
+        return;
+    }
+
+    const cleanupTimerId = xpGainSourceCleanupTimeouts.get(normalizedSourceId);
+    if (!cleanupTimerId) {
+        return;
+    }
+
+    clearTimeout(cleanupTimerId);
+    xpGainSourceCleanupTimeouts.delete(normalizedSourceId);
+}
+
+function scheduleXpGainSourceCleanup(sourceId) {
+    const normalizedSourceId = String(sourceId ?? '').trim();
+    if (normalizedSourceId === '') {
+        return;
+    }
+
+    clearXpGainSourceCleanupTimer(normalizedSourceId);
+    const cleanupTimerId = window.setTimeout(() => {
+        xpGainSourceCleanupTimeouts.delete(normalizedSourceId);
+        xpGainSources.delete(normalizedSourceId);
+    }, XP_STAR_SOURCE_RETENTION_MS);
+    xpGainSourceCleanupTimeouts.set(normalizedSourceId, cleanupTimerId);
+}
+
+function ensureXpGainSource(sourceId, totalGain) {
+    const normalizedSourceId = String(sourceId ?? '').trim();
+    if (normalizedSourceId === '') {
+        return null;
+    }
+
+    const safeTotalGain = Math.max(0, Number(totalGain) || 0);
+    clearXpGainSourceCleanupTimer(normalizedSourceId);
+
+    const existing = xpGainSources.get(normalizedSourceId);
+    if (existing) {
+        existing.totalGain = Math.max(existing.totalGain, safeTotalGain);
+        return existing;
+    }
+
+    const source = {
+        id: normalizedSourceId,
+        totalGain: safeTotalGain,
+        grantedGain: 0,
+        pendingStarIds: new Set(),
+        pendingTimeoutIds: new Set(),
+    };
+    xpGainSources.set(normalizedSourceId, source);
+
+    return source;
+}
+
+function rollbackXpGainSource(sourceId, fallbackTotalGain = 0) {
+    const normalizedSourceId = String(sourceId ?? '').trim();
+
+    if (normalizedSourceId !== '') {
+        const source = xpGainSources.get(normalizedSourceId);
+        if (source) {
+            clearXpGainSourceCleanupTimer(normalizedSourceId);
+
+            for (const timeoutId of source.pendingTimeoutIds) {
+                clearTimeout(timeoutId);
+                effectTimeouts.delete(timeoutId);
+            }
+            source.pendingTimeoutIds.clear();
+
+            if (source.pendingStarIds.size > 0) {
+                const pendingStarIds = new Set(source.pendingStarIds);
+                xpStars.value = xpStars.value.filter((star) => !pendingStarIds.has(star.id));
+                source.pendingStarIds.clear();
+            }
+
+            const grantedGain = Math.max(0, Number(source.grantedGain) || 0);
+            xpGainSources.delete(normalizedSourceId);
+
+            if (grantedGain > 0) {
+                adjustXpProgress(-grantedGain);
+            }
+            return;
+        }
+    }
+
+    const fallbackGain = Math.max(0, Number(fallbackTotalGain) || 0);
+    if (fallbackGain > 0) {
+        adjustXpProgress(-fallbackGain);
+    }
+}
+
+function clearXpGainSources() {
+    for (const cleanupTimerId of xpGainSourceCleanupTimeouts.values()) {
+        clearTimeout(cleanupTimerId);
+    }
+    xpGainSourceCleanupTimeouts.clear();
+
+    for (const source of xpGainSources.values()) {
+        for (const timeoutId of source.pendingTimeoutIds) {
+            clearTimeout(timeoutId);
+            effectTimeouts.delete(timeoutId);
+        }
+    }
+
+    xpGainSources.clear();
+}
+
+function setXpVisualProgress(value, options = {}) {
+    const { instant = false, durationMs = XP_PROGRESS_FILL_NORMAL_MS } = options;
+    xpProgressFillDurationMs.value = Math.max(0, Math.round(Number(durationMs) || XP_PROGRESS_FILL_NORMAL_MS));
+    xpVisualProgress.value = clampValue(Number(value) || 0, 0, 1);
+
+    if (!instant) {
+        return;
+    }
+
+    xpProgressInstant.value = true;
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(() => {
+            xpProgressInstant.value = false;
+        });
+        return;
+    }
+
+    xpProgressInstant.value = false;
+}
+
+function applyScrollLockState(locked) {
+    if (typeof document === 'undefined') {
+        return;
+    }
+
+    if (locked) {
+        if (scrollLockActive) {
+            return;
+        }
+
+        previousBodyOverflowStyle = document.body.style.overflow;
+        previousBodyTouchActionStyle = document.body.style.touchAction;
+        previousHtmlOverflowStyle = document.documentElement.style.overflow;
+        previousHtmlOverscrollBehaviorStyle = document.documentElement.style.overscrollBehavior;
+
+        document.body.style.overflow = 'hidden';
+        document.body.style.touchAction = 'none';
+        document.documentElement.style.overflow = 'hidden';
+        document.documentElement.style.overscrollBehavior = 'none';
+        scrollLockActive = true;
+        return;
+    }
+
+    if (!scrollLockActive) {
+        return;
+    }
+
+    document.body.style.overflow = previousBodyOverflowStyle;
+    document.body.style.touchAction = previousBodyTouchActionStyle;
+    document.documentElement.style.overflow = previousHtmlOverflowStyle;
+    document.documentElement.style.overscrollBehavior = previousHtmlOverscrollBehaviorStyle;
+    scrollLockActive = false;
+}
+
+function requestAnimationSkip() {
+    dashboardSoundMutedUntil = Date.now() + SOUND_SKIP_MUTE_MS;
+    stopDashboardSounds();
+    animationSkipEpoch.value += 1;
+}
+
+function skipActiveAnimations() {
+    if (!isSkippableAnimationPlaying.value) {
+        return;
+    }
+
+    requestAnimationSkip();
+}
+
+function handleAnimationSkipTap() {
+    skipActiveAnimations();
+}
+
+function waitForMsOrAnimationSkip(milliseconds, skipEpoch) {
+    const safeDelay = Math.max(0, Math.round(Number(milliseconds) || 0));
+    if (animationSkipEpoch.value !== skipEpoch) {
+        return Promise.resolve(true);
+    }
+
+    return new Promise((resolve) => {
+        let settled = false;
+        let timeoutId = null;
+        const stopWatch = watch(animationSkipEpoch, (nextEpoch) => {
+            if (settled || nextEpoch === skipEpoch) {
+                return;
+            }
+
+            settled = true;
+            if (timeoutId !== null) {
+                clearTimeout(timeoutId);
+            }
+            stopWatch();
+            resolve(true);
+        });
+
+        timeoutId = window.setTimeout(() => {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
+            stopWatch();
+            resolve(false);
+        }, safeDelay);
+    });
+}
+
+async function playXpLevelUpAnimation(fillDurationMs) {
+    const skipEpoch = animationSkipEpoch.value;
+    xpLevelUpBackdropVisible.value = true;
+    xpLevelUpRaised.value = true;
+    xpRewardAmount.value = 0;
+    playDashboardSound('level_up', {
+        volume: 0.82,
+    });
+
+    const skippedBeforeFill = await waitForMsOrAnimationSkip(XP_LEVELUP_PREPARE_MS, skipEpoch);
+    if (skippedBeforeFill) {
+        setXpVisualProgress(1, { instant: true });
+    } else {
+        setXpVisualProgress(1, { durationMs: fillDurationMs });
+        const skippedFill = await waitForMsOrAnimationSkip(fillDurationMs, skipEpoch);
+        if (skippedFill) {
+            setXpVisualProgress(1, { instant: true });
+        }
+    }
+
+    grantProductivityRewardForLevelUp();
+
+    xpLevelUpImpact.value = true;
+    xpRewardVisible.value = true;
+    const skippedReward = await waitForMsOrAnimationSkip(XP_LEVELUP_REWARD_MS, skipEpoch);
+
+    xpRewardVisible.value = false;
+    xpRewardAmount.value = 0;
+    xpLevelUpImpact.value = false;
+    setXpVisualProgress(0, { instant: true });
+
+    if (!skippedReward) {
+        await waitForMsOrAnimationSkip(XP_LEVELUP_SETTLE_MS, skipEpoch);
+    }
+    xpLevelUpRaised.value = false;
+    xpLevelUpBackdropVisible.value = false;
+    syncXpProgressLevel();
+}
+
+async function processPendingXpGain() {
+    if (xpGainProcessing) {
+        return;
+    }
+
+    xpGainProcessing = true;
+
+    try {
+        while (pendingXpGain > 0) {
+            const safeProgress = clampValue(xpProgress.value, 0, 0.999999);
+            const remainingToLevel = Math.max(0.000001, 1 - safeProgress);
+
+            if (pendingXpGain < remainingToLevel) {
+                xpProgress.value = clampValue(safeProgress + pendingXpGain, 0, 0.999999);
+                pendingXpGain = 0;
+                persistXpProgress();
+                setXpVisualProgress(xpProgress.value, { durationMs: XP_PROGRESS_FILL_NORMAL_MS });
+                break;
+            }
+
+            pendingXpGain -= remainingToLevel;
+            const normalizedFill = clampValue(remainingToLevel, 0, 1);
+            const fillDurationMs = clampValue(
+                Math.round(XP_LEVELUP_MAX_FILL_MS * normalizedFill),
+                XP_LEVELUP_MIN_FILL_MS,
+                XP_LEVELUP_MAX_FILL_MS,
+            );
+
+            await playXpLevelUpAnimation(fillDurationMs);
+            xpProgress.value = 0;
+            persistXpProgress();
+        }
+
+        if (pendingXpGain <= 0) {
+            setXpVisualProgress(xpProgress.value, { durationMs: XP_PROGRESS_FILL_NORMAL_MS });
+        }
+    } finally {
+        xpGainProcessing = false;
+        if (pendingXpGain > 0) {
+            processPendingXpGain().catch(() => {});
+        }
+    }
+}
+
+function adjustXpProgress(delta) {
+    const numericDelta = Number(delta);
+    if (!Number.isFinite(numericDelta) || numericDelta === 0) {
+        return;
+    }
+
+    if (numericDelta < 0) {
+        let remainingLoss = Math.abs(numericDelta);
+        const pendingReduction = Math.min(pendingXpGain, remainingLoss);
+        pendingXpGain -= pendingReduction;
+        remainingLoss -= pendingReduction;
+
+        let guard = 0;
+        while (remainingLoss > 0.000001 && guard < 512) {
+            guard += 1;
+            const currentProgress = clampValue(xpProgress.value, 0, 0.999999);
+
+            if (currentProgress >= remainingLoss) {
+                xpProgress.value = clampValue(currentProgress - remainingLoss, 0, 0.999999);
+                remainingLoss = 0;
+                break;
+            }
+
+            remainingLoss -= currentProgress;
+            xpProgress.value = 0;
+
+            const revertedReward = revokeLatestProductivityReward();
+            if (revertedReward <= 0) {
+                remainingLoss = 0;
+                break;
+            }
+
+            xpProgress.value = 0.999999;
+        }
+
+        persistXpProgress();
+
+        if (!xpGainProcessing) {
+            setXpVisualProgress(xpProgress.value, { durationMs: XP_PROGRESS_FILL_NORMAL_MS });
+        }
+        return;
+    }
+
+    pendingXpGain += numericDelta;
+    processPendingXpGain().catch(() => {});
 }
 
 function waitForMs(milliseconds) {
@@ -382,6 +1785,11 @@ function normalizeComparableValue(value) {
     }
 
     return String(value);
+}
+
+function parseComparableTimestampMs(value) {
+    const parsed = Date.parse(normalizeComparableValue(value));
+    return Number.isFinite(parsed) ? parsed : null;
 }
 
 function areItemsEquivalent(leftItems, rightItems) {
@@ -499,27 +1907,75 @@ function normalizeItem(item, localIdOverride = null, context = {}) {
 }
 
 function normalizeItems(items, previousItems = [], context = {}) {
+    const previousList = Array.isArray(previousItems) ? previousItems : [];
     const previousLocalIdById = new Map(
-        (Array.isArray(previousItems) ? previousItems : [])
+        previousList
             .map((item) => [Number(item?.id), String(item?.local_id ?? '').trim()])
             .filter(([id, localId]) => Number.isFinite(id) && localId !== ''),
+    );
+    const previousItemById = new Map(
+        previousList
+            .map((item) => [Number(item?.id), item])
+            .filter(([id]) => Number.isFinite(id)),
     );
 
     return sortItems((items ?? []).map((item) => {
         const normalized = normalizeItem(item, null, context);
-        const preservedLocalId = previousLocalIdById.get(Number(normalized.id));
+        const itemId = Number(normalized.id);
+        const preservedLocalId = previousLocalIdById.get(itemId);
 
         if (preservedLocalId) {
             normalized.local_id = preservedLocalId;
         }
 
-        return normalized;
+        const previousItem = previousItemById.get(itemId);
+        if (!previousItem) {
+            return normalized;
+        }
+
+        const previousUpdatedAtMs = parseComparableTimestampMs(previousItem.updated_at);
+        const nextUpdatedAtMs = parseComparableTimestampMs(normalized.updated_at);
+        const shouldKeepPrevious = previousUpdatedAtMs !== null
+            && (nextUpdatedAtMs === null || previousUpdatedAtMs > nextUpdatedAtMs);
+
+        if (!shouldKeepPrevious) {
+            return normalized;
+        }
+
+        return {
+            ...normalized,
+            ...previousItem,
+            owner_id: normalized.owner_id,
+            list_link_id: normalized.list_link_id,
+            local_id: preservedLocalId || String(previousItem?.local_id ?? '').trim() || normalized.local_id,
+        };
     }));
 }
 
-function readListFromCache(ownerId, type, linkId = undefined) {
-    const key = listCacheKey(ownerId, type, resolveLinkIdForOwner(ownerId, linkId));
-    return cloneItems(cachedItemsByList.value[key]);
+function hasListSyncConflict(ownerId, type, linkId = undefined, expectedVersion = null) {
+    const hasVersionDrift = expectedVersion !== null
+        && getListSyncVersion(ownerId, type, linkId) !== Number(expectedVersion);
+
+    return hasVersionDrift
+        || hasPendingOperations(ownerId, type, linkId)
+        || hasPendingSwipeAction(ownerId, type, linkId);
+}
+
+function readFilteredServerItems(ownerId, type, items, linkId = undefined) {
+    return (Array.isArray(items) ? items : []).filter((entry) => {
+        const tombstone = getDeletedItemTombstone(ownerId, type, entry?.id, linkId);
+        if (!tombstone) {
+            return true;
+        }
+
+        const serverUpdatedAtMs = parseComparableTimestampMs(entry?.updated_at);
+        if (serverUpdatedAtMs === null) {
+            return false;
+        }
+
+        // If server item state is not newer than local deletion moment, keep it deleted locally.
+        return serverUpdatedAtMs > Number(tombstone.deletedAt ?? 0);
+    });
 }
 
 function writeListToCache(ownerId, type, items, linkId = undefined) {
@@ -529,8 +1985,11 @@ function writeListToCache(ownerId, type, items, linkId = undefined) {
     const previous = Array.isArray(cachedItemsByList.value[key]) ? cachedItemsByList.value[key] : [];
     const cacheChanged = !areItemsEquivalent(previous, normalized);
 
+    clearDeletedTombstonesForItems(ownerId, type, normalized, resolvedLinkId);
+
     if (cacheChanged) {
         cachedItemsByList.value[key] = normalized;
+        bumpListSyncVersion(ownerId, type, resolvedLinkId);
     }
 
     if (type === 'product' && isCurrentListContext(ownerId, resolvedLinkId)) {
@@ -546,6 +2005,39 @@ function writeListToCache(ownerId, type, items, linkId = undefined) {
     }
 }
 
+function readListFromCache(ownerId, type, linkId = undefined) {
+    const key = listCacheKey(ownerId, type, resolveLinkIdForOwner(ownerId, linkId));
+    return cloneItems(cachedItemsByList.value[key]);
+}
+
+function applyLocalUpdate(ownerId, type, updater, linkId = undefined) {
+    const current = readListFromCache(ownerId, type, linkId);
+    const nextItems = updater(current);
+    writeListToCache(ownerId, type, nextItems, linkId);
+}
+
+function upsertLocalItem(ownerId, type, item, { atTop = false, linkId = undefined } = {}) {
+    applyLocalUpdate(ownerId, type, (items) => {
+        const next = cloneItems(items);
+        const existingIndex = next.findIndex((entry) => Number(entry.id) === Number(item.id));
+
+        if (existingIndex === -1) {
+            if (atTop) {
+                next.unshift({ ...item });
+            } else {
+                next.push({ ...item });
+            }
+        } else {
+            next[existingIndex] = {
+                ...next[existingIndex],
+                ...item,
+            };
+        }
+
+        return next;
+    }, linkId);
+}
+
 function hydrateSelectedListsFromCache() {
     setVisibleItems('product', readListFromCache(selectedOwnerId.value, 'product', selectedListLinkId.value));
     setVisibleItems('todo', readListFromCache(selectedOwnerId.value, 'todo', selectedListLinkId.value));
@@ -556,7 +2048,8 @@ function persistQueue() {
         return;
     }
 
-    window.localStorage.setItem(OFFLINE_QUEUE_STORAGE_KEY, JSON.stringify(offlineQueue.value));
+    const persistableQueue = offlineQueue.value.filter((operation) => !operation?.volatile);
+    window.localStorage.setItem(OFFLINE_QUEUE_STORAGE_KEY, JSON.stringify(persistableQueue));
 }
 
 function loadOfflineStateFromStorage() {
@@ -566,11 +2059,27 @@ function loadOfflineStateFromStorage() {
 
     const parsedQueue = parseJson(window.localStorage.getItem(OFFLINE_QUEUE_STORAGE_KEY), []);
     const parsedCache = parseJson(window.localStorage.getItem(ITEMS_CACHE_STORAGE_KEY), {});
+    const parsedSuggestionsCache = parseJson(window.localStorage.getItem(SUGGESTIONS_CACHE_STORAGE_KEY), {});
+    const parsedProductStatsCache = parseJson(window.localStorage.getItem(PRODUCT_STATS_CACHE_STORAGE_KEY), {});
+    const parsedUserSearchCache = parseJson(window.localStorage.getItem(USER_SEARCH_CACHE_STORAGE_KEY), {});
+    const parsedSyncState = parseJson(window.localStorage.getItem(SYNC_STATE_CACHE_STORAGE_KEY), null);
 
     offlineQueue.value = Array.isArray(parsedQueue) ? parsedQueue : [];
     cachedItemsByList.value = parsedCache && typeof parsedCache === 'object' && !Array.isArray(parsedCache)
         ? parsedCache
         : {};
+    cachedSuggestionsByList.value = asPlainObject(parsedSuggestionsCache);
+    cachedProductStatsByList.value = asPlainObject(parsedProductStatsCache);
+    cachedUserSearchByQuery.value = asPlainObject(parsedUserSearchCache);
+    cachedSyncState.value = parsedSyncState && typeof parsedSyncState === 'object'
+        ? normalizeSyncStatePayload(parsedSyncState)
+        : null;
+    const storedGamificationUpdatedAtMs = Number(
+        window.localStorage.getItem(GAMIFICATION_UPDATED_AT_STORAGE_KEY),
+    );
+    localGamificationUpdatedAtMs = Number.isFinite(storedGamificationUpdatedAtMs) && storedGamificationUpdatedAtMs > 0
+        ? Math.round(storedGamificationUpdatedAtMs)
+        : 0;
 
     const cachedTempIds = Object.values(cachedItemsByList.value)
         .flatMap((items) => (Array.isArray(items) ? items : []))
@@ -581,6 +2090,45 @@ function loadOfflineStateFromStorage() {
         .filter((id) => Number.isFinite(id) && id < 0);
     const minTempId = Math.min(-1, ...cachedTempIds, ...queuedTempIds);
     nextTempId = Number.isFinite(minTempId) ? minTempId : -1;
+
+    const storedXpProgress = Number(window.localStorage.getItem(XP_PROGRESS_STORAGE_KEY));
+    if (Number.isFinite(storedXpProgress)) {
+        xpProgress.value = clampValue(storedXpProgress, 0, 0.999999);
+        xpVisualProgress.value = xpProgress.value;
+    }
+
+    const storedProductivityScore = Number(window.localStorage.getItem(PRODUCTIVITY_STORAGE_KEY));
+    if (Number.isFinite(storedProductivityScore)) {
+        productivityScore.value = Math.max(0, Math.round(storedProductivityScore));
+    }
+
+    const storedRewardHistory = parseJson(
+        window.localStorage.getItem(PRODUCTIVITY_REWARD_HISTORY_STORAGE_KEY),
+        [],
+    );
+    productivityRewardHistory = normalizeProductivityRewardHistory(storedRewardHistory);
+
+    if (productivityRewardHistory.length === 0 && productivityScore.value > 0) {
+        const estimatedLegacyLevels = Math.floor(productivityScore.value / 10);
+        if (estimatedLegacyLevels > 0) {
+            productivityRewardHistory = Array.from({ length: estimatedLegacyLevels }, () => 10);
+            persistProductivityRewardHistory();
+        }
+    }
+    syncXpProgressLevel();
+
+    const storedXpColorSeed = Number(window.localStorage.getItem(XP_COLOR_SEED_STORAGE_KEY));
+    if (Number.isFinite(storedXpColorSeed) && storedXpColorSeed > 0) {
+        xpColorSeed.value = (Math.floor(storedXpColorSeed) >>> 0) || 1;
+    } else {
+        xpColorSeed.value = generateXpColorSeed();
+        persistXpColorSeed();
+    }
+
+    if (localGamificationUpdatedAtMs <= 0 && cachedSyncState.value?.gamification?.updated_at_ms) {
+        localGamificationUpdatedAtMs = Number(cachedSyncState.value.gamification.updated_at_ms) || 0;
+        persistGamificationUpdatedAtMs();
+    }
 
     const storedOwnerId = Number(window.localStorage.getItem(LOCAL_DEFAULT_OWNER_KEY));
     if (Number.isFinite(storedOwnerId) && storedOwnerId > 0) {
@@ -606,6 +2154,11 @@ function isConnectivityError(error) {
     return !error?.response || statusCode === 0 || statusCode === 502 || statusCode === 503 || statusCode === 504;
 }
 
+function isRetriableRequestError(error) {
+    const statusCode = Number(error?.response?.status ?? 0);
+    return isConnectivityError(error) || statusCode >= 500 || statusCode === 429;
+}
+
 function markRequestSuccess() {
     serverReachable.value = true;
     if (typeof window !== 'undefined') {
@@ -628,6 +2181,9 @@ async function requestApi(executor) {
     } catch (error) {
         if (isConnectivityError(error)) {
             markRequestFailure();
+        } else if (error?.response) {
+            // Server answered (even with 4xx/5xx), so transport is reachable.
+            markRequestSuccess();
         }
 
         throw error;
@@ -692,35 +2248,8 @@ function createOptimisticItem({
     };
 }
 
-function applyLocalUpdate(ownerId, type, updater, linkId = undefined) {
-    const current = readListFromCache(ownerId, type, linkId);
-    const nextItems = updater(current);
-    writeListToCache(ownerId, type, nextItems, linkId);
-}
-
-function upsertLocalItem(ownerId, type, item, { atTop = false, linkId = undefined } = {}) {
-    applyLocalUpdate(ownerId, type, (items) => {
-        const next = cloneItems(items);
-        const existingIndex = next.findIndex((entry) => Number(entry.id) === Number(item.id));
-
-        if (existingIndex === -1) {
-            if (atTop) {
-                next.unshift({ ...item });
-            } else {
-                next.push({ ...item });
-            }
-        } else {
-            next[existingIndex] = {
-                ...next[existingIndex],
-                ...item,
-            };
-        }
-
-        return next;
-    }, linkId);
-}
-
 function removeLocalItem(ownerId, type, itemId, linkId = undefined) {
+    markItemsAsDeleted(ownerId, type, [itemId], linkId);
     applyLocalUpdate(
         ownerId,
         type,
@@ -750,6 +2279,10 @@ function hasPendingOperations(ownerId, type, linkId = undefined) {
     );
 }
 
+function isOperationBeingSynced(opId) {
+    return syncInFlightOperationIds.has(String(opId ?? ''));
+}
+
 
 function getQueuedUpdateQuietRemainingMs() {
     if (queuedUpdateTouchedAt <= 0) {
@@ -764,6 +2297,19 @@ function getQueuedUpdateQuietRemainingMs() {
     return UPDATE_SYNC_COALESCE_MS - elapsedMs;
 }
 
+function shouldCoalesceUpdatePayload(payload) {
+    if (!payload || typeof payload !== 'object') {
+        return false;
+    }
+
+    const payloadKeys = Object.keys(payload);
+    if (payloadKeys.length === 0) {
+        return false;
+    }
+
+    return payloadKeys.every((key) => COALESCED_UPDATE_KEYS.has(key));
+}
+
 function scheduleQueuedUpdateSync(delayMs = UPDATE_SYNC_COALESCE_MS) {
     if (typeof window === 'undefined') {
         return;
@@ -776,13 +2322,15 @@ function scheduleQueuedUpdateSync(delayMs = UPDATE_SYNC_COALESCE_MS) {
     const safeDelay = Math.max(0, Number(delayMs) || 0);
     queuedUpdateSyncTimer = window.setTimeout(() => {
         queuedUpdateSyncTimer = null;
-        syncOfflineQueue().catch((error) => {
-            showError(error);
-        });
+        syncOfflineQueue().catch(() => {});
     }, safeDelay);
 }
 
-function markQueuedUpdateTouched() {
+function markQueuedUpdateTouched(payload) {
+    if (!shouldCoalesceUpdatePayload(payload)) {
+        return;
+    }
+
     queuedUpdateTouchedAt = Date.now();
     scheduleQueuedUpdateSync(UPDATE_SYNC_COALESCE_MS);
 }
@@ -902,16 +2450,18 @@ function queueUpdate(ownerId, type, itemId, payload, linkId = undefined) {
             && normalizeLinkId(operation.link_id) === resolvedLinkId,
     );
 
-    if (createIndex !== -1) {
+    if (createIndex !== -1 && !isOperationBeingSynced(offlineQueue.value[createIndex]?.op_id)) {
+        const nextPayload = {
+            ...offlineQueue.value[createIndex].payload,
+            ...payload,
+        };
+
         offlineQueue.value[createIndex] = {
             ...offlineQueue.value[createIndex],
-            payload: {
-                ...offlineQueue.value[createIndex].payload,
-                ...payload,
-            },
+            payload: nextPayload,
         };
         persistQueue();
-        markQueuedUpdateTouched();
+        markQueuedUpdateTouched(nextPayload);
         return;
     }
 
@@ -922,18 +2472,22 @@ function queueUpdate(ownerId, type, itemId, payload, linkId = undefined) {
             && normalizeLinkId(operation.link_id) === resolvedLinkId,
     );
 
-    if (updateIndex !== -1) {
+    if (updateIndex !== -1 && !isOperationBeingSynced(offlineQueue.value[updateIndex]?.op_id)) {
+        const nextPayload = {
+            ...offlineQueue.value[updateIndex].payload,
+            ...payload,
+        };
+
         offlineQueue.value[updateIndex] = {
             ...offlineQueue.value[updateIndex],
-            payload: {
-                ...offlineQueue.value[updateIndex].payload,
-                ...payload,
-            },
+            payload: nextPayload,
         };
         persistQueue();
-        markQueuedUpdateTouched();
+        markQueuedUpdateTouched(nextPayload);
         return;
     }
+
+    const nextPayload = { ...payload };
 
     enqueueOperation({
         action: 'update',
@@ -941,9 +2495,9 @@ function queueUpdate(ownerId, type, itemId, payload, linkId = undefined) {
         link_id: resolvedLinkId,
         type,
         item_id: numericItemId,
-        payload: { ...payload },
+        payload: nextPayload,
     });
-    markQueuedUpdateTouched();
+    markQueuedUpdateTouched(nextPayload);
 }
 
 function queueDelete(ownerId, type, itemId, linkId = undefined) {
@@ -956,7 +2510,7 @@ function queueDelete(ownerId, type, itemId, linkId = undefined) {
             && normalizeLinkId(operation.link_id) === resolvedLinkId,
     );
 
-    if (createIndex !== -1) {
+    if (createIndex !== -1 && !isOperationBeingSynced(offlineQueue.value[createIndex]?.op_id)) {
         offlineQueue.value = offlineQueue.value.filter(
             (operation) => !(
                 Number(operation.item_id) === numericItemId
@@ -1028,6 +2582,228 @@ function queueDelete(ownerId, type, itemId, linkId = undefined) {
     });
 }
 
+function queueDefaultOwner(ownerId) {
+    const normalizedOwnerId = Number(ownerId);
+    if (!Number.isFinite(normalizedOwnerId) || normalizedOwnerId <= 0) {
+        return;
+    }
+
+    offlineQueue.value = offlineQueue.value.filter((operation) => operation.action !== 'set_default_owner');
+    enqueueOperation({
+        action: 'set_default_owner',
+        payload: {
+            owner_id: normalizedOwnerId,
+        },
+    });
+}
+
+function queueSuggestionDismiss(ownerId, type, suggestionKey, averageIntervalSeconds, linkId = undefined) {
+    const normalizedKey = String(suggestionKey ?? '').trim();
+    if (normalizedKey === '') {
+        return;
+    }
+
+    enqueueOperation({
+        action: 'dismiss_suggestion',
+        owner_id: Number(ownerId),
+        link_id: resolveLinkIdForOwner(ownerId, linkId),
+        type: String(type),
+        payload: {
+            suggestion_key: normalizedKey,
+            average_interval_seconds: Math.max(0, Number(averageIntervalSeconds) || 0),
+        },
+    });
+}
+
+function queueSuggestionReset(ownerId, type, suggestionKey, linkId = undefined) {
+    const normalizedKey = String(suggestionKey ?? '').trim();
+    if (normalizedKey === '') {
+        return;
+    }
+
+    const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    const existingIndex = findQueueIndexFromEnd(
+        (operation) =>
+            operation.action === 'reset_suggestion'
+            && Number(operation.owner_id) === Number(ownerId)
+            && String(operation.type) === String(type)
+            && String(operation?.payload?.suggestion_key ?? '') === normalizedKey
+            && normalizeLinkId(operation.link_id) === resolvedLinkId,
+    );
+
+    if (existingIndex !== -1) {
+        return;
+    }
+
+    enqueueOperation({
+        action: 'reset_suggestion',
+        owner_id: Number(ownerId),
+        link_id: resolvedLinkId,
+        type: String(type),
+        payload: {
+            suggestion_key: normalizedKey,
+        },
+    });
+}
+
+function queueSendInvitation(userId) {
+    const numericUserId = Number(userId);
+    if (!Number.isFinite(numericUserId) || numericUserId <= 0) {
+        return;
+    }
+
+    const existingIndex = findQueueIndexFromEnd(
+        (operation) =>
+            operation.action === 'send_invitation'
+            && Number(operation?.payload?.user_id) === numericUserId,
+    );
+
+    if (existingIndex !== -1) {
+        return;
+    }
+
+    enqueueOperation({
+        action: 'send_invitation',
+        payload: {
+            user_id: numericUserId,
+        },
+    });
+}
+
+function queueInvitationResponse(action, invitationId) {
+    const numericInvitationId = Number(invitationId);
+    if (!Number.isFinite(numericInvitationId) || numericInvitationId <= 0) {
+        return;
+    }
+
+    const oppositeAction = action === 'accept_invitation'
+        ? 'decline_invitation'
+        : 'accept_invitation';
+
+    offlineQueue.value = offlineQueue.value.filter((operation) => !(
+        (operation.action === action || operation.action === oppositeAction)
+        && Number(operation?.payload?.invitation_id) === numericInvitationId
+    ));
+    persistQueue();
+
+    enqueueOperation({
+        action,
+        payload: {
+            invitation_id: numericInvitationId,
+        },
+    });
+}
+
+function queueSetMine(linkId) {
+    const numericLinkId = Number(linkId);
+    if (!Number.isFinite(numericLinkId) || numericLinkId <= 0) {
+        return;
+    }
+
+    offlineQueue.value = offlineQueue.value.filter((operation) => !(
+        operation.action === 'set_mine'
+        && Number(operation?.payload?.link_id) === numericLinkId
+    ));
+    persistQueue();
+
+    enqueueOperation({
+        action: 'set_mine',
+        payload: {
+            link_id: numericLinkId,
+        },
+    });
+}
+
+function queueBreakLink(linkId) {
+    const numericLinkId = Number(linkId);
+    if (!Number.isFinite(numericLinkId) || numericLinkId <= 0) {
+        return;
+    }
+
+    offlineQueue.value = offlineQueue.value.filter((operation) => !(
+        operation.action === 'break_link'
+        && Number(operation?.payload?.link_id) === numericLinkId
+    ));
+    persistQueue();
+
+    enqueueOperation({
+        action: 'break_link',
+        payload: {
+            link_id: numericLinkId,
+        },
+    });
+}
+
+function normalizeProfileTagInput(tag) {
+    return String(tag ?? '').trim().replace(/^@+/, '').toLowerCase();
+}
+
+function queueProfileUpdate(payload) {
+    const normalizedPayload = {
+        name: String(payload?.name ?? '').trim(),
+        tag: normalizeProfileTagInput(payload?.tag),
+        email: String(payload?.email ?? '').trim(),
+    };
+
+    if (!normalizedPayload.name || !normalizedPayload.tag || !normalizedPayload.email) {
+        return;
+    }
+
+    const existingIndex = findQueueIndexFromEnd(
+        (operation) => operation.action === 'update_profile',
+    );
+
+    if (existingIndex !== -1 && !isOperationBeingSynced(offlineQueue.value[existingIndex]?.op_id)) {
+        offlineQueue.value[existingIndex] = {
+            ...offlineQueue.value[existingIndex],
+            payload: {
+                ...offlineQueue.value[existingIndex].payload,
+                ...normalizedPayload,
+            },
+        };
+        persistQueue();
+        return;
+    }
+
+    enqueueOperation({
+        action: 'update_profile',
+        payload: normalizedPayload,
+    });
+}
+
+function queuePasswordUpdate(payload) {
+    const normalizedPayload = {
+        current_password: String(payload?.current_password ?? ''),
+        password: String(payload?.password ?? ''),
+        password_confirmation: String(payload?.password_confirmation ?? ''),
+    };
+
+    if (!normalizedPayload.current_password || !normalizedPayload.password || !normalizedPayload.password_confirmation) {
+        return;
+    }
+
+    const existingIndex = findQueueIndexFromEnd(
+        (operation) => operation.action === 'update_password',
+    );
+
+    if (existingIndex !== -1 && !isOperationBeingSynced(offlineQueue.value[existingIndex]?.op_id)) {
+        offlineQueue.value[existingIndex] = {
+            ...offlineQueue.value[existingIndex],
+            payload: normalizedPayload,
+            volatile: true,
+        };
+        persistQueue();
+        return;
+    }
+
+    enqueueOperation({
+        action: 'update_password',
+        payload: normalizedPayload,
+        // Passwords are kept only in memory for this session.
+        volatile: true,
+    });
+}
+
 function clearSwipeUndoTimer() {
     if (!swipeUndoTimer) {
         return;
@@ -1047,6 +2823,108 @@ function hasPendingSwipeAction(ownerId, type, linkId = undefined) {
     return Number(swipeUndoState.value.ownerId) === Number(ownerId)
         && String(swipeUndoState.value.type) === String(type)
         && normalizeLinkId(swipeUndoState.value.linkId) === normalizedLinkId;
+}
+
+function isSwipeStateForItem(state, ownerId, type, itemId, linkId = undefined) {
+    if (!state) {
+        return false;
+    }
+
+    const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    if (
+        Number(state.ownerId) !== Number(ownerId)
+        || String(state.type) !== String(type)
+        || normalizeLinkId(state.linkId) !== normalizedLinkId
+    ) {
+        return false;
+    }
+
+    if (state.action === 'toggle' || state.action === 'remove') {
+        return Number(state.item?.id) === Number(itemId);
+    }
+
+    if (state.action === 'remove_completed_batch') {
+        if (Number(state.primary?.item?.id) === Number(itemId)) {
+            return true;
+        }
+
+        return (state.removed ?? []).some((entry) => Number(entry?.item?.id) === Number(itemId));
+    }
+
+    return false;
+}
+
+function hasPendingItemOperation(ownerId, type, itemId, linkId = undefined, excludeOpId = null) {
+    const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    const numericItemId = Number(itemId);
+
+    return offlineQueue.value.some((operation) => {
+        if (excludeOpId && String(operation.op_id) === String(excludeOpId)) {
+            return false;
+        }
+
+        return Number(operation.owner_id) === Number(ownerId)
+            && String(operation.type) === String(type)
+            && normalizeLinkId(operation.link_id) === normalizedLinkId
+            && Number(operation.item_id) === numericItemId
+            && (operation.action === 'create' || operation.action === 'update' || operation.action === 'delete');
+    });
+}
+
+function rewriteSwipeUndoItemId(previousId, nextId, ownerId, type, linkId = undefined) {
+    const state = swipeUndoState.value;
+    if (!state) {
+        return;
+    }
+
+    const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    if (
+        Number(state.ownerId) !== Number(ownerId)
+        || String(state.type) !== String(type)
+        || normalizeLinkId(state.linkId) !== normalizedLinkId
+    ) {
+        return;
+    }
+
+    const oldId = Number(previousId);
+    const newId = Number(nextId);
+    if (!Number.isFinite(oldId) || !Number.isFinite(newId) || oldId === newId) {
+        return;
+    }
+
+    if (state.action === 'toggle' || state.action === 'remove') {
+        if (Number(state.item?.id) === oldId) {
+            state.item = {
+                ...state.item,
+                id: newId,
+            };
+        }
+        return;
+    }
+
+    if (state.action === 'remove_completed_batch') {
+        if (Number(state.primary?.item?.id) === oldId) {
+            state.primary = {
+                ...state.primary,
+                item: {
+                    ...state.primary.item,
+                    id: newId,
+                },
+            };
+        }
+
+        state.removed = (state.removed ?? []).map((entry) => (
+            Number(entry?.item?.id) === oldId
+                ? {
+                    ...entry,
+                    item: {
+                        ...entry.item,
+                        id: newId,
+                    },
+                }
+                : entry
+        ));
+    }
 }
 
 function stageSwipeAction(state) {
@@ -1081,28 +2959,40 @@ function stageSwipeAction(state) {
     }
 }
 
-async function finalizeSwipeAction(state) {
+async function finalizeSwipeAction(state, options = {}) {
     if (!state) {
         return;
     }
 
-    stageSwipeAction(state);
-    await syncOfflineQueue();
+    const { background = false } = options;
 
-    if (!hasPendingOperations(state.ownerId, state.type, state.linkId)) {
-        await loadSuggestions(state.type);
+    stageSwipeAction(state);
+    const syncAndReloadSuggestions = async () => {
+        await syncOfflineQueue();
+
+        if (!hasPendingOperations(state.ownerId, state.type, state.linkId)) {
+            await loadSuggestions(state.type);
+        }
+    };
+
+    if (background) {
+        syncAndReloadSuggestions().catch(() => {});
+        return;
     }
+
+    await syncAndReloadSuggestions();
 }
 
-async function flushSwipeUndoState() {
+async function flushSwipeUndoState(options = {}) {
     if (!swipeUndoState.value) {
         return;
     }
 
+    const { background = true } = options;
     const pendingState = swipeUndoState.value;
     swipeUndoState.value = null;
     clearSwipeUndoTimer();
-    await finalizeSwipeAction(pendingState);
+    await finalizeSwipeAction(pendingState, { background });
 }
 
 function startSwipeUndoState(state) {
@@ -1118,7 +3008,7 @@ function startSwipeUndoState(state) {
             return;
         }
 
-        finalizeSwipeAction(pendingState).catch(showError);
+        finalizeSwipeAction(pendingState, { background: true }).catch(() => {});
     }, SWIPE_UNDO_WINDOW_MS);
 }
 
@@ -1132,6 +3022,12 @@ function undoSwipeAction() {
     clearSwipeUndoTimer();
 
     if (pendingState.action === 'toggle') {
+        adjustXpProgress(
+            pendingState.nextCompleted
+                ? -XP_PROGRESS_PER_TOGGLE
+                : XP_PROGRESS_PER_TOGGLE,
+        );
+
         upsertLocalItem(pendingState.ownerId, pendingState.type, {
             ...pendingState.item,
             pending_sync: false,
@@ -1178,6 +3074,11 @@ function undoSwipeAction() {
 
             return next;
         }, pendingState.linkId);
+
+        rollbackXpGainSource(
+            pendingState.xpGainSourceId,
+            pendingState.xpGainTotal,
+        );
     }
 }
 
@@ -1254,6 +3155,470 @@ function triggerDeleteBurst(event) {
     }, 420);
 }
 
+function getProgressBarTargetPoint() {
+    if (isHtmlElement(progressBarRef.value)) {
+        const rect = progressBarRef.value.getBoundingClientRect();
+        const horizontalPadding = Math.min(12, rect.width * 0.18);
+        const targetWidth = Math.max(8, rect.width - (horizontalPadding * 2));
+
+        return {
+            x: rect.left + horizontalPadding + (Math.random() * targetWidth),
+            y: rect.top + (rect.height / 2),
+        };
+    }
+
+    if (typeof window === 'undefined') {
+        return { x: 0, y: 0 };
+    }
+
+    return {
+        x: window.innerWidth / 2,
+        y: Math.max(20, window.innerHeight - 92),
+    };
+}
+
+function activateXpStars(starIds) {
+    const idSet = new Set(starIds);
+    xpStars.value = xpStars.value.map((star) => (idSet.has(star.id) ? { ...star, active: true } : star));
+}
+
+function spawnXpStars(originX, originY, removedCount, options = {}) {
+    const totalRemoved = Math.max(1, Number(removedCount) || 1);
+    const starCount = clampValue(Math.round(totalRemoved * 8), 28, 84);
+    const totalGain = calculateBatchRemovalXpGain(totalRemoved);
+    const gainPerStar = totalGain / starCount;
+    const source = ensureXpGainSource(options?.sourceId, totalGain);
+    const nextStars = [];
+
+    for (let index = 0; index < starCount; index += 1) {
+        const startX = originX + ((Math.random() - 0.5) * 42);
+        const startY = originY + ((Math.random() - 0.5) * 28);
+        const target = getProgressBarTargetPoint();
+        const dx = target.x - startX;
+        const dy = target.y - startY;
+        const distance = Math.hypot(dx, dy);
+        const duration = clampValue(Math.round(distance * 1.25), XP_STAR_MIN_DURATION_MS, XP_STAR_MAX_DURATION_MS);
+        const delay = Math.round(Math.random() * 210);
+        const starId = nextXpStarId;
+        nextXpStarId += 1;
+
+        const star = {
+            id: starId,
+            x: startX,
+            y: startY,
+            dx,
+            dy,
+            duration,
+            delay,
+            rotate: Math.round((Math.random() - 0.5) * 140),
+            size: 4 + Math.round(Math.random() * 5),
+            active: false,
+        };
+
+        nextStars.push(star);
+
+        const timeoutId = scheduleEffectTimeout(() => {
+            if (source) {
+                source.pendingTimeoutIds.delete(timeoutId);
+                source.pendingStarIds.delete(starId);
+            }
+
+            xpStars.value = xpStars.value.filter((entry) => entry.id !== starId);
+            playXpGainSound();
+            adjustXpProgress(gainPerStar);
+
+            if (source) {
+                source.grantedGain = Math.min(source.totalGain, source.grantedGain + gainPerStar);
+                if (source.pendingTimeoutIds.size === 0) {
+                    scheduleXpGainSourceCleanup(source.id);
+                }
+            }
+        }, delay + duration);
+
+        if (source) {
+            source.pendingTimeoutIds.add(timeoutId);
+            source.pendingStarIds.add(starId);
+        }
+    }
+
+    xpStars.value = [...xpStars.value, ...nextStars];
+
+    const activate = () => activateXpStars(nextStars.map((star) => star.id));
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(activate);
+        return;
+    }
+
+    activate();
+}
+
+function resetMegaCardImpactAnimation() {
+    if (!megaCardImpactAnimation || typeof megaCardImpactAnimation.cancel !== 'function') {
+        megaCardImpactAnimation = null;
+        return;
+    }
+
+    try {
+        megaCardImpactAnimation.cancel();
+    } catch {
+        // ignore cleanup errors
+    }
+
+    megaCardImpactAnimation = null;
+}
+
+function cubicBezierPoint(progress, point1, point2) {
+    const clampedProgress = clampValue(Number(progress) || 0, 0, 1);
+    const inverse = 1 - clampedProgress;
+
+    return (
+        (3 * inverse * inverse * clampedProgress * point1)
+        + (3 * inverse * clampedProgress * clampedProgress * point2)
+        + (clampedProgress * clampedProgress * clampedProgress)
+    );
+}
+
+function incomingTravelEasedProgress(timeFraction) {
+    const normalizedTime = clampValue(Number(timeFraction) || 0, 0, 1);
+    if (normalizedTime <= 0 || normalizedTime >= 1) {
+        return normalizedTime;
+    }
+
+    let min = 0;
+    let max = 1;
+    let curveProgress = normalizedTime;
+
+    for (let step = 0; step < 12; step += 1) {
+        curveProgress = (min + max) / 2;
+        const x = cubicBezierPoint(
+            curveProgress,
+            BATCH_CINEMATIC_INCOMING_EASING.x1,
+            BATCH_CINEMATIC_INCOMING_EASING.x2,
+        );
+
+        if (x < normalizedTime) {
+            min = curveProgress;
+        } else {
+            max = curveProgress;
+        }
+    }
+
+    return cubicBezierPoint(
+        curveProgress,
+        BATCH_CINEMATIC_INCOMING_EASING.y1,
+        BATCH_CINEMATIC_INCOMING_EASING.y2,
+    );
+}
+
+function incomingCollisionState(scene, incomingCard, timeFraction) {
+    const easedProgress = incomingTravelEasedProgress(timeFraction);
+    const targetScale = clampValue(
+        Number(incomingCard.targetScale ?? BATCH_CINEMATIC_INCOMING_TARGET_SCALE),
+        0.2,
+        1,
+    );
+    const scale = 1 - ((1 - targetScale) * easedProgress);
+
+    const incomingCenterX = incomingCard.x + (incomingCard.width / 2) + (incomingCard.dx * easedProgress);
+    const incomingCenterY = incomingCard.y + (incomingCard.height / 2) + (incomingCard.dy * easedProgress);
+    const megaCenterX = scene.x + (scene.width / 2);
+    const megaCenterY = scene.y + (scene.height / 2);
+
+    const halfIncomingWidth = (incomingCard.width * scale) / 2;
+    const halfIncomingHeight = (incomingCard.height * scale) / 2;
+    const halfMegaWidth = scene.width / 2;
+    const halfMegaHeight = scene.height / 2;
+
+    const deltaX = Math.abs(incomingCenterX - megaCenterX);
+    const deltaY = Math.abs(incomingCenterY - megaCenterY);
+    const overlap = deltaX <= (halfIncomingWidth + halfMegaWidth)
+        && deltaY <= (halfIncomingHeight + halfMegaHeight);
+
+    return {
+        overlap,
+        distanceSquared: (deltaX * deltaX) + (deltaY * deltaY),
+    };
+}
+
+function calculateIncomingImpactOffsetMs(scene, incomingCard) {
+    const sampleCount = Math.max(24, Number(BATCH_CINEMATIC_IMPACT_SAMPLE_COUNT) || 24);
+    const refineSteps = Math.max(4, Number(BATCH_CINEMATIC_IMPACT_REFINE_STEPS) || 4);
+    const cardDuration = Math.max(1, Number(incomingCard.duration) || 1);
+
+    let previousTimeFraction = 0;
+    let previousState = incomingCollisionState(scene, incomingCard, 0);
+    let nearestTimeFraction = 0;
+    let nearestDistanceSquared = previousState.distanceSquared;
+
+    if (previousState.overlap) {
+        return 0;
+    }
+
+    for (let sampleIndex = 1; sampleIndex <= sampleCount; sampleIndex += 1) {
+        const timeFraction = sampleIndex / sampleCount;
+        const state = incomingCollisionState(scene, incomingCard, timeFraction);
+
+        if (state.distanceSquared < nearestDistanceSquared) {
+            nearestDistanceSquared = state.distanceSquared;
+            nearestTimeFraction = timeFraction;
+        }
+
+        if (!previousState.overlap && state.overlap) {
+            let left = previousTimeFraction;
+            let right = timeFraction;
+
+            for (let refineIndex = 0; refineIndex < refineSteps; refineIndex += 1) {
+                const middle = (left + right) / 2;
+                const middleState = incomingCollisionState(scene, incomingCard, middle);
+                if (middleState.overlap) {
+                    right = middle;
+                } else {
+                    left = middle;
+                }
+            }
+
+            return clampValue(Math.round(right * cardDuration), 0, cardDuration);
+        }
+
+        previousTimeFraction = timeFraction;
+        previousState = state;
+    }
+
+    return clampValue(Math.round(nearestTimeFraction * cardDuration), 0, cardDuration);
+}
+
+function playMegaCardImpact(sceneId = null) {
+    playDashboardSound('white_card_impact', {
+        volume: 0.68,
+        playbackRate: randomPlaybackRateBySemitone(1.35),
+    });
+    if (sceneId !== null) {
+        intensifyMegaCardGlow(sceneId, 0.2);
+    }
+
+    const element = megaCardRef.value;
+    if (!isHtmlElement(element) || typeof element.animate !== 'function') {
+        return;
+    }
+
+    resetMegaCardImpactAnimation();
+    const impactAnimation = element.animate(
+        [
+            { transform: 'translate3d(0, 0, 0) scale(1)' },
+            { transform: 'translate3d(0, -13px, 0) scale(1.02)' },
+            { transform: 'translate3d(0, 0, 0) scale(1)' },
+        ],
+        {
+            duration: 190,
+            easing: 'cubic-bezier(0.2, 0.88, 0.35, 1)',
+        },
+    );
+
+    megaCardImpactAnimation = impactAnimation;
+    impactAnimation.onfinish = () => {
+        if (megaCardImpactAnimation === impactAnimation) {
+            megaCardImpactAnimation = null;
+        }
+    };
+    impactAnimation.oncancel = () => {
+        if (megaCardImpactAnimation === impactAnimation) {
+            megaCardImpactAnimation = null;
+        }
+    };
+}
+
+function buildBatchCollapseScene(type, completedEntries) {
+    const positionedEntries = completedEntries
+        .map((entry) => {
+            const element = itemCardElements.get(itemCardRefKey(type, entry.item));
+            if (!isHtmlElement(element)) {
+                return null;
+            }
+
+            const rect = element.getBoundingClientRect();
+            if (rect.width < 1 || rect.height < 1) {
+                return null;
+            }
+
+            return {
+                entry,
+                rect,
+            };
+        })
+        .filter(Boolean)
+        .sort((left, right) => {
+            const topDelta = left.rect.top - right.rect.top;
+            if (topDelta !== 0) {
+                return topDelta;
+            }
+
+            return left.rect.left - right.rect.left;
+        });
+
+    if (positionedEntries.length < 2) {
+        return null;
+    }
+
+    const topCard = positionedEntries[0];
+
+    const scene = {
+        id: nextBatchCollapseSceneId++,
+        x: topCard.rect.left,
+        y: topCard.rect.top,
+        width: topCard.rect.width,
+        height: topCard.rect.height,
+        whitening: false,
+        incomingActive: false,
+        glowing: false,
+        glowBoost: 0,
+        bursting: false,
+        incoming: positionedEntries.slice(1).map((entry, index) => ({
+            id: nextBatchCollapseIncomingId++,
+            x: entry.rect.left,
+            y: entry.rect.top,
+            width: entry.rect.width,
+            height: entry.rect.height,
+            dx: (topCard.rect.left - entry.rect.left) + ((Math.random() - 0.5) * 10),
+            dy: (topCard.rect.top - entry.rect.top) + ((Math.random() - 0.5) * 8),
+            delay: index * 72,
+            targetScale: BATCH_CINEMATIC_INCOMING_TARGET_SCALE,
+            duration: clampValue(
+                Math.round(
+                    420
+                    + (
+                        Math.hypot(
+                            topCard.rect.left - entry.rect.left,
+                            topCard.rect.top - entry.rect.top,
+                        ) * 0.85
+                    ),
+                ),
+                460,
+                780,
+            ),
+        })),
+    };
+
+    scene.incoming = scene.incoming.map((incomingCard) => ({
+        ...incomingCard,
+        impactAt: incomingCard.delay + calculateIncomingImpactOffsetMs(scene, incomingCard),
+    }));
+
+    return scene;
+}
+
+async function playBatchCollapseAnimation(type, completedEntries, options = {}) {
+    const scene = buildBatchCollapseScene(type, completedEntries);
+    if (!scene) {
+        return false;
+    }
+
+    const xpGainSourceId = String(options?.xpGainSourceId ?? '').trim();
+    const skipEpoch = animationSkipEpoch.value;
+    let starsSpawned = false;
+    const spawnSceneXpStars = () => {
+        if (starsSpawned) {
+            return;
+        }
+
+        starsSpawned = true;
+        spawnXpStars(scene.x + (scene.width / 2), scene.y + (scene.height / 2), completedEntries.length, {
+            sourceId: xpGainSourceId || null,
+        });
+    };
+    const completeSceneImmediately = () => {
+        if (!batchCollapseScene.value || batchCollapseScene.value.id !== scene.id) {
+            resetMegaCardImpactAnimation();
+            return;
+        }
+
+        batchCollapseScene.value.whitening = true;
+        batchCollapseScene.value.glowing = true;
+        batchCollapseScene.value.incomingActive = true;
+        batchCollapseScene.value.bursting = true;
+        spawnSceneXpStars();
+        batchCollapseScene.value = null;
+        resetMegaCardImpactAnimation();
+    };
+
+    resetMegaCardImpactAnimation();
+    batchCollapseScene.value = scene;
+    await nextTick();
+
+    if (!batchCollapseScene.value || batchCollapseScene.value.id !== scene.id) {
+        resetMegaCardImpactAnimation();
+        return true;
+    }
+
+    batchCollapseScene.value.whitening = true;
+    batchCollapseScene.value.glowing = true;
+    batchCollapseScene.value.glowBoost = 0.08;
+    playDashboardSound('white_card_appear', {
+        volume: 0.76,
+    });
+    const skippedWhiten = await waitForMsOrAnimationSkip(BATCH_CINEMATIC_WHITEN_MS, skipEpoch);
+    if (skippedWhiten) {
+        completeSceneImmediately();
+        return true;
+    }
+
+    if (!batchCollapseScene.value || batchCollapseScene.value.id !== scene.id) {
+        resetMegaCardImpactAnimation();
+        return true;
+    }
+
+    batchCollapseScene.value.incomingActive = true;
+    for (const incomingCard of scene.incoming) {
+        scheduleEffectTimeout(() => {
+            if (!batchCollapseScene.value || batchCollapseScene.value.id !== scene.id) {
+                return;
+            }
+
+            playMegaCardImpact(scene.id);
+        }, incomingCard.impactAt);
+    }
+
+    const longestIncomingTravelMs = scene.incoming.reduce(
+        (maxDelay, incomingCard) => Math.max(maxDelay, incomingCard.delay + incomingCard.duration),
+        0,
+    );
+    const skippedTravel = await waitForMsOrAnimationSkip(longestIncomingTravelMs, skipEpoch);
+    if (skippedTravel) {
+        completeSceneImmediately();
+        return true;
+    }
+
+    if (!batchCollapseScene.value || batchCollapseScene.value.id !== scene.id) {
+        resetMegaCardImpactAnimation();
+        return true;
+    }
+
+    const skippedGlow = await waitForMsOrAnimationSkip(BATCH_CINEMATIC_GLOW_MS, skipEpoch);
+    if (skippedGlow) {
+        completeSceneImmediately();
+        return true;
+    }
+
+    if (!batchCollapseScene.value || batchCollapseScene.value.id !== scene.id) {
+        resetMegaCardImpactAnimation();
+        return true;
+    }
+
+    batchCollapseScene.value.bursting = true;
+    spawnSceneXpStars();
+    const skippedBurst = await waitForMsOrAnimationSkip(BATCH_CINEMATIC_BURST_MS, skipEpoch);
+    if (skippedBurst) {
+        completeSceneImmediately();
+        return true;
+    }
+
+    if (batchCollapseScene.value && batchCollapseScene.value.id === scene.id) {
+        batchCollapseScene.value = null;
+    }
+    resetMegaCardImpactAnimation();
+
+    return true;
+}
+
 async function removeCompletedAfterSwipe(event = null) {
     if (!swipeUndoState.value || swipeUndoState.value.action !== 'remove') {
         return;
@@ -1264,7 +3629,8 @@ async function removeCompletedAfterSwipe(event = null) {
         return;
     }
 
-    triggerDeleteBurst(event);
+    // Prevent undo timeout from finalizing single-item remove while cinematic batch remove is running.
+    clearSwipeUndoTimer();
 
     const ownerId = Number(activeState.ownerId);
     const linkId = resolveLinkIdForOwner(ownerId, activeState.linkId);
@@ -1283,18 +3649,48 @@ async function removeCompletedAfterSwipe(event = null) {
     }
 
     batchRemovalAnimating.value = true;
-    batchRemovingItemKeys.value = completedEntries.map((entry) => itemViewKey(entry.item));
+    const completedKeys = completedEntries.map((entry) => itemViewKey(entry.item));
+    const useCinematicRemoval = completedEntries.length >= BATCH_CINEMATIC_REMOVE_THRESHOLD;
+    let xpGainSourceId = null;
+    let xpGainTotal = 0;
 
-    await waitForMs(BATCH_REMOVE_CARD_ANIMATION_MS);
+    if (useCinematicRemoval) {
+        batchCollapseHiddenItemKeys.value = completedKeys;
+        const candidateXpGainSourceId = buildXpGainSourceId();
+        const played = await playBatchCollapseAnimation(type, completedEntries, {
+            xpGainSourceId: candidateXpGainSourceId,
+        });
+
+        if (played) {
+            xpGainSourceId = candidateXpGainSourceId;
+            xpGainTotal = calculateBatchRemovalXpGain(completedEntries.length);
+        } else {
+            batchCollapseHiddenItemKeys.value = [];
+            triggerDeleteBurst(event);
+            batchRemovingItemKeys.value = completedKeys;
+            await waitForMs(BATCH_REMOVE_CARD_ANIMATION_MS);
+        }
+    } else {
+        triggerDeleteBurst(event);
+        batchRemovingItemKeys.value = completedKeys;
+        await waitForMs(BATCH_REMOVE_CARD_ANIMATION_MS);
+    }
 
     if (swipeUndoState.value !== activeState || swipeUndoState.value?.action !== 'remove') {
         batchRemovingItemKeys.value = [];
+        batchCollapseHiddenItemKeys.value = [];
+        batchCollapseScene.value = null;
+        resetMegaCardImpactAnimation();
         batchRemovalAnimating.value = false;
         return;
     }
 
+    markItemsAsDeleted(ownerId, type, completedEntries.map((entry) => entry.item?.id), linkId);
     applyLocalUpdate(ownerId, type, (items) => items.filter((entry) => !entry.is_completed), linkId);
     batchRemovingItemKeys.value = [];
+    batchCollapseHiddenItemKeys.value = [];
+    batchCollapseScene.value = null;
+    resetMegaCardImpactAnimation();
     batchRemovalAnimating.value = false;
 
     startSwipeUndoState({
@@ -1307,163 +3703,396 @@ async function removeCompletedAfterSwipe(event = null) {
             previousIndex: Number(activeState.previousIndex ?? 0),
         },
         removed: completedEntries,
+        xpGainSourceId,
+        xpGainTotal,
     });
 }
 
+function shouldDropOperationOnClientError(operation, statusCode) {
+    const action = String(operation?.action ?? '');
+    if (statusCode < 400 || statusCode >= 500 || statusCode === 429) {
+        return false;
+    }
+
+    if (action === 'delete') {
+        return statusCode === 404;
+    }
+
+    if (action === 'update') {
+        return statusCode === 404;
+    }
+
+    return [
+        'dismiss_suggestion',
+        'reset_suggestion',
+        'set_default_owner',
+        'send_invitation',
+        'accept_invitation',
+        'decline_invitation',
+        'set_mine',
+        'break_link',
+        'update_profile',
+        'update_password',
+        'sync_gamification',
+    ].includes(action);
+}
+
+function shouldRefreshStateAfterDroppedOperation(action) {
+    return [
+        'set_default_owner',
+        'accept_invitation',
+        'decline_invitation',
+        'set_mine',
+        'break_link',
+    ].includes(String(action ?? ''));
+}
+
+function isTempItemMutationOperation(operation) {
+    const action = String(operation?.action ?? '');
+    if (action !== 'update' && action !== 'delete') {
+        return false;
+    }
+
+    const itemId = Number(operation?.item_id);
+    return Number.isFinite(itemId) && itemId < 0;
+}
+
+function hasQueuedCreateForOperation(operation) {
+    const tempItemId = Number(operation?.item_id);
+    if (!Number.isFinite(tempItemId) || tempItemId >= 0) {
+        return false;
+    }
+
+    return offlineQueue.value.some((queuedOperation) => (
+        queuedOperation.action === 'create'
+        && Number(queuedOperation.owner_id) === Number(operation?.owner_id)
+        && String(queuedOperation.type) === String(operation?.type)
+        && normalizeLinkId(queuedOperation.link_id) === normalizeLinkId(operation?.link_id)
+        && Number(queuedOperation.item_id) === tempItemId
+    ));
+}
+
+function collectSyncChunkOperations() {
+    const chunkOperations = [];
+    const staleTempMutationOpIds = [];
+
+    for (const operation of offlineQueue.value) {
+        if (chunkOperations.length >= SYNC_CHUNK_MAX_OPERATIONS) {
+            break;
+        }
+
+        if (isTempItemMutationOperation(operation)) {
+            if (!hasQueuedCreateForOperation(operation)) {
+                staleTempMutationOpIds.push(String(operation?.op_id ?? ''));
+            }
+
+            continue;
+        }
+
+        if (
+            operation.action === 'update'
+            && shouldCoalesceUpdatePayload(operation.payload)
+        ) {
+            const quietRemainingMs = getQueuedUpdateQuietRemainingMs();
+            if (quietRemainingMs > 0) {
+                scheduleQueuedUpdateSync(quietRemainingMs);
+                if (chunkOperations.length === 0) {
+                    return [];
+                }
+                break;
+            }
+        }
+
+        chunkOperations.push(operation);
+    }
+
+    for (const staleOpId of staleTempMutationOpIds) {
+        dropQueueOperation(staleOpId);
+    }
+
+    return chunkOperations;
+}
+
+function buildSyncChunkPayload(chunkOperations) {
+    return chunkOperations.map((operation) => ({
+        op_id: String(operation?.op_id ?? ''),
+        action: String(operation?.action ?? ''),
+        owner_id: operation?.owner_id ?? null,
+        link_id: normalizeLinkId(operation?.link_id),
+        type: operation?.type ?? null,
+        item_id: operation?.item_id ?? null,
+        payload: operation?.payload ?? {},
+    }));
+}
+
+function applySuccessfulSyncedOperation(operation, resultData) {
+    const action = String(operation?.action ?? '');
+
+    if (action === 'create') {
+        const syncedItemResponse = resultData?.item;
+        if (!syncedItemResponse || typeof syncedItemResponse !== 'object') {
+            return;
+        }
+
+        const syncedItem = normalizeItem(syncedItemResponse, `srv-${syncedItemResponse.id}`, {
+            ownerIdOverride: operation.owner_id,
+            linkIdOverride: operation.link_id,
+        });
+        const previousTempId = Number(operation.item_id);
+        const normalizedLinkId = normalizeLinkId(operation.link_id);
+        const hasQueuedDeleteIntent = offlineQueue.value.some((queuedOperation) => (
+            queuedOperation.action === 'delete'
+            && Number(queuedOperation.owner_id) === Number(operation.owner_id)
+            && String(queuedOperation.type) === String(operation.type)
+            && normalizeLinkId(queuedOperation.link_id) === normalizedLinkId
+            && Number(queuedOperation.item_id) === previousTempId
+        ));
+        const hasSwipeDeleteIntent = Boolean(
+            swipeUndoState.value?.action === 'remove'
+            && isSwipeStateForItem(
+                swipeUndoState.value,
+                operation.owner_id,
+                operation.type,
+                previousTempId,
+                operation.link_id,
+            ),
+        );
+
+        if (hasQueuedDeleteIntent || hasSwipeDeleteIntent) {
+            markItemsAsDeleted(
+                operation.owner_id,
+                operation.type,
+                [syncedItem.id],
+                operation.link_id,
+                { deletedAtMs: Date.now() },
+            );
+        }
+
+        if (!hasQueuedDeleteIntent && !hasSwipeDeleteIntent) {
+            applyLocalUpdate(operation.owner_id, operation.type, (items) => {
+                const next = cloneItems(items);
+                const index = next.findIndex((entry) => Number(entry.id) === previousTempId);
+
+                if (index === -1) {
+                    next.unshift({ ...syncedItem });
+                } else {
+                    const preservedLocalId = String(next[index]?.local_id ?? '').trim();
+                    next[index] = {
+                        ...syncedItem,
+                        local_id: preservedLocalId || syncedItem.local_id,
+                    };
+                }
+
+                return next;
+            }, operation.link_id);
+        }
+
+        rewriteQueuedItemId(previousTempId, syncedItem.id);
+        rewriteSwipeUndoItemId(
+            previousTempId,
+            syncedItem.id,
+            operation.owner_id,
+            operation.type,
+            operation.link_id,
+        );
+        return;
+    }
+
+    if (action === 'update') {
+        if (Number(operation.item_id) <= 0) {
+            return;
+        }
+
+        const updatedItemResponse = resultData?.item;
+        if (!updatedItemResponse || typeof updatedItemResponse !== 'object') {
+            return;
+        }
+
+        const updatedItem = normalizeItem(updatedItemResponse, `srv-${updatedItemResponse.id}`, {
+            ownerIdOverride: operation.owner_id,
+            linkIdOverride: operation.link_id,
+        });
+        const hasNewerLocalIntent = hasPendingItemOperation(
+            operation.owner_id,
+            operation.type,
+            operation.item_id,
+            operation.link_id,
+            operation.op_id,
+        ) || isSwipeStateForItem(
+            swipeUndoState.value,
+            operation.owner_id,
+            operation.type,
+            operation.item_id,
+            operation.link_id,
+        );
+
+        if (!hasNewerLocalIntent) {
+            upsertLocalItem(operation.owner_id, operation.type, updatedItem, {
+                linkId: operation.link_id,
+            });
+        }
+        return;
+    }
+
+    if (action === 'delete') {
+        if (Number(operation.item_id) > 0) {
+            markItemsAsDeleted(
+                operation.owner_id,
+                operation.type,
+                [operation.item_id],
+                operation.link_id,
+            );
+        }
+        return;
+    }
+
+    if (
+        [
+            'set_default_owner',
+            'accept_invitation',
+            'decline_invitation',
+            'set_mine',
+            'break_link',
+        ].includes(action)
+    ) {
+        if (resultData && typeof resultData === 'object') {
+            applyState(resultData, { syncSelection: true });
+        }
+        return;
+    }
+
+    if (action === 'update_profile') {
+        localUser.name = resultData?.user?.name ?? localUser.name;
+        localUser.tag = resultData?.user?.tag ?? localUser.tag;
+        localUser.email = resultData?.user?.email ?? localUser.email;
+        profileForm.name = localUser.name;
+        profileForm.tag = localUser.tag;
+        profileForm.email = localUser.email;
+        return;
+    }
+
+    if (action === 'sync_gamification') {
+        if (resultData?.gamification && typeof resultData.gamification === 'object') {
+            applyGamificationStateFromServer(resultData.gamification, { force: true });
+        }
+    }
+}
+
 async function syncOfflineQueue() {
-    if (queueSyncInProgress || offlineQueue.value.length === 0 || browserOffline.value) {
+    if (
+        queueSyncInProgress
+        || offlineQueue.value.length === 0
+        || browserOffline.value
+        || Date.now() < queueRetryAt
+    ) {
         return;
     }
 
     queueSyncInProgress = true;
 
     try {
-        while (offlineQueue.value.length > 0) {
-            const operation = offlineQueue.value[0];
+        while (
+            offlineQueue.value.length > 0
+            && !browserOffline.value
+            && Date.now() >= queueRetryAt
+        ) {
+            const chunkOperations = collectSyncChunkOperations();
+            if (chunkOperations.length === 0) {
+                break;
+            }
+
+            syncInFlightOperationIds = new Set(chunkOperations.map((operation) => String(operation.op_id)));
 
             try {
-                if (operation.action === 'create') {
-                    const response = await requestApi(() => window.axios.post('api/items', {
-                        owner_id: operation.owner_id,
-                        link_id: normalizeLinkId(operation.link_id),
-                        type: operation.type,
-                        text: operation.payload.text,
-                        quantity: operation.type === 'product' ? (operation.payload.quantity ?? null) : null,
-                        unit: operation.type === 'product' ? (operation.payload.unit ?? null) : null,
-                        due_at: operation.type === 'todo' ? (operation.payload.due_at ?? null) : null,
-                        priority: operation.type === 'todo' ? normalizeTodoPriority(operation.payload.priority) : null,
-                    }));
+                const response = await requestApi(() => window.axios.post('api/sync/chunk', {
+                    operations: buildSyncChunkPayload(chunkOperations),
+                }));
+                const chunkResults = Array.isArray(response.data?.results) ? response.data.results : [];
+                const chunkResultByOpId = new Map(
+                    chunkResults.map((result) => [String(result?.op_id ?? ''), result]),
+                );
 
-                    let syncedItem = normalizeItem(response.data.item, `srv-${response.data.item.id}`, {
-                        ownerIdOverride: operation.owner_id,
-                        linkIdOverride: operation.link_id,
-                    });
-                    if (operation.payload.is_completed) {
-                        const completedResponse = await requestApi(() => window.axios.patch(`api/items/${syncedItem.id}`, {
-                            is_completed: true,
-                        }));
-                        syncedItem = normalizeItem(completedResponse.data.item, `srv-${completedResponse.data.item.id}`, {
-                            ownerIdOverride: operation.owner_id,
-                            linkIdOverride: operation.link_id,
-                        });
-                    }
-                    const previousTempId = Number(operation.item_id);
+                let shouldStopSync = false;
 
-                    applyLocalUpdate(operation.owner_id, operation.type, (items) => {
-                        const next = cloneItems(items);
-                        const index = next.findIndex((entry) => Number(entry.id) === previousTempId);
+                for (const operation of chunkOperations) {
+                    const opId = String(operation?.op_id ?? '');
+                    const result = chunkResultByOpId.get(opId);
 
-                        if (index === -1) {
-                            next.unshift({ ...syncedItem });
-                        } else {
-                            const preservedLocalId = String(next[index]?.local_id ?? '').trim();
-                            next[index] = {
-                                ...syncedItem,
-                                local_id: preservedLocalId || syncedItem.local_id,
-                            };
-                        }
-
-                        return next;
-                    }, operation.link_id);
-
-                    rewriteQueuedItemId(previousTempId, syncedItem.id);
-                    dropQueueOperation(operation.op_id);
-                    continue;
-                }
-
-                if (operation.action === 'update') {
-                    if (Number(operation.item_id) <= 0) {
-                        dropQueueOperation(operation.op_id);
-                        continue;
-                    }
-
-                    const quietRemainingMs = getQueuedUpdateQuietRemainingMs();
-                    if (quietRemainingMs > 0) {
-                        scheduleQueuedUpdateSync(quietRemainingMs);
+                    if (!result) {
+                        queueRetryAt = Date.now() + QUEUE_RETRY_DELAY_MS;
+                        shouldStopSync = true;
                         break;
                     }
 
-                    const response = await requestApi(() => window.axios.patch(`api/items/${operation.item_id}`, {
-                        ...operation.payload,
-                    }));
-
-                    const updatedItem = normalizeItem(response.data.item, `srv-${response.data.item.id}`, {
-                        ownerIdOverride: operation.owner_id,
-                        linkIdOverride: operation.link_id,
-                    });
-                    upsertLocalItem(operation.owner_id, operation.type, updatedItem, {
-                        linkId: operation.link_id,
-                    });
-                    dropQueueOperation(operation.op_id);
-                    continue;
-                }
-
-                if (operation.action === 'delete') {
-                    if (Number(operation.item_id) <= 0) {
-                        dropQueueOperation(operation.op_id);
+                    if (String(result?.status ?? '') === 'ok') {
+                        applySuccessfulSyncedOperation(operation, result?.data ?? {});
+                        dropQueueOperation(opId);
+                        queueRetryAt = 0;
                         continue;
                     }
 
-                    await requestApi(() => window.axios.delete(`api/items/${operation.item_id}`));
-                    dropQueueOperation(operation.op_id);
-                    continue;
-                }
+                    const statusCode = Number(result?.http_status ?? 0);
+                    if (shouldDropOperationOnClientError(operation, statusCode)) {
+                        dropQueueOperation(opId);
+                        queueRetryAt = 0;
 
-                if (operation.action === 'reorder') {
-                    const order = Array.isArray(operation.payload?.order)
-                        ? operation.payload.order
-                            .map((entry) => Number(entry))
-                            .filter((entry) => Number.isFinite(entry) && entry > 0)
-                        : [];
+                        if (shouldRefreshStateAfterDroppedOperation(operation?.action)) {
+                            refreshState(false, true).catch(() => {});
+                        }
 
-                    if (order.length === 0) {
-                        dropQueueOperation(operation.op_id);
+                        if (
+                            statusCode === 422
+                            && ['update_profile', 'update_password'].includes(String(operation?.action ?? ''))
+                        ) {
+                            showError({
+                                response: {
+                                    status: statusCode,
+                                    data: {
+                                        message: String(result?.message ?? ''),
+                                        errors: result?.errors ?? {},
+                                    },
+                                },
+                            });
+                        }
+
                         continue;
                     }
 
-                    await requestApi(() => window.axios.post('api/items/reorder', {
-                        owner_id: operation.owner_id,
-                        link_id: normalizeLinkId(operation.link_id),
-                        type: operation.type,
-                        order,
-                    }));
-                    dropQueueOperation(operation.op_id);
-                    continue;
+                    queueRetryAt = Date.now() + QUEUE_RETRY_DELAY_MS;
+                    shouldStopSync = true;
+                    break;
                 }
 
-                dropQueueOperation(operation.op_id);
+                if (shouldStopSync) {
+                    break;
+                }
             } catch (error) {
-                if (isConnectivityError(error)) {
+                if (isRetriableRequestError(error)) {
+                    queueRetryAt = Date.now() + QUEUE_RETRY_DELAY_MS;
                     break;
                 }
 
                 const statusCode = Number(error?.response?.status ?? 0);
+                const firstOperation = chunkOperations[0];
+                if (firstOperation && shouldDropOperationOnClientError(firstOperation, statusCode)) {
+                    dropQueueOperation(firstOperation.op_id);
+                    queueRetryAt = 0;
 
-                if (operation.action === 'delete' && statusCode === 404) {
-                    dropQueueOperation(operation.op_id);
+                    if (shouldRefreshStateAfterDroppedOperation(firstOperation?.action)) {
+                        refreshState(false, true).catch(() => {});
+                    }
+
                     continue;
                 }
 
-                if (operation.action === 'update' && statusCode === 404) {
-                    removeLocalItem(operation.owner_id, operation.type, operation.item_id, operation.link_id);
-                    dropQueueOperation(operation.op_id);
-                    continue;
-                }
-
-                if (operation.action === 'create') {
-                    removeLocalItem(operation.owner_id, operation.type, operation.item_id, operation.link_id);
-                }
-
-                dropQueueOperation(operation.op_id);
-
-                if (operation.action === 'update' || operation.action === 'delete' || operation.action === 'reorder') {
-                    await loadItems(operation.type, false, operation.owner_id, operation.link_id);
-                }
-
-                showError(error);
+                queueRetryAt = Date.now() + QUEUE_RETRY_DELAY_MS;
+                break;
+            } finally {
+                syncInFlightOperationIds.clear();
             }
         }
     } finally {
+        syncInFlightOperationIds.clear();
         queueSyncInProgress = false;
     }
 }
@@ -1519,15 +4148,11 @@ async function applySuggestionToList(type, suggestion) {
 
     resetMessages();
 
-    try {
-        await createItemOptimistically(type, text);
-        removeSuggestionFromView(type, suggestion);
+    await createItemOptimistically(type, text);
+    removeSuggestionFromView(type, suggestion);
 
-        if (!hasPendingOperations(selectedOwnerId.value, type, selectedListLinkId.value)) {
-            await loadSuggestions(type);
-        }
-    } catch (error) {
-        showError(error);
+    if (!hasPendingOperations(selectedOwnerId.value, type, selectedListLinkId.value)) {
+        await loadSuggestions(type);
     }
 }
 
@@ -1540,27 +4165,14 @@ async function dismissSuggestion(type, suggestion) {
     resetMessages();
     removeSuggestionFromView(type, suggestion);
 
-    try {
-        if (browserOffline.value) {
-            return;
-        }
-
-        await requestApi(() => window.axios.post('api/items/suggestions/dismiss', {
-            owner_id: selectedOwnerId.value,
-            link_id: selectedListLinkId.value,
-            type,
-            suggestion_key: suggestionKey,
-            average_interval_seconds: Number(suggestion?.average_interval_seconds ?? 0),
-        }));
-
-        await loadSuggestions(type);
-    } catch (error) {
-        if (isConnectivityError(error)) {
-            return;
-        }
-
-        showError(error);
-    }
+    queueSuggestionDismiss(
+        selectedOwnerId.value,
+        type,
+        suggestionKey,
+        Number(suggestion?.average_interval_seconds ?? 0),
+        selectedListLinkId.value,
+    );
+    syncOfflineQueue().catch(() => {});
 }
 
 function toInputDatetime(isoValue) {
@@ -1695,16 +4307,21 @@ function removeSuggestionFromView(type, suggestion) {
         return;
     }
 
+    const ownerId = Number(selectedOwnerId.value);
+    const linkId = selectedListLinkId.value;
+
     if (type === 'product') {
-        productSuggestions.value = productSuggestions.value.filter(
+        const nextSuggestions = productSuggestions.value.filter(
             (entry) => getSuggestionKey(entry) !== suggestionKey,
         );
+        writeSuggestionsToCache(ownerId, type, nextSuggestions, linkId);
         return;
     }
 
-    todoSuggestions.value = todoSuggestions.value.filter(
+    const nextSuggestions = todoSuggestions.value.filter(
         (entry) => getSuggestionKey(entry) !== suggestionKey,
     );
+    writeSuggestionsToCache(ownerId, type, nextSuggestions, linkId);
 }
 
 async function createItemOptimistically(type, text, dueAt = null, options = {}) {
@@ -1760,13 +4377,14 @@ async function createItemOptimistically(type, text, dueAt = null, options = {}) 
 
 function applyState(state, options = {}) {
     const { syncSelection = false } = options;
+    const normalizedState = normalizeSyncStatePayload(state);
 
-    pendingInvitationsCount.value = state.pending_invitations_count ?? 0;
-    invitations.value = state.invitations ?? [];
-    links.value = state.links ?? [];
-    listOptions.value = state.list_options ?? [];
+    pendingInvitationsCount.value = normalizedState.pending_invitations_count;
+    invitations.value = normalizedState.invitations;
+    links.value = normalizedState.links;
+    listOptions.value = normalizedState.list_options;
 
-    const defaultOwnerId = Number(state.default_owner_id ?? localUser.id);
+    const defaultOwnerId = Number(normalizedState.default_owner_id ?? localUser.id);
     const defaultExists = listOptions.value.some((option) => Number(option.owner_id) === defaultOwnerId);
     const selectedExists = listOptions.value.some((option) => Number(option.owner_id) === Number(selectedOwnerId.value));
 
@@ -1777,21 +4395,21 @@ function applyState(state, options = {}) {
 
     if (syncSelection && defaultExists) {
         selectedOwnerId.value = defaultOwnerId;
-        return;
-    }
-
-    if (!selectedExists && defaultExists) {
+    } else if (!selectedExists && defaultExists) {
         selectedOwnerId.value = defaultOwnerId;
-        return;
-    }
-
-    if (!selectedExists) {
+    } else if (!selectedExists) {
         selectedOwnerId.value = localUser.id;
     }
+
+    if (normalizedState.gamification) {
+        applyGamificationStateFromServer(normalizedState.gamification);
+    }
+    persistCurrentSyncStateCache();
 }
 
 async function refreshState(showErrors = false, syncSelection = false) {
     if (browserOffline.value) {
+        applyCachedSyncState(syncSelection);
         return;
     }
 
@@ -1800,6 +4418,7 @@ async function refreshState(showErrors = false, syncSelection = false) {
         applyState(response.data, { syncSelection });
     } catch (error) {
         if (isConnectivityError(error)) {
+            applyCachedSyncState(syncSelection);
             return;
         }
 
@@ -1818,6 +4437,7 @@ async function loadItems(type, showErrors = false, ownerIdOverride = null, linkI
     const ownerId = Number(ownerIdOverride ?? selectedOwnerId.value);
     const linkId = resolveLinkIdForOwner(ownerId, linkIdOverride);
     const cachedBeforeRequest = readListFromCache(ownerId, type, linkId);
+    const requestSyncVersion = getListSyncVersion(ownerId, type, linkId);
     const assignCached = () => {
         if (!isCurrentListContext(ownerId, linkId)) {
             return;
@@ -1828,11 +4448,7 @@ async function loadItems(type, showErrors = false, ownerIdOverride = null, linkI
     };
 
     try {
-        if (
-            browserOffline.value
-            || hasPendingOperations(ownerId, type, linkId)
-            || hasPendingSwipeAction(ownerId, type, linkId)
-        ) {
+        if (browserOffline.value || !serverReachable.value || hasListSyncConflict(ownerId, type, linkId)) {
             assignCached();
             return;
         }
@@ -1845,11 +4461,23 @@ async function loadItems(type, showErrors = false, ownerIdOverride = null, linkI
             },
         }));
 
+        if (hasListSyncConflict(ownerId, type, linkId, requestSyncVersion)) {
+            assignCached();
+            return;
+        }
+
         const normalizedItems = normalizeItems(response.data.items ?? [], cachedBeforeRequest, {
             ownerIdOverride: ownerId,
             linkIdOverride: linkId,
         });
-        writeListToCache(ownerId, type, normalizedItems, linkId);
+        const filteredItems = readFilteredServerItems(ownerId, type, normalizedItems, linkId);
+
+        if (hasListSyncConflict(ownerId, type, linkId, requestSyncVersion)) {
+            assignCached();
+            return;
+        }
+
+        writeListToCache(ownerId, type, filteredItems, linkId);
     } catch (error) {
         if (isConnectivityError(error)) {
             assignCached();
@@ -1869,7 +4497,21 @@ async function loadSuggestions(type, showErrors = false) {
         return;
     }
 
-    if (browserOffline.value) {
+    const ownerId = Number(selectedOwnerId.value);
+    const linkId = selectedListLinkId.value;
+    const assignCached = () => {
+        const cachedSuggestions = readSuggestionsFromCache(ownerId, type, linkId);
+        setVisibleSuggestions(type, cachedSuggestions);
+    };
+
+    assignCached();
+
+    if (
+        browserOffline.value
+        || !serverReachable.value
+        || hasPendingOperations(ownerId, type, linkId)
+        || hasPendingSwipeAction(ownerId, type, linkId)
+    ) {
         return;
     }
 
@@ -1878,21 +4520,16 @@ async function loadSuggestions(type, showErrors = false) {
     try {
         const response = await requestApi(() => window.axios.get('api/items/suggestions', {
             params: {
-                owner_id: selectedOwnerId.value,
-                link_id: selectedListLinkId.value,
+                owner_id: ownerId,
+                link_id: linkId,
                 type,
                 limit: 6,
             },
         }));
-
-        if (type === 'product') {
-            productSuggestions.value = response.data.suggestions ?? [];
-            return;
-        }
-
-        todoSuggestions.value = response.data.suggestions ?? [];
+        writeSuggestionsToCache(ownerId, type, response.data.suggestions ?? [], linkId);
     } catch (error) {
         if (isConnectivityError(error)) {
+            assignCached();
             return;
         }
 
@@ -1939,7 +4576,17 @@ async function loadProductSuggestionStats(showErrors = false) {
         return;
     }
 
-    if (browserOffline.value) {
+    const ownerId = Number(selectedOwnerId.value);
+    const linkId = selectedListLinkId.value;
+    const assignCached = () => {
+        const cachedPayload = readProductStatsFromCache(ownerId, linkId);
+        productSuggestionStats.value = cachedPayload.stats;
+        productStatsSummary.value = cachedPayload.summary;
+    };
+
+    assignCached();
+
+    if (browserOffline.value || !serverReachable.value) {
         return;
     }
 
@@ -1948,17 +4595,15 @@ async function loadProductSuggestionStats(showErrors = false) {
     try {
         const response = await requestApi(() => window.axios.get('api/items/suggestions/stats', {
             params: {
-                owner_id: selectedOwnerId.value,
-                link_id: selectedListLinkId.value,
+                owner_id: ownerId,
+                link_id: linkId,
                 limit: 50,
             },
         }));
-
-        productSuggestionStats.value = Array.isArray(response.data?.stats)
-            ? response.data.stats
-            : [];
+        writeProductStatsToCache(ownerId, response.data ?? {}, linkId);
     } catch (error) {
         if (isConnectivityError(error)) {
+            assignCached();
             return;
         }
 
@@ -1998,6 +4643,15 @@ function formatProductStatsDate(isoValue) {
     }).format(parsed);
 }
 
+function formatProductStatsSummaryNumber(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+        return '0';
+    }
+
+    return new Intl.NumberFormat('ru-RU').format(Math.round(numeric));
+}
+
 function isResettingSuggestionKey(suggestionKey) {
     return resettingSuggestionKeys.value.includes(String(suggestionKey ?? ''));
 }
@@ -2014,27 +4668,28 @@ async function resetProductSuggestionStatsRow(entry) {
     }
 
     resettingSuggestionKeys.value = [...resettingSuggestionKeys.value, suggestionKey];
-
     try {
-        await requestApi(() => window.axios.post('api/items/suggestions/reset', {
-            owner_id: selectedOwnerId.value,
-            link_id: selectedListLinkId.value,
-            type: 'product',
-            suggestion_key: suggestionKey,
-        }));
+        const ownerId = Number(selectedOwnerId.value);
+        const linkId = selectedListLinkId.value;
+        const cachedPayload = readProductStatsFromCache(ownerId, linkId);
 
-        await Promise.all([
-            loadProductSuggestionStats(false),
-            loadSuggestions('product'),
-        ]);
+        cachedPayload.stats = cachedPayload.stats.map((statsEntry) => (
+            String(statsEntry?.suggestion_key ?? '') === suggestionKey
+                ? {
+                    ...statsEntry,
+                    dismissed_count: 0,
+                    hidden_until: null,
+                    retired_at: null,
+                    reset_at: new Date().toISOString(),
+                }
+                : statsEntry
+        ));
+        writeProductStatsToCache(ownerId, cachedPayload, linkId);
+
+        queueSuggestionReset(ownerId, 'product', suggestionKey, linkId);
+        syncOfflineQueue().catch(() => {});
 
         showStatus('\u0414\u0430\u043d\u043d\u044b\u0435 \u043f\u043e\u0434\u0441\u043a\u0430\u0437\u043e\u043a \u0441\u0431\u0440\u043e\u0448\u0435\u043d\u044b.');
-    } catch (error) {
-        if (isConnectivityError(error)) {
-            return;
-        }
-
-        showError(error);
     } finally {
         resettingSuggestionKeys.value = resettingSuggestionKeys.value.filter((key) => key !== suggestionKey);
     }
@@ -2166,21 +4821,11 @@ async function persistDefaultOwner(ownerId) {
         return;
     }
 
-    try {
-        const response = await requestApi(() => window.axios.post('api/sync/default-owner', {
-            owner_id: normalizedOwnerId,
-        }));
-
-        applyState(response.data);
-        lastPersistedOwnerId = Number(response.data.default_owner_id ?? normalizedOwnerId);
-        persistLocalDefaultOwner(lastPersistedOwnerId);
-    } catch (error) {
-        if (isConnectivityError(error)) {
-            return;
-        }
-
-        showError(error);
-    }
+    lastPersistedOwnerId = normalizedOwnerId;
+    persistLocalDefaultOwner(normalizedOwnerId);
+    queueDefaultOwner(normalizedOwnerId);
+    persistCurrentSyncStateCache();
+    syncOfflineQueue().catch(() => {});
 }
 
 async function toggleCompleted(item) {
@@ -2190,6 +4835,8 @@ async function toggleCompleted(item) {
     const { ownerId, linkId } = resolveItemContext(item);
     const nextCompleted = !item.is_completed;
     const nextSortOrder = nextSortOrderForLocalList(ownerId, item.type, nextCompleted, linkId);
+
+    adjustXpProgress(nextCompleted ? XP_PROGRESS_PER_TOGGLE : -XP_PROGRESS_PER_TOGGLE);
 
     upsertLocalItem(ownerId, item.type, {
         ...item,
@@ -2202,15 +4849,12 @@ async function toggleCompleted(item) {
         linkId,
     });
 
-    startSwipeUndoState({
-        action: 'toggle',
-        ownerId,
-        linkId,
-        type: item.type,
-        item: { ...item },
-        nextCompleted,
-        nextSortOrder,
-    });
+    queueUpdate(ownerId, item.type, item.id, {
+        is_completed: nextCompleted,
+        sort_order: nextSortOrder,
+    }, linkId);
+
+    syncOfflineQueue().catch(() => {});
 }
 
 async function removeItem(item) {
@@ -2221,7 +4865,7 @@ async function removeItem(item) {
     const currentItems = readListFromCache(ownerId, item.type, linkId);
     const previousIndex = currentItems.findIndex((entry) => Number(entry.id) === Number(item.id));
     const completedItemsCount = currentItems.filter((entry) => entry.is_completed).length;
-    const canRemoveCompletedBatch = Boolean(item.is_completed && completedItemsCount > 2);
+    const canRemoveCompletedBatch = Boolean(item.is_completed && completedItemsCount >= BATCH_CINEMATIC_REMOVE_THRESHOLD);
 
     removeLocalItem(ownerId, item.type, item.id, linkId);
 
@@ -2297,6 +4941,9 @@ async function addTodo() {
 
 async function findUsers() {
     const query = searchQuery.value.trim();
+    const assignCached = () => {
+        searchResults.value = readUserSearchFromCache(query);
+    };
 
     if (query.length < 2) {
         searchResults.value = [];
@@ -2304,9 +4951,11 @@ async function findUsers() {
     }
 
     if (browserOffline.value) {
-        searchResults.value = [];
+        assignCached();
         return;
     }
+
+    assignCached();
 
     searchBusy.value = true;
 
@@ -2315,10 +4964,12 @@ async function findUsers() {
             params: { query },
         }));
 
-        searchResults.value = response.data.users ?? [];
+        const users = response.data.users ?? [];
+        searchResults.value = users;
+        writeUserSearchToCache(query, users);
     } catch (error) {
         if (isConnectivityError(error)) {
-            searchResults.value = [];
+            assignCached();
             return;
         }
 
@@ -2330,137 +4981,121 @@ async function findUsers() {
 
 async function sendInvite(userId) {
     resetMessages();
-
-    try {
-        await requestApi(() => window.axios.post('api/invitations', {
-            user_id: userId,
-        }));
-
-        showStatus('Приглашение отправлено.');
-        await refreshState();
-    } catch (error) {
-        if (isConnectivityError(error)) {
-            return;
-        }
-
-        showError(error);
-    }
+    queueSendInvitation(userId);
+    syncOfflineQueue().catch(() => {});
+    showStatus('\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0435\u043d\u0438\u0435 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e.');
 }
 
 async function acceptInvitation(invitationId) {
     resetMessages();
-
-    try {
-        const response = await requestApi(() => window.axios.post(`api/invitations/${invitationId}/accept`));
-        applyState(response.data, { syncSelection: true });
-        showStatus('Приглашение принято.');
-    } catch (error) {
-        if (isConnectivityError(error)) {
-            return;
-        }
-
-        showError(error);
-    }
+    invitations.value = invitations.value.filter((entry) => Number(entry?.id) !== Number(invitationId));
+    pendingInvitationsCount.value = invitations.value.length;
+    persistCurrentSyncStateCache();
+    queueInvitationResponse('accept_invitation', invitationId);
+    syncOfflineQueue().catch(() => {});
+    showStatus('\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0435\u043d\u0438\u0435 \u043f\u0440\u0438\u043d\u044f\u0442\u043e.');
 }
 
 async function declineInvitation(invitationId) {
     resetMessages();
-
-    try {
-        const response = await requestApi(() => window.axios.post(`api/invitations/${invitationId}/decline`));
-        applyState(response.data, { syncSelection: true });
-        showStatus('Приглашение отменено.');
-    } catch (error) {
-        if (isConnectivityError(error)) {
-            return;
-        }
-
-        showError(error);
-    }
+    invitations.value = invitations.value.filter((entry) => Number(entry?.id) !== Number(invitationId));
+    pendingInvitationsCount.value = invitations.value.length;
+    persistCurrentSyncStateCache();
+    queueInvitationResponse('decline_invitation', invitationId);
+    syncOfflineQueue().catch(() => {});
+    showStatus('\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0435\u043d\u0438\u0435 \u043e\u0442\u043c\u0435\u043d\u0435\u043d\u043e.');
 }
 
 async function setMine(linkId) {
     resetMessages();
-
-    try {
-        const response = await requestApi(() => window.axios.post(`api/links/${linkId}/set-mine`));
-        applyState(response.data, { syncSelection: true });
-        showStatus('Список установлен по умолчанию.');
-    } catch (error) {
-        if (isConnectivityError(error)) {
-            return;
-        }
-
-        showError(error);
+    const link = links.value.find((entry) => Number(entry?.id) === Number(linkId));
+    const targetOwnerId = Number(link?.other_user?.id ?? 0);
+    if (targetOwnerId > 0) {
+        selectedOwnerId.value = targetOwnerId;
+        persistLocalDefaultOwner(targetOwnerId);
+        lastPersistedOwnerId = targetOwnerId;
     }
+
+    persistCurrentSyncStateCache();
+    queueSetMine(linkId);
+    syncOfflineQueue().catch(() => {});
+    showStatus('\u0421\u043f\u0438\u0441\u043e\u043a \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e.');
 }
 
 async function breakLink(linkId) {
     resetMessages();
+    const numericLinkId = Number(linkId);
+    links.value = links.value.filter((entry) => Number(entry?.id) !== numericLinkId);
+    listOptions.value = listOptions.value.filter((option) => Number(option?.link_id) !== numericLinkId);
 
-    try {
-        const response = await requestApi(() => window.axios.delete(`api/links/${linkId}`));
-        applyState(response.data, { syncSelection: true });
-        showStatus('Связь списков разорвана.');
-    } catch (error) {
-        if (isConnectivityError(error)) {
-            return;
-        }
-
-        showError(error);
+    const selectedOptionExists = listOptions.value.some((option) => Number(option?.owner_id) === Number(selectedOwnerId.value));
+    if (!selectedOptionExists) {
+        selectedOwnerId.value = Number(localUser.id);
+        persistLocalDefaultOwner(localUser.id);
+        lastPersistedOwnerId = Number(localUser.id);
     }
+
+    persistCurrentSyncStateCache();
+    queueBreakLink(linkId);
+    syncOfflineQueue().catch(() => {});
+    showStatus('\u0421\u0432\u044f\u0437\u044c \u0441\u043f\u0438\u0441\u043a\u043e\u0432 \u0440\u0430\u0437\u043e\u0440\u0432\u0430\u043d\u0430.');
 }
 
 async function saveProfile() {
     resetMessages();
     profileForm.loading = true;
 
-    try {
-        const response = await requestApi(() => window.axios.patch('api/profile', {
-            name: profileForm.name,
-            tag: profileForm.tag,
-            email: profileForm.email,
-        }));
+    const optimisticProfile = {
+        name: String(profileForm.name ?? '').trim(),
+        tag: normalizeProfileTagInput(profileForm.tag),
+        email: String(profileForm.email ?? '').trim(),
+    };
 
-        localUser.name = response.data.user.name;
-        localUser.tag = response.data.user.tag;
-        localUser.email = response.data.user.email;
-        showStatus('Профиль обновлен.');
-    } catch (error) {
-        if (isConnectivityError(error)) {
-            return;
-        }
-
-        showError(error);
-    } finally {
+    if (!optimisticProfile.name || !optimisticProfile.tag || !optimisticProfile.email) {
         profileForm.loading = false;
+        return;
     }
+
+    localUser.name = optimisticProfile.name;
+    localUser.tag = optimisticProfile.tag;
+    localUser.email = optimisticProfile.email;
+    profileForm.name = optimisticProfile.name;
+    profileForm.tag = optimisticProfile.tag;
+    profileForm.email = optimisticProfile.email;
+
+    queueProfileUpdate(optimisticProfile);
+    syncOfflineQueue().catch(() => {});
+    showStatus('\u041f\u0440\u043e\u0444\u0438\u043b\u044c \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d.');
+    profileForm.loading = false;
 }
 
 async function savePassword() {
     resetMessages();
     passwordForm.loading = true;
 
-    try {
-        await requestApi(() => window.axios.put('api/profile/password', {
-            current_password: passwordForm.current_password,
-            password: passwordForm.password,
-            password_confirmation: passwordForm.password_confirmation,
-        }));
+    const nextPasswordPayload = {
+        current_password: passwordForm.current_password,
+        password: passwordForm.password,
+        password_confirmation: passwordForm.password_confirmation,
+    };
 
-        passwordForm.current_password = '';
-        passwordForm.password = '';
-        passwordForm.password_confirmation = '';
-        showStatus('Пароль обновлен.');
-    } catch (error) {
-        if (isConnectivityError(error)) {
-            return;
-        }
-
-        showError(error);
-    } finally {
+    if (
+        !nextPasswordPayload.current_password
+        || !nextPasswordPayload.password
+        || nextPasswordPayload.password !== nextPasswordPayload.password_confirmation
+    ) {
         passwordForm.loading = false;
+        return;
     }
+
+    queuePasswordUpdate(nextPasswordPayload);
+    passwordForm.current_password = '';
+    passwordForm.password = '';
+    passwordForm.password_confirmation = '';
+
+    syncOfflineQueue().catch(() => {});
+    showStatus('\u041f\u0430\u0440\u043e\u043b\u044c \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d.');
+    passwordForm.loading = false;
 }
 
 function subscribeUserChannel() {
@@ -2507,8 +5142,7 @@ watch(selectedOwnerId, async (ownerId) => {
     persistLocalDefaultOwner(ownerId);
     hydrateSelectedListsFromCache();
 
-    await persistDefaultOwner(ownerId);
-    await syncOfflineQueue();
+    persistDefaultOwner(ownerId);
 
     subscribeListChannel(ownerId);
     await Promise.all([loadAllItems(), loadAllSuggestions()]);
@@ -2527,8 +5161,13 @@ watch(activeTab, async (tab) => {
     }
 });
 
+watch(isSkippableAnimationPlaying, (isActive) => {
+    applyScrollLockState(isActive);
+}, { immediate: true });
+
 onMounted(async () => {
     loadOfflineStateFromStorage();
+    applyCachedSyncState(true);
     hydrateSelectedListsFromCache();
 
     if (typeof window !== 'undefined') {
@@ -2538,14 +5177,11 @@ onMounted(async () => {
     await syncOfflineQueue();
     await refreshState(false, true);
     await Promise.all([loadAllItems(), loadAllSuggestions()]);
+    gamificationSyncEnabled = true;
 
     if (activeTab.value === 'profile') {
         await loadProductSuggestionStats();
     }
-
-    smartSuggestionsNoticeTimer = window.setTimeout(() => {
-        smartSuggestionsNoticeVisible.value = false;
-    }, 9000);
 
     subscribeUserChannel();
     subscribeListChannel(selectedOwnerId.value);
@@ -2595,14 +5231,34 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+    requestAnimationSkip();
     if (swipeUndoState.value) {
         stageSwipeAction(swipeUndoState.value);
         swipeUndoState.value = null;
     }
     clearSwipeUndoTimer();
     batchRemovingItemKeys.value = [];
+    batchCollapseHiddenItemKeys.value = [];
+    batchCollapseScene.value = null;
+    resetMegaCardImpactAnimation();
     batchRemovalAnimating.value = false;
     deleteFeedbackBursts.value = [];
+    xpStars.value = [];
+    xpLevelUpBackdropVisible.value = false;
+    xpLevelUpRaised.value = false;
+    xpLevelUpImpact.value = false;
+    xpRewardVisible.value = false;
+    xpProgressInstant.value = false;
+    pendingXpGain = 0;
+    xpGainProcessing = false;
+    lastXpGainSoundAt = 0;
+    clearEffectTimeouts();
+    clearXpGainSources();
+    clearSoundPools();
+    applyScrollLockState(false);
+    listSyncVersions.clear();
+    deletedItemTombstones.clear();
+    itemCardElements.clear();
     disposeToasts();
 
     if (itemsPollTimer) {
@@ -2621,9 +5277,12 @@ onBeforeUnmount(() => {
         clearInterval(queueSyncTimer);
     }
 
-    if (smartSuggestionsNoticeTimer) {
-        clearTimeout(smartSuggestionsNoticeTimer);
+    if (gamificationSyncTimer) {
+        clearTimeout(gamificationSyncTimer);
+        gamificationSyncTimer = null;
     }
+
+    gamificationSyncEnabled = false;
 
     if (queuedUpdateSyncTimer) {
         clearTimeout(queuedUpdateSyncTimer);
@@ -2654,7 +5313,7 @@ onBeforeUnmount(() => {
     <Head title="Dandash" />
 
     <div class="min-h-screen bg-[#19181a] text-[#fcfcfa]">
-        <div class="mx-auto flex min-h-screen w-full max-w-md flex-col px-4 pb-28 pt-4">
+        <div class="mx-auto flex min-h-screen w-full max-w-md flex-col px-4 pb-36 pt-4">
 
             <div
                 v-if="offlineMode"
@@ -2671,12 +5330,6 @@ onBeforeUnmount(() => {
                 </span>
             </div>
 
-            <div
-                v-if="activeTab !== 'profile' && smartSuggestionsNoticeVisible"
-                class="mb-3 rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-2 text-xs text-[#bcb7ba]"
-            >
-                Умные подсказки сейчас тестовые и различаются для аккаунтов.
-            </div>
 
             <section v-if="activeTab !== 'profile'" class="mb-4 flex items-center justify-between">
                 <div class="flex items-center gap-2">
@@ -2812,7 +5465,13 @@ onBeforeUnmount(() => {
                     @end="onItemsReorder('product', $event)"
                 >
                     <template #item="{ element: item }">
-                        <div :class="{ 'batch-remove-fly': isBatchRemovingItem(item) }">
+                        <div
+                            :ref="(element) => setItemCardRef('product', item, element)"
+                            :class="{
+                                'batch-remove-fly': isBatchRemovingItem(item),
+                                'batch-remove-hidden': isBatchCollapseHiddenItem(item),
+                            }"
+                        >
                             <SwipeListItem
                                 :is-completed="item.is_completed"
                                 @complete="toggleCompleted(item)"
@@ -2840,14 +5499,14 @@ onBeforeUnmount(() => {
                                     >
                                     <p
                                         v-else
-                                        class="text-sm font-medium"
+                                        class="m-0 text-sm font-medium"
                                         :class="item.is_completed ? 'text-[#6e6a6d] line-through decoration-[#6e6a6d]' : 'text-[#fcfcfa]'"
                                     >
                                         {{ getProductDisplayText(item) }}
                                     </p>
                                     <p
                                         v-if="formatProductMeasure(item)"
-                                        class="text-xs"
+                                        class="m-0 text-xs"
                                         :class="item.is_completed ? 'text-[#6e6a6d]' : 'text-[#9f9a9d]'"
                                     >
                                         {{ formatProductMeasure(item) }}
@@ -2952,7 +5611,13 @@ onBeforeUnmount(() => {
                     @end="onItemsReorder('todo', $event)"
                 >
                     <template #item="{ element: item }">
-                        <div :class="{ 'batch-remove-fly': isBatchRemovingItem(item) }">
+                        <div
+                            :ref="(element) => setItemCardRef('todo', item, element)"
+                            :class="{
+                                'batch-remove-fly': isBatchRemovingItem(item),
+                                'batch-remove-hidden': isBatchCollapseHiddenItem(item),
+                            }"
+                        >
                             <SwipeListItem
                                 :is-completed="item.is_completed"
                                 @complete="toggleCompleted(item)"
@@ -2981,13 +5646,13 @@ onBeforeUnmount(() => {
                                         >
                                         <p
                                             v-else
-                                            class="text-sm font-medium"
+                                            class="m-0 text-sm font-medium"
                                             :class="item.is_completed ? 'text-[#6e6a6d] line-through decoration-[#6e6a6d]' : 'text-[#fcfcfa]'"
                                         >
                                             {{ item.text }}
                                         </p>
                                         <div class="mt-1 flex items-center justify-between gap-2">
-                                            <p class="text-xs" :class="item.is_completed ? 'text-[#6e6a6d]' : 'text-[#9f9a9d]'">
+                                            <p class="m-0 text-xs" :class="item.is_completed ? 'text-[#6e6a6d]' : 'text-[#9f9a9d]'">
                                                 {{ formatDueAt(item.due_at) }}
                                             </p>
                                             <div class="flex items-center gap-2">
@@ -3030,8 +5695,11 @@ onBeforeUnmount(() => {
                     <div class="mt-1 text-lg font-semibold text-[#fcfcfa]">
                         {{ localUser.name }}
                     </div>
-                    <div class="mt-1 text-xs text-[#9f9a9d]">
-                        @{{ localUser.tag || 'tag' }}
+                    <div class="mt-1 flex items-center gap-2 text-xs text-[#9f9a9d]">
+                        <span>@{{ localUser.tag || 'tag' }}</span>
+                        <span class="rounded-full border border-[#5b7fff]/40 bg-[#5b7fff]/12 px-2 py-0.5 text-[11px] font-semibold text-[#d8e7ff]">
+                            {{ '\u041f\u0440\u043e\u0434\u0443\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c: ' }}{{ productivityScore }}
+                        </span>
                     </div>
                 </div>
 
@@ -3140,7 +5808,7 @@ onBeforeUnmount(() => {
         <Transition name="todo-due-modal">
             <div
                 v-if="todoDueModalOpen"
-                class="fixed inset-0 z-50 flex items-end bg-[#19181a]/78 p-2.5 backdrop-blur-[2px]"
+                class="fixed inset-0 z-[120] flex items-end bg-[#19181a]/78 p-2.5 backdrop-blur-[2px]"
                 @click.self="closeTodoDueModal"
             >
                 <div class="mx-auto w-full max-w-md rounded-[28px] border border-[#403e41] bg-[#221f22] p-4 shadow-[0_24px_60px_rgba(0,0,0,0.45)]">
@@ -3200,6 +5868,44 @@ onBeforeUnmount(() => {
         >
 
         <div class="delete-burst-layer" aria-hidden="true">
+            <div v-if="batchCollapseScene" class="batch-collapse-scene">
+                <div
+                    v-for="incoming in batchCollapseScene.incoming"
+                    :key="`batch-collapse-incoming-${incoming.id}`"
+                    class="batch-collapse-incoming"
+                    :class="{ 'batch-collapse-incoming--active': batchCollapseScene.incomingActive }"
+                    :style="{
+                        left: `${incoming.x}px`,
+                        top: `${incoming.y}px`,
+                        width: `${incoming.width}px`,
+                        height: `${incoming.height}px`,
+                        '--collapse-dx': `${incoming.dx}px`,
+                        '--collapse-dy': `${incoming.dy}px`,
+                        '--collapse-delay': `${incoming.delay}ms`,
+                        '--collapse-duration': `${incoming.duration}ms`,
+                        '--collapse-target-scale': incoming.targetScale,
+                    }"
+                />
+
+                <div
+                    ref="megaCardRef"
+                    class="batch-collapse-mega"
+                    :class="{
+                        'batch-collapse-mega--whiten': batchCollapseScene.whitening,
+                        'batch-collapse-mega--glow': batchCollapseScene.glowing,
+                        'batch-collapse-mega--burst': batchCollapseScene.bursting,
+                    }"
+                    :style="{
+                        left: `${batchCollapseScene.x}px`,
+                        top: `${batchCollapseScene.y}px`,
+                        width: `${batchCollapseScene.width}px`,
+                        height: `${batchCollapseScene.height}px`,
+                        boxShadow: megaCardShadowStyle(batchCollapseScene),
+                        filter: megaCardFilterStyle(batchCollapseScene),
+                    }"
+                />
+            </div>
+
             <div
                 v-for="burst in deleteFeedbackBursts"
                 :key="`delete-burst-${burst.id}`"
@@ -3217,12 +5923,38 @@ onBeforeUnmount(() => {
                     }"
                 />
             </div>
+
+            <span
+                v-for="star in xpStars"
+                :key="`xp-star-${star.id}`"
+                class="xp-flow-star"
+                :class="{ 'xp-flow-star--active': star.active }"
+                :style="{
+                    left: `${star.x}px`,
+                    top: `${star.y}px`,
+                    '--star-dx': `${star.dx}px`,
+                    '--star-dy': `${star.dy}px`,
+                    '--star-delay': `${star.delay}ms`,
+                    '--star-duration': `${star.duration}ms`,
+                    '--star-size': `${star.size}px`,
+                    '--star-rotate': `${star.rotate}deg`,
+                }"
+            />
         </div>
+
+        <div
+            v-if="isSkippableAnimationPlaying"
+            class="animation-skip-layer"
+            aria-hidden="true"
+            @pointerdown.stop.prevent="handleAnimationSkipTap"
+            @touchmove.stop.prevent
+            @wheel.stop.prevent
+        />
 
         <Transition name="item">
             <div
                 v-if="swipeUndoState"
-                class="fixed bottom-24 left-1/2 z-40 flex w-[calc(100%-20px)] max-w-md -translate-x-1/2 items-center justify-between gap-3 rounded-2xl border border-[#403e41] bg-[#221f22]/95 px-3 py-2 text-xs text-[#fcfcfa] shadow-xl backdrop-blur"
+                class="fixed bottom-32 left-1/2 z-40 flex w-[calc(100%-20px)] max-w-md -translate-x-1/2 items-center justify-between gap-3 rounded-2xl border border-[#403e41] bg-[#221f22]/95 px-3 py-2 text-xs text-[#fcfcfa] shadow-xl backdrop-blur"
             >
                 <span class="truncate text-[#bcb7ba]">
                     {{ swipeUndoMessage }}
@@ -3272,8 +6004,44 @@ onBeforeUnmount(() => {
             </div>
         </TransitionGroup>
 
+        <Transition name="xp-backdrop">
+            <div
+                v-if="xpLevelUpBackdropVisible"
+                class="xp-levelup-backdrop"
+                aria-hidden="true"
+            />
+        </Transition>
+
+        <div
+            class="fixed bottom-[92px] left-1/2 z-50 w-[calc(100%-20px)] max-w-md -translate-x-1/2 px-1.5 transition-transform duration-500"
+            :class="xpLevelUpRaised ? 'translate-y-[-52px]' : 'translate-y-0'"
+        >
+            <Transition name="xp-reward">
+                <div v-if="xpRewardVisible" class="xp-reward-text">
+                    {{ `+${xpRewardAmount} \u043f\u0440\u043e\u0434\u0443\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u0438` }}
+                </div>
+            </Transition>
+
+            <div class="xp-progress-wrap" :class="{ 'xp-progress-wrap--impact': xpLevelUpImpact }">
+                <div ref="progressBarRef" class="xp-progress-track">
+                    <div
+                        class="xp-progress-fill"
+                        :class="{ 'xp-progress-fill--instant': xpProgressInstant }"
+                        :style="{
+                            width: `${xpProgressPercent}%`,
+                            '--xp-fill-duration': `${xpProgressFillDurationMs}ms`,
+                            '--xp-fill-start': xpProgressFillPalette.start,
+                            '--xp-fill-ring': xpProgressFillPalette.ring,
+                            '--xp-fill-glow': xpProgressFillPalette.glow,
+                        }"
+                    />
+                </div>
+            </div>
+        </div>
+
         <nav
-            class="fixed bottom-3 left-1/2 z-40 flex w-[calc(100%-20px)] max-w-md -translate-x-1/2 rounded-3xl border border-[#403e41] bg-[#221f22]/95 p-2 backdrop-blur"
+            class="fixed bottom-3 left-1/2 z-[90] flex w-[calc(100%-20px)] max-w-md -translate-x-1/2 rounded-3xl border border-[#403e41] bg-[#221f22]/95 p-2 backdrop-blur"
+            :class="isSkippableAnimationPlaying ? 'pointer-events-none' : ''"
         >
             <button
                 type="button"
@@ -3281,7 +6049,7 @@ onBeforeUnmount(() => {
                 :class="activeTab === 'products' ? 'bg-[#fcfcfa] text-[#19181a]' : 'text-[#bcb7ba]'"
                 @click="activeTab = 'products'"
             >
-                <ShoppingCart class="mb-1 h-4 w-4" />
+                <ShoppingCart class="bottom-menu-icon mb-1 h-4 w-4" />
                 Продукты
             </button>
             <button
@@ -3290,7 +6058,7 @@ onBeforeUnmount(() => {
                 :class="activeTab === 'todos' ? 'bg-[#fcfcfa] text-[#19181a]' : 'text-[#bcb7ba]'"
                 @click="activeTab = 'todos'"
             >
-                <Check class="mb-1 h-4 w-4" />
+                <Check class="bottom-menu-icon mb-1 h-4 w-4" />
                 Дела
             </button>
             <button
@@ -3299,13 +6067,13 @@ onBeforeUnmount(() => {
                 :class="activeTab === 'profile' ? 'bg-[#fcfcfa] text-[#19181a]' : 'text-[#bcb7ba]'"
                 @click="activeTab = 'profile'"
             >
-                <UserRound class="mb-1 h-4 w-4" />
+                <UserRound class="bottom-menu-icon mb-1 h-4 w-4" />
                 Профиль
             </button>
         </nav>
 
         <Transition name="app-modal">
-            <div v-if="shareModalOpen" class="fixed inset-0 z-50 bg-[#19181a]/90 p-2.5" @click.self="shareModalOpen = false">
+            <div v-if="shareModalOpen" class="fixed inset-0 z-[120] bg-[#19181a]/90 p-2.5" @click.self="shareModalOpen = false">
                 <div class="flex h-full flex-col rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                 <div class="mb-3 flex items-center justify-between">
                     <h2 class="text-base font-semibold">
@@ -3367,7 +6135,7 @@ onBeforeUnmount(() => {
         </Transition>
 
         <Transition name="app-modal">
-            <div v-if="inviteModalOpen" class="fixed inset-0 z-50 bg-[#19181a]/90 p-2.5" @click.self="inviteModalOpen = false">
+            <div v-if="inviteModalOpen" class="fixed inset-0 z-[120] bg-[#19181a]/90 p-2.5" @click.self="inviteModalOpen = false">
             <div class="flex h-full flex-col rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                 <div class="mb-3 flex items-center justify-between">
                     <h2 class="text-base font-semibold">
@@ -3473,7 +6241,7 @@ onBeforeUnmount(() => {
         </Transition>
 
         <Transition name="app-modal">
-            <div v-if="productStatsModalOpen" class="fixed inset-0 z-50 bg-[#19181a]/90 p-2.5" @click.self="productStatsModalOpen = false">
+            <div v-if="productStatsModalOpen" class="fixed inset-0 z-[120] bg-[#19181a]/90 p-2.5" @click.self="productStatsModalOpen = false">
                 <div class="flex h-full flex-col rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                     <div class="mb-3 flex items-center justify-between">
                         <h2 class="text-base font-semibold">{{ '\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u043f\u043e\u043a\u0443\u043f\u043e\u043a' }}</h2>
@@ -3483,9 +6251,33 @@ onBeforeUnmount(() => {
                     </div>
 
                     <p v-if="productSuggestionStatsLoading" class="text-xs text-[#9f9a9d]">{{ '\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435\u2026' }}</p>
-                    <p v-else-if="productSuggestionStats.length === 0" class="text-xs text-[#9f9a9d]">{{ '\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445 \u043f\u043e \u043f\u043e\u043a\u0443\u043f\u043a\u0430\u043c.' }}</p>
+                    <div v-else class="mb-3 grid grid-cols-2 gap-2">
+                        <div class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-2">
+                            <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">{{ '\u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e' }}</p>
+                            <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">{{ formatProductStatsSummaryNumber(productStatsSummary.total_added) }}</p>
+                        </div>
+                        <div class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-2">
+                            <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">{{ '\u041a\u0443\u043f\u043b\u0435\u043d\u043e' }}</p>
+                            <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">{{ formatProductStatsSummaryNumber(productStatsSummary.total_completed) }}</p>
+                        </div>
+                        <div class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-2">
+                            <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">{{ '\u0423\u043d\u0438\u043a\u0430\u043b\u044c\u043d\u044b\u0445' }}</p>
+                            <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">{{ formatProductStatsSummaryNumber(productStatsSummary.unique_products) }}</p>
+                        </div>
+                        <div class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-2">
+                            <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">{{ '\u041a \u043f\u043e\u043a\u0443\u043f\u043a\u0435' }}</p>
+                            <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">
+                                {{ formatProductStatsSummaryNumber(productStatsSummary.due_suggestions) }}
+                                <span class="text-[11px] font-medium text-[#9f9a9d]">/ {{ formatProductStatsSummaryNumber(productStatsSummary.upcoming_suggestions) }}</span>
+                            </p>
+                        </div>
+                        <p class="col-span-2 text-[11px] text-[#9f9a9d]">
+                            {{ '\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u044f\u044f \u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c:' }} {{ formatProductStatsDate(productStatsSummary.last_activity_at) }}
+                        </p>
+                    </div>
+                    <p v-if="!productSuggestionStatsLoading && productSuggestionStats.length === 0" class="text-xs text-[#9f9a9d]">{{ '\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445 \u043f\u043e \u043f\u043e\u043a\u0443\u043f\u043a\u0430\u043c.' }}</p>
 
-                    <div v-else class="flex-1 space-y-2 overflow-y-auto">
+                    <div v-if="!productSuggestionStatsLoading && productSuggestionStats.length > 0" class="flex-1 space-y-2 overflow-y-auto">
                         <div
                             v-for="entry in productSuggestionStats"
                             :key="`stats-modal-${entry.suggestion_key}`"
@@ -3608,6 +6400,10 @@ onBeforeUnmount(() => {
     touch-action: pan-y;
 }
 
+.bottom-menu-icon {
+    stroke-width: 2.65;
+}
+
 .drag-handle {
     cursor: grab;
     user-select: none;
@@ -3635,6 +6431,10 @@ onBeforeUnmount(() => {
     animation: batch-remove-fly 0.19s cubic-bezier(0.2, 0.85, 0.3, 1) forwards;
 }
 
+.batch-remove-hidden {
+    opacity: 0;
+}
+
 @keyframes batch-remove-fly {
     0% {
         opacity: 1;
@@ -3647,12 +6447,74 @@ onBeforeUnmount(() => {
     }
 }
 
+.batch-collapse-scene {
+    position: absolute;
+    inset: 0;
+}
+
+.batch-collapse-incoming,
+.batch-collapse-mega {
+    position: absolute;
+    border-radius: 16px;
+    border: 1px solid rgb(64 62 65 / 88%);
+    background: rgb(34 31 34 / 96%);
+}
+
+.batch-collapse-incoming {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.94;
+    transition-property: transform, opacity, filter;
+    transition-duration: var(--collapse-duration, 640ms);
+    transition-timing-function: cubic-bezier(0.2, 0.88, 0.34, 1);
+    transition-delay: var(--collapse-delay);
+}
+
+.batch-collapse-incoming--active {
+    opacity: 0;
+    filter: brightness(1.2);
+    transform: translate3d(var(--collapse-dx), var(--collapse-dy), 0) scale(var(--collapse-target-scale, 0.42));
+}
+
+.batch-collapse-mega {
+    box-shadow: 0 12px 32px rgb(0 0 0 / 26%);
+    transition:
+        background-color 1s cubic-bezier(0.2, 0.78, 0.32, 1),
+        border-color 1s cubic-bezier(0.2, 0.78, 0.32, 1),
+        box-shadow 0.36s cubic-bezier(0.2, 0.78, 0.32, 1),
+        transform 0.17s cubic-bezier(0.2, 0.78, 0.32, 1),
+        opacity 0.17s linear;
+}
+
+.batch-collapse-mega--whiten {
+    background: rgb(252 252 250 / 97%);
+    border-color: rgb(252 252 250 / 98%);
+}
+
+.batch-collapse-mega--glow {
+    box-shadow:
+        0 0 0 1px rgb(252 252 250 / 48%),
+        0 0 34px rgb(252 252 250 / 44%),
+        0 16px 40px rgb(0 0 0 / 34%);
+}
+
+.batch-collapse-mega--burst {
+    opacity: 0;
+    transform: scale(1.22);
+}
+
 .delete-burst-layer {
     position: fixed;
     inset: 0;
     z-index: 60;
     pointer-events: none;
     overflow: hidden;
+}
+
+.animation-skip-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    touch-action: none;
 }
 
 .delete-burst {
@@ -3675,6 +6537,136 @@ onBeforeUnmount(() => {
     animation-delay: var(--particle-delay);
 }
 
+.xp-flow-star {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: var(--star-size);
+    height: var(--star-size);
+    opacity: 0;
+    filter: drop-shadow(0 0 6px rgb(255 255 255 / 72%));
+    transform: translate3d(0, 0, 0) scale(0.95) rotate(var(--star-rotate));
+    transition-property: transform, opacity;
+    transition-duration: var(--star-duration), 220ms;
+    transition-timing-function: cubic-bezier(0.38, 0.04, 0.96, 1), linear;
+    transition-delay: var(--star-delay), var(--star-delay);
+    clip-path: polygon(
+        50% 0%,
+        61% 35%,
+        98% 35%,
+        68% 57%,
+        79% 91%,
+        50% 70%,
+        21% 91%,
+        32% 57%,
+        2% 35%,
+        39% 35%
+    );
+    background: radial-gradient(circle at 36% 30%, rgb(255 255 255 / 100%), rgb(255 255 255 / 86%));
+}
+
+.xp-flow-star--active {
+    opacity: 1;
+    transform: translate3d(var(--star-dx), var(--star-dy), 0) scale(0.45) rotate(calc(var(--star-rotate) + 72deg));
+}
+
+.xp-levelup-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    pointer-events: none;
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    background: rgb(12 15 24 / 18%);
+}
+
+.xp-progress-wrap {
+    border-radius: 9999px;
+    border: 1px solid rgb(64 62 65 / 88%);
+    background: rgb(34 31 34 / 92%);
+    padding: 5px;
+    box-shadow: 0 6px 20px rgb(0 0 0 / 24%);
+}
+
+.xp-progress-wrap--impact {
+    animation: xp-progress-impact 0.62s cubic-bezier(0.18, 1.25, 0.32, 1);
+}
+
+.xp-progress-track {
+    height: 8px;
+    width: 100%;
+    overflow: hidden;
+    border-radius: 9999px;
+    background: linear-gradient(180deg, rgb(44 41 44 / 92%), rgb(27 25 27 / 92%));
+}
+
+.xp-progress-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 9999px;
+    background: linear-gradient(90deg, var(--xp-fill-start, rgb(80 145 255 / 98%)), rgb(252 252 250 / 98%));
+    box-shadow:
+        0 0 0 1px var(--xp-fill-ring, rgb(183 216 255 / 42%)),
+        0 0 14px var(--xp-fill-glow, rgb(130 183 255 / 62%));
+    transition: width var(--xp-fill-duration, 240ms) cubic-bezier(0.18, 0.86, 0.28, 1);
+}
+
+.xp-progress-fill--instant {
+    transition: none;
+}
+
+.xp-reward-text {
+    margin-bottom: 8px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: rgb(231 242 255 / 98%);
+    text-shadow:
+        0 0 16px rgb(94 159 255 / 66%),
+        0 2px 8px rgb(0 0 0 / 45%);
+}
+
+.xp-backdrop-enter-active,
+.xp-backdrop-leave-active {
+    transition: opacity 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.xp-backdrop-enter-from,
+.xp-backdrop-leave-to {
+    opacity: 0;
+}
+
+.xp-reward-enter-active,
+.xp-reward-leave-active {
+    transition: opacity 0.22s ease, transform 0.32s cubic-bezier(0.2, 0.86, 0.32, 1);
+}
+
+.xp-reward-enter-from,
+.xp-reward-leave-to {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+}
+
+@keyframes xp-progress-impact {
+    0% {
+        transform: scale(1);
+    }
+
+    28% {
+        transform: scale(1.14);
+    }
+
+    56% {
+        transform: scale(0.95);
+    }
+
+    100% {
+        transform: scale(1);
+    }
+}
+
 @keyframes delete-burst-particle {
     0% {
         opacity: 1;
@@ -3687,6 +6679,7 @@ onBeforeUnmount(() => {
     }
 }
 </style>
+
 
 
 

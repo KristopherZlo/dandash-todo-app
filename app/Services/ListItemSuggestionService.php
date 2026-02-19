@@ -3,10 +3,15 @@
 namespace App\Services;
 
 use App\Models\ListItem;
+use App\Models\ListItemEvent;
 use App\Models\ListItemSuggestionState;
 use App\Services\ListItemSuggestions\SuggestionTextNormalizer;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class ListItemSuggestionService
 {
@@ -14,6 +19,7 @@ class ListItemSuggestionService
     private const DUE_RATIO_THRESHOLD = 0.9;
     private const UPCOMING_RATIO_THRESHOLD = 0.75;
     private const DAY_SECONDS = 86400;
+    private ?bool $eventsTableAvailable = null;
 
     public function __construct(
         private readonly SuggestionTextNormalizer $textNormalizer
@@ -25,18 +31,7 @@ class ListItemSuggestionService
      */
     public function suggestForOwner(int $ownerId, string $type, int $limit = 8, ?int $listLinkId = null): array
     {
-        $itemsQuery = ListItem::query()
-            ->forOwner($ownerId)
-            ->ofType($type)
-            ->orderBy('created_at');
-
-        if ($listLinkId) {
-            $itemsQuery->where('list_link_id', $listLinkId);
-        } else {
-            $itemsQuery->whereNull('list_link_id');
-        }
-
-        $items = $itemsQuery->get(['id', 'text', 'created_at', 'is_completed']);
+        $entries = $this->loadSuggestionEntriesForOwner($ownerId, $type, $listLinkId);
 
         $statesByKey = ListItemSuggestionState::query()
             ->forOwner($ownerId)
@@ -46,8 +41,14 @@ class ListItemSuggestionService
 
         $clusters = [];
 
-        foreach ($items as $item) {
-            $normalized = $this->textNormalizer->normalizeText((string) $item->text);
+        foreach ($entries as $entry) {
+            $text = trim((string) ($entry['text'] ?? ''));
+            $timestamp = $entry['timestamp'] ?? null;
+            if ($text === '' || ! $timestamp instanceof CarbonImmutable) {
+                continue;
+            }
+
+            $normalized = $this->textNormalizer->normalizeText($text);
 
             if ($normalized === '') {
                 continue;
@@ -61,7 +62,6 @@ class ListItemSuggestionService
                     'variants' => [],
                     'latest_text' => '',
                     'timestamps' => [],
-                    'has_active_incomplete' => false,
                 ];
 
                 $clusterIndex = array_key_last($clusters);
@@ -71,29 +71,15 @@ class ListItemSuggestionService
                 $clusters[$clusterIndex]['normalized_samples'][] = $normalized;
             }
 
-            $text = trim((string) $item->text);
-            if ($text !== '') {
-                $clusters[$clusterIndex]['variants'][$text] = ($clusters[$clusterIndex]['variants'][$text] ?? 0) + 1;
-                $clusters[$clusterIndex]['latest_text'] = $text;
-            }
-
-            if ($item->created_at !== null) {
-                $clusters[$clusterIndex]['timestamps'][] = $item->created_at->toImmutable();
-            }
-
-            if ($type === ListItem::TYPE_PRODUCT && ! (bool) $item->is_completed) {
-                $clusters[$clusterIndex]['has_active_incomplete'] = true;
-            }
+            $clusters[$clusterIndex]['variants'][$text] = ($clusters[$clusterIndex]['variants'][$text] ?? 0) + 1;
+            $clusters[$clusterIndex]['latest_text'] = $text;
+            $clusters[$clusterIndex]['timestamps'][] = $timestamp;
         }
 
         $now = now()->toImmutable();
         $suggestions = [];
 
         foreach ($clusters as $cluster) {
-            if ($type === ListItem::TYPE_PRODUCT && ($cluster['has_active_incomplete'] ?? false)) {
-                continue;
-            }
-
             $state = $this->resolveClusterStateForSamples($statesByKey, $cluster['normalized_samples']);
             $resetAt = $state?->reset_at?->toImmutable();
 
@@ -185,13 +171,10 @@ class ListItemSuggestionService
             return $right['occurrences'] <=> $left['occurrences'];
         });
 
-        $candidates = $suggestions !== []
-            ? $suggestions
-            : ($listLinkId ? [] : $this->mockSuggestionsForOwner($ownerId, $type, $limit, $now));
+        $filtered = $this->filterSuppressedSuggestions($ownerId, $type, $suggestions, $now);
+        $deduplicated = $this->deduplicateSuggestions($filtered);
 
-        $filtered = $this->filterSuppressedSuggestions($ownerId, $type, $candidates, $now);
-
-        return array_slice($filtered, 0, max(1, $limit));
+        return array_slice($deduplicated, 0, max(1, $limit));
     }
 
 
@@ -201,21 +184,7 @@ class ListItemSuggestionService
     public function productStatsForOwner(int $ownerId, int $limit = 50, ?int $listLinkId = null): array
     {
         $limit = max(1, min(200, $limit));
-
-        $itemsQuery = ListItem::query()
-            ->forOwner($ownerId)
-            ->ofType(ListItem::TYPE_PRODUCT)
-            ->where('is_completed', true)
-            ->orderBy('completed_at')
-            ->orderBy('created_at');
-
-        if ($listLinkId) {
-            $itemsQuery->where('list_link_id', $listLinkId);
-        } else {
-            $itemsQuery->whereNull('list_link_id');
-        }
-
-        $items = $itemsQuery->get(['id', 'text', 'created_at', 'completed_at']);
+        $entries = $this->loadProductStatsEntriesForOwner($ownerId, $listLinkId);
 
         $statesByKey = ListItemSuggestionState::query()
             ->forOwner($ownerId)
@@ -225,8 +194,14 @@ class ListItemSuggestionService
 
         $clusters = [];
 
-        foreach ($items as $item) {
-            $normalized = $this->textNormalizer->normalizeText((string) $item->text);
+        foreach ($entries as $entry) {
+            $text = trim((string) ($entry['text'] ?? ''));
+            $timestamp = $entry['timestamp'] ?? null;
+            if ($text === '' || ! $timestamp instanceof CarbonImmutable) {
+                continue;
+            }
+
+            $normalized = $this->textNormalizer->normalizeText($text);
             if ($normalized === '') {
                 continue;
             }
@@ -244,16 +219,6 @@ class ListItemSuggestionService
 
             if (! in_array($normalized, $clusters[$clusterIndex]['normalized_samples'], true)) {
                 $clusters[$clusterIndex]['normalized_samples'][] = $normalized;
-            }
-
-            $timestamp = $item->completed_at?->toImmutable() ?? $item->created_at?->toImmutable();
-            if ($timestamp === null) {
-                continue;
-            }
-
-            $text = trim((string) $item->text);
-            if ($text === '') {
-                continue;
             }
 
             $clusters[$clusterIndex]['entries'][] = [
@@ -360,6 +325,68 @@ class ListItemSuggestionService
         return array_slice($stats, 0, $limit);
     }
 
+    /**
+     * @return array{stats: array<int, array<string, mixed>>, summary: array<string, mixed>}
+     */
+    public function productStatsPayloadForOwner(int $ownerId, int $limit = 50, ?int $listLinkId = null): array
+    {
+        $stats = $this->productStatsForOwner($ownerId, $limit, $listLinkId);
+
+        $addedCount = $this->countEventsForOwner(
+            $ownerId,
+            ListItem::TYPE_PRODUCT,
+            ListItemEvent::EVENT_ADDED,
+            $listLinkId
+        );
+        $completedCount = $this->countEventsForOwner(
+            $ownerId,
+            ListItem::TYPE_PRODUCT,
+            ListItemEvent::EVENT_COMPLETED,
+            $listLinkId
+        );
+        $uniqueProducts = $this->uniqueEventKeysForOwner($ownerId, ListItem::TYPE_PRODUCT, $listLinkId);
+        $lastActivityAt = $this->lastEventActivityForOwner($ownerId, ListItem::TYPE_PRODUCT, $listLinkId);
+
+        if ($addedCount === 0) {
+            $itemsQuery = ListItem::query()
+                ->forOwner($ownerId)
+                ->ofType(ListItem::TYPE_PRODUCT);
+            $this->applyListLinkScope($itemsQuery, $listLinkId);
+            $addedCount = (int) $itemsQuery->count();
+        }
+
+        if ($completedCount === 0) {
+            $itemsQuery = ListItem::query()
+                ->forOwner($ownerId)
+                ->ofType(ListItem::TYPE_PRODUCT)
+                ->where('is_completed', true);
+            $this->applyListLinkScope($itemsQuery, $listLinkId);
+            $completedCount = (int) $itemsQuery->count();
+        }
+
+        if ($uniqueProducts === 0) {
+            $uniqueProducts = count($stats);
+        }
+
+        $activeSuggestions = $this->suggestForOwner($ownerId, ListItem::TYPE_PRODUCT, 50, $listLinkId);
+        $dueCount = count(array_filter(
+            $activeSuggestions,
+            static fn (array $entry): bool => (bool) ($entry['is_due'] ?? false),
+        ));
+
+        return [
+            'stats' => $stats,
+            'summary' => [
+                'total_added' => $addedCount,
+                'total_completed' => $completedCount,
+                'unique_products' => $uniqueProducts,
+                'due_suggestions' => $dueCount,
+                'upcoming_suggestions' => max(0, count($activeSuggestions) - $dueCount),
+                'last_activity_at' => $lastActivityAt?->toISOString(),
+            ],
+        ];
+    }
+
     public function resetSuggestionData(int $ownerId, string $type, string $suggestionKey): void
     {
         $normalizedKey = $this->textNormalizer->normalizeSuggestionKey($suggestionKey);
@@ -428,6 +455,288 @@ class ListItemSuggestionService
         $state->hidden_until = $now->addSeconds($hideSeconds);
         $state->retired_at = null;
         $state->save();
+    }
+
+    public function recordAddedEvent(ListItem $item): void
+    {
+        $this->recordEvent(
+            $item,
+            ListItemEvent::EVENT_ADDED,
+            $item->created_at?->toImmutable() ?? now()->toImmutable(),
+        );
+    }
+
+    public function recordCompletedEvent(ListItem $item): void
+    {
+        $this->recordEvent(
+            $item,
+            ListItemEvent::EVENT_COMPLETED,
+            $item->completed_at?->toImmutable() ?? now()->toImmutable(),
+        );
+    }
+
+    /**
+     * @return array<int, array{text: string, timestamp: CarbonImmutable}>
+     */
+    private function loadSuggestionEntriesForOwner(int $ownerId, string $type, ?int $listLinkId = null): array
+    {
+        if ($this->canUseEventsTable()) {
+            try {
+                $events = $this->eventQueryForOwner($ownerId, $type, $listLinkId)
+                    ->ofEventType(ListItemEvent::EVENT_ADDED)
+                    ->orderBy('occurred_at')
+                    ->get(['text', 'occurred_at']);
+
+                if ($events->isNotEmpty()) {
+                    return $events
+                        ->map(static function (ListItemEvent $event): ?array {
+                            $text = trim((string) $event->text);
+                            $timestamp = $event->occurred_at?->toImmutable();
+                            if ($text === '' || ! $timestamp instanceof CarbonImmutable) {
+                                return null;
+                            }
+
+                            return [
+                                'text' => $text,
+                                'timestamp' => $timestamp,
+                            ];
+                        })
+                        ->filter()
+                        ->values()
+                        ->all();
+                }
+            } catch (QueryException $exception) {
+                $this->markEventsUnavailable($exception);
+            }
+        }
+
+        $itemsQuery = ListItem::query()
+            ->forOwner($ownerId)
+            ->ofType($type)
+            ->orderBy('created_at');
+        $this->applyListLinkScope($itemsQuery, $listLinkId);
+
+        return $itemsQuery
+            ->get(['text', 'created_at'])
+            ->map(static function (ListItem $item): ?array {
+                $text = trim((string) $item->text);
+                $timestamp = $item->created_at?->toImmutable();
+                if ($text === '' || ! $timestamp instanceof CarbonImmutable) {
+                    return null;
+                }
+
+                return [
+                    'text' => $text,
+                    'timestamp' => $timestamp,
+                ];
+            })
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array<int, array{text: string, timestamp: CarbonImmutable}>
+     */
+    private function loadProductStatsEntriesForOwner(int $ownerId, ?int $listLinkId = null): array
+    {
+        if ($this->canUseEventsTable()) {
+            try {
+                $events = $this->eventQueryForOwner($ownerId, ListItem::TYPE_PRODUCT, $listLinkId)
+                    ->ofEventType(ListItemEvent::EVENT_COMPLETED)
+                    ->orderBy('occurred_at')
+                    ->get(['text', 'occurred_at']);
+
+                if ($events->isNotEmpty()) {
+                    return $events
+                        ->map(static function (ListItemEvent $event): ?array {
+                            $text = trim((string) $event->text);
+                            $timestamp = $event->occurred_at?->toImmutable();
+                            if ($text === '' || ! $timestamp instanceof CarbonImmutable) {
+                                return null;
+                            }
+
+                            return [
+                                'text' => $text,
+                                'timestamp' => $timestamp,
+                            ];
+                        })
+                        ->filter()
+                        ->values()
+                        ->all();
+                }
+            } catch (QueryException $exception) {
+                $this->markEventsUnavailable($exception);
+            }
+        }
+
+        $itemsQuery = ListItem::query()
+            ->forOwner($ownerId)
+            ->ofType(ListItem::TYPE_PRODUCT)
+            ->where('is_completed', true)
+            ->orderBy('completed_at')
+            ->orderBy('created_at');
+        $this->applyListLinkScope($itemsQuery, $listLinkId);
+
+        return $itemsQuery
+            ->get(['text', 'created_at', 'completed_at'])
+            ->map(static function (ListItem $item): ?array {
+                $text = trim((string) $item->text);
+                $timestamp = $item->completed_at?->toImmutable() ?? $item->created_at?->toImmutable();
+                if ($text === '' || ! $timestamp instanceof CarbonImmutable) {
+                    return null;
+                }
+
+                return [
+                    'text' => $text,
+                    'timestamp' => $timestamp,
+                ];
+            })
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    private function countEventsForOwner(int $ownerId, string $type, string $eventType, ?int $listLinkId = null): int
+    {
+        if (! $this->canUseEventsTable()) {
+            return 0;
+        }
+
+        try {
+            return (int) $this->eventQueryForOwner($ownerId, $type, $listLinkId)
+                ->ofEventType($eventType)
+                ->count();
+        } catch (QueryException $exception) {
+            $this->markEventsUnavailable($exception);
+            return 0;
+        }
+    }
+
+    private function uniqueEventKeysForOwner(int $ownerId, string $type, ?int $listLinkId = null): int
+    {
+        if (! $this->canUseEventsTable()) {
+            return 0;
+        }
+
+        try {
+            return (int) $this->eventQueryForOwner($ownerId, $type, $listLinkId)
+                ->where('normalized_text', '!=', '')
+                ->distinct()
+                ->count('normalized_text');
+        } catch (QueryException $exception) {
+            $this->markEventsUnavailable($exception);
+            return 0;
+        }
+    }
+
+    private function lastEventActivityForOwner(int $ownerId, string $type, ?int $listLinkId = null): ?CarbonImmutable
+    {
+        if (! $this->canUseEventsTable()) {
+            return null;
+        }
+
+        try {
+            $value = $this->eventQueryForOwner($ownerId, $type, $listLinkId)
+                ->max('occurred_at');
+        } catch (QueryException $exception) {
+            $this->markEventsUnavailable($exception);
+            return null;
+        }
+
+        if ($value === null) {
+            return null;
+        }
+
+        return CarbonImmutable::parse((string) $value);
+    }
+
+    private function recordEvent(ListItem $item, string $eventType, CarbonImmutable $occurredAt): void
+    {
+        if (! $this->canUseEventsTable()) {
+            return;
+        }
+
+        $text = trim((string) $item->text);
+        if ($text === '') {
+            return;
+        }
+
+        $normalized = $this->textNormalizer->normalizeText($text);
+        if ($normalized === '') {
+            return;
+        }
+
+        try {
+            ListItemEvent::query()->create([
+                'owner_id' => (int) $item->owner_id,
+                'list_link_id' => $item->list_link_id ? (int) $item->list_link_id : null,
+                'type' => (string) $item->type,
+                'event_type' => $eventType,
+                'text' => $text,
+                'normalized_text' => $normalized,
+                'occurred_at' => $occurredAt,
+                'source_item_id' => (int) $item->id,
+                'meta' => [
+                    'is_completed' => (bool) $item->is_completed,
+                    'sort_order' => (int) ($item->sort_order ?? 0),
+                ],
+            ]);
+        } catch (QueryException $exception) {
+            $this->markEventsUnavailable($exception);
+        }
+    }
+
+    private function eventQueryForOwner(int $ownerId, string $type, ?int $listLinkId = null): Builder
+    {
+        $query = ListItemEvent::query()
+            ->forOwner($ownerId)
+            ->ofType($type);
+
+        $this->applyListLinkScope($query, $listLinkId);
+
+        return $query;
+    }
+
+    private function applyListLinkScope(Builder $query, ?int $listLinkId = null): void
+    {
+        if ($listLinkId) {
+            $query->where('list_link_id', $listLinkId);
+            return;
+        }
+
+        $query->whereNull('list_link_id');
+    }
+
+    private function canUseEventsTable(): bool
+    {
+        if ($this->eventsTableAvailable !== null) {
+            return $this->eventsTableAvailable;
+        }
+
+        try {
+            $this->eventsTableAvailable = Schema::hasTable('list_item_events');
+        } catch (\Throwable $exception) {
+            $this->eventsTableAvailable = false;
+            Log::warning('Failed to detect list_item_events table availability.', [
+                'error' => $exception->getMessage(),
+            ]);
+        }
+
+        return $this->eventsTableAvailable;
+    }
+
+    private function markEventsUnavailable(QueryException $exception): void
+    {
+        if ($this->eventsTableAvailable === false) {
+            return;
+        }
+
+        $this->eventsTableAvailable = false;
+
+        Log::warning('List item events storage is unavailable, using fallback suggestion source.', [
+            'error' => $exception->getMessage(),
+        ]);
     }
 
 
@@ -582,54 +891,42 @@ class ListItemSuggestionService
     }
 
     /**
+     * @param array<int, array<string, mixed>> $suggestions
      * @return array<int, array<string, mixed>>
      */
-    private function mockSuggestionsForOwner(int $ownerId, string $type, int $limit, CarbonImmutable $now): array
+    private function deduplicateSuggestions(array $suggestions): array
     {
-        $productPresets = [
-            ['Творог', 'Кефир', 'Бананы', 'Яйца', 'Хлеб'],
-            ['Овсянка', 'Греческий йогурт', 'Сыр', 'Помидоры', 'Кофе'],
-            ['Куриное филе', 'Рис', 'Огурцы', 'Апельсины', 'Орехи'],
-        ];
+        $deduplicated = [];
+        $seen = [];
 
-        $todoPresets = [
-            ['Позвонить маме', 'Оплатить интернет', 'Полить цветы', 'Сделать зарядку'],
-            ['Заказать воду', 'Проверить документы', 'Записаться к врачу', 'Вынести мусор'],
-            ['Проверить бюджет', 'Купить корм коту', 'Сделать уборку', 'Подготовить стирку'],
-        ];
+        foreach ($suggestions as $suggestion) {
+            $suggestionKey = is_string($suggestion['suggestion_key'] ?? null)
+                ? $this->textNormalizer->normalizeSuggestionKey((string) $suggestion['suggestion_key'])
+                : '';
 
-        $presetIndex = max(0, $ownerId % 3);
-        $pool = $type === ListItem::TYPE_PRODUCT
-            ? $productPresets[$presetIndex]
-            : $todoPresets[$presetIndex];
+            if ($suggestionKey === '') {
+                $suggestionKey = $this->textNormalizer->normalizeSuggestionKey((string) ($suggestion['suggested_text'] ?? ''));
+            }
 
-        $suggestions = [];
+            if ($suggestionKey === '') {
+                $suggestionKey = mb_strtolower(trim((string) ($suggestion['suggested_text'] ?? '')), 'UTF-8');
+            }
 
-        foreach (array_slice($pool, 0, max(1, $limit)) as $index => $text) {
-            $nextExpectedAt = $now->addMinutes((($index + 1) * 45));
-            $secondsUntilExpected = max(0, $nextExpectedAt->getTimestamp() - $now->getTimestamp());
-            $isDue = $index === 0;
+            if ($suggestionKey !== '' && isset($seen[$suggestionKey])) {
+                continue;
+            }
 
-            $suggestions[] = [
-                'suggested_text' => $text,
-                'suggestion_key' => $this->textNormalizer->normalizeSuggestionKey($text),
-                'type' => $type,
-                'occurrences' => 3 + $index,
-                'average_interval_seconds' => 86400 + ($index * 7200),
-                'last_added_at' => $now->subDays($index + 1)->toISOString(),
-                'next_expected_at' => $nextExpectedAt->toISOString(),
-                'seconds_until_expected' => $isDue ? 0 : $secondsUntilExpected,
-                'is_due' => $isDue,
-                'due_ratio' => $isDue ? 1.0 : 0.72,
-                'confidence' => 0.77 - ($index * 0.05),
-                'variants' => [$text],
-                'is_mock' => true,
-            ];
+            if ($suggestionKey !== '') {
+                $seen[$suggestionKey] = true;
+            }
+
+            $deduplicated[] = $suggestion;
         }
 
-        return $suggestions;
+        return $deduplicated;
     }
 }
+
 
 
 

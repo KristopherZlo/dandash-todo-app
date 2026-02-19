@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Auth;
 
+use App\Models\RegistrationCode;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -18,9 +19,15 @@ class RegistrationTest extends TestCase
 
     public function test_new_users_can_register(): void
     {
+        RegistrationCode::query()->create([
+            'code' => 'WELCOME26',
+        ]);
+
         $response = $this->post('/register', [
             'name' => 'Test User',
+            'tag' => 'test_user',
             'email' => 'test@example.com',
+            'registration_code' => 'WELCOME26',
             'password' => 'password',
             'password_confirmation' => 'password',
         ]);

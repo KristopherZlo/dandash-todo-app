@@ -48,6 +48,27 @@ class ListSyncService
             'links' => $this->getLinks($user)->values()->all(),
             'list_options' => $listOptions->all(),
             'default_owner_id' => $this->resolveDefaultOwnerId($user, $listOptions),
+            'gamification' => $this->getGamificationState($user),
+        ];
+    }
+
+    public function getGamificationState(User $user): array
+    {
+        $xpProgress = (float) ($user->xp_progress ?? 0.0);
+        $rewardHistory = array_values(array_filter(
+            array_map(
+                static fn (mixed $entry): int => max(0, (int) $entry),
+                is_array($user->productivity_reward_history) ? $user->productivity_reward_history : []
+            ),
+            static fn (int $entry): bool => $entry > 0
+        ));
+
+        return [
+            'xp_progress' => max(0.0, min(0.999999, $xpProgress)),
+            'productivity_score' => max(0, (int) ($user->productivity_score ?? 0)),
+            'productivity_reward_history' => $rewardHistory,
+            'xp_color_seed' => max(1, (int) ($user->xp_color_seed ?? 1)),
+            'updated_at_ms' => $user->gamification_updated_at?->valueOf(),
         ];
     }
 
