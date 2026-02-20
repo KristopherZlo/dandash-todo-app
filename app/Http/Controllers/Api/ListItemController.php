@@ -153,11 +153,13 @@ class ListItemController extends Controller
     {
         $validated = $request->validate([
             'owner_id' => ['required', 'integer', 'exists:users,id'],
+            'type' => ['nullable', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
             'link_id' => ['nullable', 'integer', 'exists:list_links,id'],
             'limit' => ['nullable', 'integer', 'min:1', 'max:200'],
         ]);
 
         $ownerId = (int) $validated['owner_id'];
+        $type = (string) ($validated['type'] ?? ListItem::TYPE_PRODUCT);
         $linkId = isset($validated['link_id']) ? (int) $validated['link_id'] : null;
         $limit = (int) ($validated['limit'] ?? 50);
 
@@ -169,7 +171,7 @@ class ListItemController extends Controller
         }
 
         return response()->json(
-            $this->listItemSuggestionService->productStatsPayloadForOwner($ownerId, $limit, $linkId)
+            $this->listItemSuggestionService->suggestionStatsPayloadForOwner($ownerId, $type, $limit, $linkId)
         );
     }
 

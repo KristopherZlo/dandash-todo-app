@@ -89,6 +89,7 @@ const searchResults = ref([]);
 const searchBusy = ref(false);
 
 const productStatsModalOpen = ref(false);
+const suggestionStatsType = ref('product');
 const productSuggestionsOpen = ref(true);
 const todoSuggestionsOpen = ref(true);
 const batchRemovingItemKeys = ref([]);
@@ -117,6 +118,7 @@ const productSuggestionStats = ref([]);
 const productStatsSummary = ref({
     total_added: 0,
     total_completed: 0,
+    unique_items: 0,
     unique_products: 0,
     due_suggestions: 0,
     upcoming_suggestions: 0,
@@ -225,6 +227,8 @@ const itemCardElements = new Map();
 const soundPools = new Map();
 const listSyncVersions = new Map();
 const deletedItemTombstones = new Map();
+const recentLocalMutationsByList = new Map();
+const blockedSuggestionRefreshTypes = new Set();
 const xpGainSources = new Map();
 const xpGainSourceCleanupTimeouts = new Map();
 let megaCardImpactAnimation = null;
@@ -422,6 +426,8 @@ const XP_GAIN_SOUND_THROTTLE_MS = 90;
 const SOUND_POOL_LIMIT_PER_KEY = 6;
 const SOUND_SKIP_MUTE_MS = 3000;
 const ITEM_DELETE_TOMBSTONE_TTL_MS = 180000;
+const ITEM_DELETE_TOMBSTONE_SERVER_SKEW_MS = 1500;
+const LOCAL_LIST_MUTATION_HOLD_MS = 4500;
 const DASHBOARD_SOUND_PATHS = Object.freeze({
     // Put your custom files into: public/sounds/dashboard/
     white_card_appear: 'sounds/dashboard/white-card-appear.mp3',
@@ -441,6 +447,10 @@ const COALESCED_UPDATE_KEYS = new Set([
     'priority',
 ]);
 const resolvedSoundUrlCache = new Map();
+
+function normalizeSuggestionStatsType(value) {
+    return String(value ?? '') === 'todo' ? 'todo' : 'product';
+}
 
 function getSuggestionKey(suggestion) {
     if (typeof suggestion?.suggestion_key === 'string' && suggestion.suggestion_key.trim() !== '') {
@@ -530,9 +540,10 @@ function suggestionsCacheKey(ownerId, type, linkId = undefined) {
     return listCacheKey(ownerId, type, resolveLinkIdForOwner(ownerId, linkId));
 }
 
-function productStatsCacheKey(ownerId, linkId = undefined) {
+function suggestionStatsCacheKey(ownerId, type, linkId = undefined) {
     const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
-    return `${Number(ownerId)}:${normalizedLinkId ? `link-${normalizedLinkId}` : 'personal'}`;
+    const normalizedType = normalizeSuggestionStatsType(type);
+    return `${Number(ownerId)}:${normalizedLinkId ? `link-${normalizedLinkId}` : 'personal'}:${normalizedType}`;
 }
 
 function suggestionDeduplicationKey(suggestion) {
@@ -573,16 +584,21 @@ function normalizeSuggestions(entries) {
     return deduplicated;
 }
 
-function normalizeProductStatsPayload(payload) {
+function normalizeSuggestionStatsPayload(payload) {
     const source = asPlainObject(payload);
     const rawSummary = asPlainObject(source.summary);
+    const uniqueItems = Math.max(
+        0,
+        Number(rawSummary.unique_items ?? rawSummary.unique_products ?? rawSummary.unique_todos) || 0,
+    );
 
     return {
         stats: cloneEntries(source.stats),
         summary: {
             total_added: Math.max(0, Number(rawSummary.total_added) || 0),
             total_completed: Math.max(0, Number(rawSummary.total_completed) || 0),
-            unique_products: Math.max(0, Number(rawSummary.unique_products) || 0),
+            unique_items: uniqueItems,
+            unique_products: Math.max(0, Number(rawSummary.unique_products ?? uniqueItems) || 0),
             due_suggestions: Math.max(0, Number(rawSummary.due_suggestions) || 0),
             upcoming_suggestions: Math.max(0, Number(rawSummary.upcoming_suggestions) || 0),
             last_activity_at: typeof rawSummary.last_activity_at === 'string' ? rawSummary.last_activity_at : null,
@@ -621,15 +637,27 @@ function writeSuggestionsToCache(ownerId, type, suggestions, linkId = undefined)
     }
 }
 
-function readProductStatsFromCache(ownerId, linkId = undefined) {
-    const key = productStatsCacheKey(ownerId, linkId);
-    return normalizeProductStatsPayload(cachedProductStatsByList.value[key]);
+function readSuggestionStatsFromCache(ownerId, type, linkId = undefined) {
+    const normalizedType = normalizeSuggestionStatsType(type);
+    const key = suggestionStatsCacheKey(ownerId, normalizedType, linkId);
+    const exactPayload = cachedProductStatsByList.value[key];
+    if (exactPayload !== undefined) {
+        return normalizeSuggestionStatsPayload(exactPayload);
+    }
+
+    if (normalizedType === 'product') {
+        const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+        const legacyKey = `${Number(ownerId)}:${normalizedLinkId ? `link-${normalizedLinkId}` : 'personal'}`;
+        return normalizeSuggestionStatsPayload(cachedProductStatsByList.value[legacyKey]);
+    }
+
+    return normalizeSuggestionStatsPayload(undefined);
 }
 
-function writeProductStatsToCache(ownerId, payload, linkId = undefined) {
-    const key = productStatsCacheKey(ownerId, linkId);
-    const normalized = normalizeProductStatsPayload(payload);
-    const previous = normalizeProductStatsPayload(cachedProductStatsByList.value[key]);
+function writeSuggestionStatsToCache(ownerId, type, payload, linkId = undefined) {
+    const key = suggestionStatsCacheKey(ownerId, type, linkId);
+    const normalized = normalizeSuggestionStatsPayload(payload);
+    const previous = normalizeSuggestionStatsPayload(cachedProductStatsByList.value[key]);
     const changed = JSON.stringify(previous) !== JSON.stringify(normalized);
 
     if (changed) {
@@ -637,7 +665,10 @@ function writeProductStatsToCache(ownerId, payload, linkId = undefined) {
         persistProductStatsCache();
     }
 
-    if (isCurrentListContext(ownerId, resolveLinkIdForOwner(ownerId, linkId))) {
+    if (
+        normalizeSuggestionStatsType(type) === normalizeSuggestionStatsType(suggestionStatsType.value)
+        && isCurrentListContext(ownerId, resolveLinkIdForOwner(ownerId, linkId))
+    ) {
         productSuggestionStats.value = normalized.stats;
         productStatsSummary.value = normalized.summary;
     }
@@ -893,6 +924,36 @@ function bumpListSyncVersion(ownerId, type, linkId = undefined) {
     const nextVersion = getListSyncVersion(ownerId, type, linkId) + 1;
     listSyncVersions.set(versionKey, nextVersion);
     return nextVersion;
+}
+
+function listMutationGuardKey(ownerId, type, linkId = undefined) {
+    const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    return listCacheKey(ownerId, type, resolvedLinkId);
+}
+
+function markListMutated(ownerId, type, linkId = undefined, atMs = Date.now()) {
+    const mutationAtMs = Number(atMs);
+    if (!Number.isFinite(mutationAtMs)) {
+        return;
+    }
+
+    recentLocalMutationsByList.set(listMutationGuardKey(ownerId, type, linkId), mutationAtMs);
+}
+
+function hasRecentListMutation(ownerId, type, linkId = undefined, nowMs = Date.now()) {
+    const guardKey = listMutationGuardKey(ownerId, type, linkId);
+    const mutationAtMs = Number(recentLocalMutationsByList.get(guardKey) ?? 0);
+    if (!Number.isFinite(mutationAtMs) || mutationAtMs <= 0) {
+        recentLocalMutationsByList.delete(guardKey);
+        return false;
+    }
+
+    if ((Number(nowMs) - mutationAtMs) > LOCAL_LIST_MUTATION_HOLD_MS) {
+        recentLocalMutationsByList.delete(guardKey);
+        return false;
+    }
+
+    return true;
 }
 
 function deletedItemTombstoneKey(ownerId, type, itemId, linkId = undefined) {
@@ -1936,7 +1997,7 @@ function normalizeItems(items, previousItems = [], context = {}) {
         const previousUpdatedAtMs = parseComparableTimestampMs(previousItem.updated_at);
         const nextUpdatedAtMs = parseComparableTimestampMs(normalized.updated_at);
         const shouldKeepPrevious = previousUpdatedAtMs !== null
-            && (nextUpdatedAtMs === null || previousUpdatedAtMs > nextUpdatedAtMs);
+            && (nextUpdatedAtMs === null || previousUpdatedAtMs >= nextUpdatedAtMs);
 
         if (!shouldKeepPrevious) {
             return normalized;
@@ -1957,12 +2018,74 @@ function hasListSyncConflict(ownerId, type, linkId = undefined, expectedVersion 
         && getListSyncVersion(ownerId, type, linkId) !== Number(expectedVersion);
 
     return hasVersionDrift
+        || hasRecentListMutation(ownerId, type, linkId)
         || hasPendingOperations(ownerId, type, linkId)
         || hasPendingSwipeAction(ownerId, type, linkId);
 }
 
+function isWhiteCardAnimationActive() {
+    return Boolean(batchCollapseScene.value);
+}
+
+function markSuggestionRefreshBlocked(type) {
+    const normalizedType = String(type ?? '').trim();
+    if (!normalizedType) {
+        return;
+    }
+
+    blockedSuggestionRefreshTypes.add(normalizedType);
+}
+
+async function flushBlockedSuggestionRefreshes() {
+    if (blockedSuggestionRefreshTypes.size === 0) {
+        return;
+    }
+
+    const typesToRefresh = Array.from(blockedSuggestionRefreshTypes);
+    blockedSuggestionRefreshTypes.clear();
+    await Promise.all(typesToRefresh.map((type) => loadSuggestions(type)));
+}
+
+function hasPendingDeleteIntent(ownerId, type, itemId, linkId = undefined) {
+    const numericItemId = Number(itemId);
+    if (!Number.isFinite(numericItemId) || numericItemId <= 0) {
+        return false;
+    }
+
+    const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    const hasQueuedDelete = offlineQueue.value.some((operation) => (
+        operation.action === 'delete'
+        && Number(operation.owner_id) === Number(ownerId)
+        && String(operation.type) === String(type)
+        && Number(operation.item_id) === numericItemId
+        && normalizeLinkId(operation.link_id) === resolvedLinkId
+    ));
+    if (hasQueuedDelete) {
+        return true;
+    }
+
+    if (
+        !swipeUndoState.value
+        || (swipeUndoState.value.action !== 'remove' && swipeUndoState.value.action !== 'remove_completed_batch')
+    ) {
+        return false;
+    }
+
+    return isSwipeStateForItem(
+        swipeUndoState.value,
+        ownerId,
+        type,
+        numericItemId,
+        resolvedLinkId,
+    );
+}
+
 function readFilteredServerItems(ownerId, type, items, linkId = undefined) {
     return (Array.isArray(items) ? items : []).filter((entry) => {
+        if (hasPendingDeleteIntent(ownerId, type, entry?.id, linkId)) {
+            return false;
+        }
+
         const tombstone = getDeletedItemTombstone(ownerId, type, entry?.id, linkId);
         if (!tombstone) {
             return true;
@@ -1974,7 +2097,7 @@ function readFilteredServerItems(ownerId, type, items, linkId = undefined) {
         }
 
         // If server item state is not newer than local deletion moment, keep it deleted locally.
-        return serverUpdatedAtMs > Number(tombstone.deletedAt ?? 0);
+        return serverUpdatedAtMs > (Number(tombstone.deletedAt ?? 0) + ITEM_DELETE_TOMBSTONE_SERVER_SKEW_MS);
     });
 }
 
@@ -2380,6 +2503,7 @@ function dropQueueOperation(opId) {
 
 function queueCreate(ownerId, type, item, linkId = undefined) {
     const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    markListMutated(ownerId, type, resolvedLinkId);
 
     enqueueOperation({
         action: 'create',
@@ -2409,6 +2533,7 @@ function queueReorder(ownerId, type, order, linkId = undefined) {
     }
 
     const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    markListMutated(ownerId, type, resolvedLinkId);
 
     const existingIndex = findQueueIndexFromEnd(
         (operation) =>
@@ -2443,6 +2568,7 @@ function queueReorder(ownerId, type, order, linkId = undefined) {
 function queueUpdate(ownerId, type, itemId, payload, linkId = undefined) {
     const numericItemId = Number(itemId);
     const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    markListMutated(ownerId, type, resolvedLinkId);
     const createIndex = findQueueIndexFromEnd(
         (operation) =>
             operation.action === 'create'
@@ -2503,6 +2629,7 @@ function queueUpdate(ownerId, type, itemId, payload, linkId = undefined) {
 function queueDelete(ownerId, type, itemId, linkId = undefined) {
     const numericItemId = Number(itemId);
     const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    markListMutated(ownerId, type, resolvedLinkId);
     const createIndex = findQueueIndexFromEnd(
         (operation) =>
             operation.action === 'create'
@@ -3182,6 +3309,26 @@ function activateXpStars(starIds) {
     xpStars.value = xpStars.value.map((star) => (idSet.has(star.id) ? { ...star, active: true } : star));
 }
 
+function scheduleXpStarsActivation(starIds) {
+    const activate = () => activateXpStars(starIds);
+    nextTick(() => {
+        if (typeof window === 'undefined') {
+            activate();
+            return;
+        }
+
+        if (typeof window.requestAnimationFrame !== 'function') {
+            scheduleEffectTimeout(activate, 0);
+            return;
+        }
+
+        // Two frames ensure stars are mounted with initial transform before toggling to active.
+        window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(activate);
+        });
+    });
+}
+
 function spawnXpStars(originX, originY, removedCount, options = {}) {
     const totalRemoved = Math.max(1, Number(removedCount) || 1);
     const starCount = clampValue(Math.round(totalRemoved * 8), 28, 84);
@@ -3243,13 +3390,7 @@ function spawnXpStars(originX, originY, removedCount, options = {}) {
 
     xpStars.value = [...xpStars.value, ...nextStars];
 
-    const activate = () => activateXpStars(nextStars.map((star) => star.id));
-    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-        window.requestAnimationFrame(activate);
-        return;
-    }
-
-    activate();
+    scheduleXpStarsActivation(nextStars.map((star) => star.id));
 }
 
 function resetMegaCardImpactAnimation() {
@@ -3427,59 +3568,103 @@ function playMegaCardImpact(sceneId = null) {
     };
 }
 
+function sortSceneEntriesByPosition(leftEntry, rightEntry) {
+    const leftRect = leftEntry?.rect ?? {};
+    const rightRect = rightEntry?.rect ?? {};
+    const topDelta = Number(leftRect.top ?? 0) - Number(rightRect.top ?? 0);
+    if (topDelta !== 0) {
+        return topDelta;
+    }
+
+    const leftDelta = Number(leftRect.left ?? 0) - Number(rightRect.left ?? 0);
+    if (leftDelta !== 0) {
+        return leftDelta;
+    }
+
+    return Number(leftEntry?.originalIndex ?? 0) - Number(rightEntry?.originalIndex ?? 0);
+}
+
 function buildBatchCollapseScene(type, completedEntries) {
-    const positionedEntries = completedEntries
-        .map((entry) => {
+    const measuredEntries = completedEntries
+        .map((entry, originalIndex) => {
             const element = itemCardElements.get(itemCardRefKey(type, entry.item));
             if (!isHtmlElement(element)) {
-                return null;
+                return {
+                    entry,
+                    originalIndex,
+                    rect: null,
+                };
             }
 
             const rect = element.getBoundingClientRect();
             if (rect.width < 1 || rect.height < 1) {
-                return null;
+                return {
+                    entry,
+                    originalIndex,
+                    rect: null,
+                };
             }
 
             return {
                 entry,
-                rect,
+                originalIndex,
+                rect: {
+                    left: rect.left,
+                    top: rect.top,
+                    width: rect.width,
+                    height: rect.height,
+                },
             };
-        })
-        .filter(Boolean)
-        .sort((left, right) => {
-            const topDelta = left.rect.top - right.rect.top;
-            if (topDelta !== 0) {
-                return topDelta;
-            }
-
-            return left.rect.left - right.rect.left;
         });
+    const positionedEntries = measuredEntries
+        .filter((entry) => entry?.rect)
+        .sort(sortSceneEntriesByPosition);
 
     if (positionedEntries.length < 2) {
         return null;
     }
 
     const topCard = positionedEntries[0];
+    let syntheticEntryOffset = 0;
+    const resolvedEntries = measuredEntries
+        .map((entryData) => {
+            if (entryData?.rect) {
+                return entryData;
+            }
+
+            syntheticEntryOffset += 1;
+            return {
+                ...entryData,
+                rect: {
+                    left: topCard.rect.left + ((Math.random() - 0.5) * 18),
+                    top: topCard.rect.top + Math.min(140, syntheticEntryOffset * 14),
+                    width: topCard.rect.width,
+                    height: topCard.rect.height,
+                },
+            };
+        })
+        .sort(sortSceneEntriesByPosition);
+    const sceneTopCard = resolvedEntries[0];
 
     const scene = {
         id: nextBatchCollapseSceneId++,
-        x: topCard.rect.left,
-        y: topCard.rect.top,
-        width: topCard.rect.width,
-        height: topCard.rect.height,
+        x: sceneTopCard.rect.left,
+        y: sceneTopCard.rect.top,
+        width: sceneTopCard.rect.width,
+        height: sceneTopCard.rect.height,
         whitening: false,
         incomingActive: false,
         glowing: false,
         glowBoost: 0,
         bursting: false,
-        incoming: positionedEntries.slice(1).map((entry, index) => ({
+        incoming: resolvedEntries.slice(1).map((entryData, index) => ({
             id: nextBatchCollapseIncomingId++,
-            x: entry.rect.left,
-            y: entry.rect.top,
-            width: entry.rect.width,
-            height: entry.rect.height,
-            dx: (topCard.rect.left - entry.rect.left) + ((Math.random() - 0.5) * 10),
-            dy: (topCard.rect.top - entry.rect.top) + ((Math.random() - 0.5) * 8),
+            x: entryData.rect.left,
+            y: entryData.rect.top,
+            width: entryData.rect.width,
+            height: entryData.rect.height,
+            dx: (sceneTopCard.rect.left - entryData.rect.left) + ((Math.random() - 0.5) * 10),
+            dy: (sceneTopCard.rect.top - entryData.rect.top) + ((Math.random() - 0.5) * 8),
             delay: index * 72,
             targetScale: BATCH_CINEMATIC_INCOMING_TARGET_SCALE,
             duration: clampValue(
@@ -3487,8 +3672,8 @@ function buildBatchCollapseScene(type, completedEntries) {
                     420
                     + (
                         Math.hypot(
-                            topCard.rect.left - entry.rect.left,
-                            topCard.rect.top - entry.rect.top,
+                            sceneTopCard.rect.left - entryData.rect.left,
+                            sceneTopCard.rect.top - entryData.rect.top,
                         ) * 0.85
                     ),
                 ),
@@ -3506,6 +3691,23 @@ function buildBatchCollapseScene(type, completedEntries) {
     return scene;
 }
 
+function resolveBatchCollapseStarOrigin(scene) {
+    if (isHtmlElement(megaCardRef.value)) {
+        const rect = megaCardRef.value.getBoundingClientRect();
+        if (rect.width > 1 && rect.height > 1) {
+            return {
+                x: rect.left + (rect.width / 2),
+                y: rect.top + (rect.height / 2),
+            };
+        }
+    }
+
+    return {
+        x: scene.x + (scene.width / 2),
+        y: scene.y + (scene.height / 2),
+    };
+}
+
 async function playBatchCollapseAnimation(type, completedEntries, options = {}) {
     const scene = buildBatchCollapseScene(type, completedEntries);
     if (!scene) {
@@ -3521,7 +3723,8 @@ async function playBatchCollapseAnimation(type, completedEntries, options = {}) 
         }
 
         starsSpawned = true;
-        spawnXpStars(scene.x + (scene.width / 2), scene.y + (scene.height / 2), completedEntries.length, {
+        const starOrigin = resolveBatchCollapseStarOrigin(scene);
+        spawnXpStars(starOrigin.x, starOrigin.y, completedEntries.length, {
             sourceId: xpGainSourceId || null,
         });
     };
@@ -3685,8 +3888,18 @@ async function removeCompletedAfterSwipe(event = null) {
         return;
     }
 
-    markItemsAsDeleted(ownerId, type, completedEntries.map((entry) => entry.item?.id), linkId);
-    applyLocalUpdate(ownerId, type, (items) => items.filter((entry) => !entry.is_completed), linkId);
+    const removedItemIds = new Set(
+        completedEntries
+            .map((entry) => Number(entry.item?.id))
+            .filter((itemId) => Number.isFinite(itemId)),
+    );
+    markItemsAsDeleted(ownerId, type, Array.from(removedItemIds), linkId);
+    applyLocalUpdate(
+        ownerId,
+        type,
+        (items) => items.filter((entry) => !removedItemIds.has(Number(entry.id))),
+        linkId,
+    );
     batchRemovingItemKeys.value = [];
     batchCollapseHiddenItemKeys.value = [];
     batchCollapseScene.value = null;
@@ -4506,6 +4719,11 @@ async function loadSuggestions(type, showErrors = false) {
 
     assignCached();
 
+    if (isWhiteCardAnimationActive()) {
+        markSuggestionRefreshBlocked(type);
+        return;
+    }
+
     if (
         browserOffline.value
         || !serverReachable.value
@@ -4526,6 +4744,10 @@ async function loadSuggestions(type, showErrors = false) {
                 limit: 6,
             },
         }));
+        if (isWhiteCardAnimationActive()) {
+            markSuggestionRefreshBlocked(type);
+            return;
+        }
         writeSuggestionsToCache(ownerId, type, response.data.suggestions ?? [], linkId);
     } catch (error) {
         if (isConnectivityError(error)) {
@@ -4571,15 +4793,17 @@ async function loadAllSuggestions() {
     await Promise.all([loadSuggestions('product'), loadSuggestions('todo')]);
 }
 
-async function loadProductSuggestionStats(showErrors = false) {
+async function loadSuggestionStats(type = suggestionStatsType.value, showErrors = false) {
     if (productSuggestionStatsLoading.value) {
         return;
     }
 
+    const normalizedType = normalizeSuggestionStatsType(type);
+    suggestionStatsType.value = normalizedType;
     const ownerId = Number(selectedOwnerId.value);
     const linkId = selectedListLinkId.value;
     const assignCached = () => {
-        const cachedPayload = readProductStatsFromCache(ownerId, linkId);
+        const cachedPayload = readSuggestionStatsFromCache(ownerId, normalizedType, linkId);
         productSuggestionStats.value = cachedPayload.stats;
         productStatsSummary.value = cachedPayload.summary;
     };
@@ -4597,10 +4821,11 @@ async function loadProductSuggestionStats(showErrors = false) {
             params: {
                 owner_id: ownerId,
                 link_id: linkId,
+                type: normalizedType,
                 limit: 50,
             },
         }));
-        writeProductStatsToCache(ownerId, response.data ?? {}, linkId);
+        writeSuggestionStatsToCache(ownerId, normalizedType, response.data ?? {}, linkId);
     } catch (error) {
         if (isConnectivityError(error)) {
             assignCached();
@@ -4656,12 +4881,18 @@ function isResettingSuggestionKey(suggestionKey) {
     return resettingSuggestionKeys.value.includes(String(suggestionKey ?? ''));
 }
 
-async function openProductStatsModal() {
-    productStatsModalOpen.value = true;
-    await loadProductSuggestionStats(false);
+function suggestionStatsCount(type) {
+    const ownerId = Number(selectedOwnerId.value);
+    const linkId = selectedListLinkId.value;
+    return readSuggestionStatsFromCache(ownerId, normalizeSuggestionStatsType(type), linkId).stats.length;
 }
 
-async function resetProductSuggestionStatsRow(entry) {
+async function openSuggestionStatsModal(type = 'product') {
+    productStatsModalOpen.value = true;
+    await loadSuggestionStats(type, false);
+}
+
+async function resetSuggestionStatsRow(entry) {
     const suggestionKey = String(entry?.suggestion_key ?? '').trim();
     if (!suggestionKey || isResettingSuggestionKey(suggestionKey)) {
         return;
@@ -4671,7 +4902,8 @@ async function resetProductSuggestionStatsRow(entry) {
     try {
         const ownerId = Number(selectedOwnerId.value);
         const linkId = selectedListLinkId.value;
-        const cachedPayload = readProductStatsFromCache(ownerId, linkId);
+        const statsType = normalizeSuggestionStatsType(suggestionStatsType.value);
+        const cachedPayload = readSuggestionStatsFromCache(ownerId, statsType, linkId);
 
         cachedPayload.stats = cachedPayload.stats.map((statsEntry) => (
             String(statsEntry?.suggestion_key ?? '') === suggestionKey
@@ -4684,9 +4916,9 @@ async function resetProductSuggestionStatsRow(entry) {
                 }
                 : statsEntry
         ));
-        writeProductStatsToCache(ownerId, cachedPayload, linkId);
+        writeSuggestionStatsToCache(ownerId, statsType, cachedPayload, linkId);
 
-        queueSuggestionReset(ownerId, 'product', suggestionKey, linkId);
+        queueSuggestionReset(ownerId, statsType, suggestionKey, linkId);
         syncOfflineQueue().catch(() => {});
 
         showStatus('\u0414\u0430\u043d\u043d\u044b\u0435 \u043f\u043e\u0434\u0441\u043a\u0430\u0437\u043e\u043a \u0441\u0431\u0440\u043e\u0448\u0435\u043d\u044b.');
@@ -5148,7 +5380,7 @@ watch(selectedOwnerId, async (ownerId) => {
     await Promise.all([loadAllItems(), loadAllSuggestions()]);
 
     if (activeTab.value === 'profile') {
-        await loadProductSuggestionStats();
+        await loadSuggestionStats(suggestionStatsType.value);
     }
 });
 
@@ -5157,9 +5389,20 @@ watch(activeTab, async (tab) => {
     await Promise.all([loadActiveTabItems(), loadActiveTabSuggestions()]);
 
     if (tab === 'profile') {
-        await loadProductSuggestionStats();
+        await loadSuggestionStats(suggestionStatsType.value);
     }
 });
+
+watch(
+    () => isWhiteCardAnimationActive(),
+    (isActive, wasActive) => {
+        if (!isActive || !wasActive) {
+            return;
+        }
+
+        flushBlockedSuggestionRefreshes().catch(() => {});
+    },
+);
 
 watch(isSkippableAnimationPlaying, (isActive) => {
     applyScrollLockState(isActive);
@@ -5180,7 +5423,7 @@ onMounted(async () => {
     gamificationSyncEnabled = true;
 
     if (activeTab.value === 'profile') {
-        await loadProductSuggestionStats();
+        await loadSuggestionStats(suggestionStatsType.value);
     }
 
     subscribeUserChannel();
@@ -5258,6 +5501,7 @@ onBeforeUnmount(() => {
     applyScrollLockState(false);
     listSyncVersions.clear();
     deletedItemTombstones.clear();
+    blockedSuggestionRefreshTypes.clear();
     itemCardElements.clear();
     disposeToasts();
 
@@ -5478,7 +5722,7 @@ onBeforeUnmount(() => {
                                 @remove="removeItem(item)"
                                 @tap="beginEdit(item)"
                             >
-                                <div class="relative space-y-2 pr-7">
+                                <div class="relative pr-7">
                                     <button
                                         type="button"
                                         class="drag-handle absolute right-[-4px] top-0 inline-flex h-5 w-5 items-center justify-center rounded-md text-[11px] font-semibold leading-none tracking-[-0.08em] text-[#7f7b7e] transition hover:text-[#fcfcfa]"
@@ -5506,7 +5750,7 @@ onBeforeUnmount(() => {
                                     </p>
                                     <p
                                         v-if="formatProductMeasure(item)"
-                                        class="m-0 text-xs"
+                                        class="m-0 mt-1 text-xs"
                                         :class="item.is_completed ? 'text-[#6e6a6d]' : 'text-[#9f9a9d]'"
                                     >
                                         {{ formatProductMeasure(item) }}
@@ -5624,7 +5868,7 @@ onBeforeUnmount(() => {
                                 @remove="removeItem(item)"
                                 @tap="beginEdit(item)"
                             >
-                                <div class="relative space-y-2 pr-7">
+                                <div class="relative pr-7">
                                     <button
                                         type="button"
                                         class="drag-handle absolute right-[-4px] top-0 inline-flex h-5 w-5 items-center justify-center rounded-md text-[11px] font-semibold leading-none tracking-[-0.08em] text-[#7f7b7e] transition hover:text-[#fcfcfa]"
@@ -5723,16 +5967,28 @@ onBeforeUnmount(() => {
                     Мои приглашения ({{ pendingInvitationsCount }})
                 </button>
 
-                <button
-                    type="button"
-                    class="flex w-full items-center justify-between gap-3 rounded-2xl border border-[#403e41] bg-[#221f22] px-4 py-3 text-left text-sm font-semibold text-[#fcfcfa]"
-                    @click="openProductStatsModal"
-                >
-                    <span>{{ '\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u043f\u043e\u043a\u0443\u043f\u043a\u0430\u043c' }}</span>
-                    <span class="text-xs text-[#9f9a9d]">
-                        {{ productSuggestionStats.length }} {{ '\u043f\u043e\u0437\u0438\u0446\u0438\u0439' }}
-                    </span>
-                </button>
+                <div class="grid grid-cols-2 gap-2">
+                    <button
+                        type="button"
+                        class="flex items-center justify-between gap-2 rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-3 text-left text-sm font-semibold text-[#fcfcfa]"
+                        @click="openSuggestionStatsModal('product')"
+                    >
+                        <span>{{ '\u041f\u043e\u043a\u0443\u043f\u043a\u0438' }}</span>
+                        <span class="text-xs text-[#9f9a9d]">
+                            {{ suggestionStatsCount('product') }}
+                        </span>
+                    </button>
+                    <button
+                        type="button"
+                        class="flex items-center justify-between gap-2 rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-3 text-left text-sm font-semibold text-[#fcfcfa]"
+                        @click="openSuggestionStatsModal('todo')"
+                    >
+                        <span>{{ '\u0414\u0435\u043b\u0430' }}</span>
+                        <span class="text-xs text-[#9f9a9d]">
+                            {{ suggestionStatsCount('todo') }}
+                        </span>
+                    </button>
+                </div>
 
                 <div class="rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                     <h3 class="mb-3 text-sm font-semibold text-[#fcfcfa]">
@@ -6244,7 +6500,9 @@ onBeforeUnmount(() => {
             <div v-if="productStatsModalOpen" class="fixed inset-0 z-[120] bg-[#19181a]/90 p-2.5" @click.self="productStatsModalOpen = false">
                 <div class="flex h-full flex-col rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                     <div class="mb-3 flex items-center justify-between">
-                        <h2 class="text-base font-semibold">{{ '\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u043f\u043e\u043a\u0443\u043f\u043e\u043a' }}</h2>
+                        <h2 class="text-base font-semibold">
+                            {{ suggestionStatsType === 'todo' ? '\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u0434\u0435\u043b' : '\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u043f\u043e\u043a\u0443\u043f\u043e\u043a' }}
+                        </h2>
                         <button type="button" class="rounded-xl border border-[#403e41] p-2 text-[#bcb7ba]" @click="productStatsModalOpen = false">
                             <X class="h-4 w-4" />
                         </button>
@@ -6257,15 +6515,19 @@ onBeforeUnmount(() => {
                             <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">{{ formatProductStatsSummaryNumber(productStatsSummary.total_added) }}</p>
                         </div>
                         <div class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-2">
-                            <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">{{ '\u041a\u0443\u043f\u043b\u0435\u043d\u043e' }}</p>
+                            <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">
+                                {{ suggestionStatsType === 'todo' ? '\u0412\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u043e' : '\u041a\u0443\u043f\u043b\u0435\u043d\u043e' }}
+                            </p>
                             <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">{{ formatProductStatsSummaryNumber(productStatsSummary.total_completed) }}</p>
                         </div>
                         <div class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-2">
                             <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">{{ '\u0423\u043d\u0438\u043a\u0430\u043b\u044c\u043d\u044b\u0445' }}</p>
-                            <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">{{ formatProductStatsSummaryNumber(productStatsSummary.unique_products) }}</p>
+                            <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">{{ formatProductStatsSummaryNumber(productStatsSummary.unique_items) }}</p>
                         </div>
                         <div class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-2">
-                            <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">{{ '\u041a \u043f\u043e\u043a\u0443\u043f\u043a\u0435' }}</p>
+                            <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">
+                                {{ suggestionStatsType === 'todo' ? '\u041a \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u044e' : '\u041a \u043f\u043e\u043a\u0443\u043f\u043a\u0435' }}
+                            </p>
                             <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">
                                 {{ formatProductStatsSummaryNumber(productStatsSummary.due_suggestions) }}
                                 <span class="text-[11px] font-medium text-[#9f9a9d]">/ {{ formatProductStatsSummaryNumber(productStatsSummary.upcoming_suggestions) }}</span>
@@ -6275,7 +6537,9 @@ onBeforeUnmount(() => {
                             {{ '\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u044f\u044f \u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c:' }} {{ formatProductStatsDate(productStatsSummary.last_activity_at) }}
                         </p>
                     </div>
-                    <p v-if="!productSuggestionStatsLoading && productSuggestionStats.length === 0" class="text-xs text-[#9f9a9d]">{{ '\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445 \u043f\u043e \u043f\u043e\u043a\u0443\u043f\u043a\u0430\u043c.' }}</p>
+                    <p v-if="!productSuggestionStatsLoading && productSuggestionStats.length === 0" class="text-xs text-[#9f9a9d]">
+                        {{ suggestionStatsType === 'todo' ? '\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445 \u043f\u043e \u0434\u0435\u043b\u0430\u043c.' : '\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445 \u043f\u043e \u043f\u043e\u043a\u0443\u043f\u043a\u0430\u043c.' }}
+                    </p>
 
                     <div v-if="!productSuggestionStatsLoading && productSuggestionStats.length > 0" class="flex-1 space-y-2 overflow-y-auto">
                         <div
@@ -6287,14 +6551,16 @@ onBeforeUnmount(() => {
                                 <div class="min-w-0">
                                     <p class="truncate text-sm font-semibold text-[#fcfcfa]">{{ entry.text }}</p>
                                     <p class="mt-1 text-[11px] text-[#9f9a9d]">{{ entry.occurrences }} {{ '\u0440\u0430\u0437' }} / {{ '\u0441\u0440.' }} {{ formatProductStatsInterval(entry.average_interval_seconds) }}</p>
-                                    <p class="text-[11px] text-[#9f9a9d]">{{ '\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u044f\u044f \u043f\u043e\u043a\u0443\u043f\u043a\u0430:' }} {{ formatProductStatsDate(entry.last_completed_at) }}</p>
+                                    <p class="text-[11px] text-[#9f9a9d]">
+                                        {{ suggestionStatsType === 'todo' ? '\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0435\u0435 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435:' : '\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u044f\u044f \u043f\u043e\u043a\u0443\u043f\u043a\u0430:' }} {{ formatProductStatsDate(entry.last_completed_at) }}
+                                    </p>
                                 </div>
 
                                 <button
                                     type="button"
                                     class="shrink-0 rounded-xl border border-[#403e41] bg-[#2d2a2c] px-2.5 py-1.5 text-[11px] font-semibold text-[#fcfcfa] transition hover:border-[#fcfcfa]/45 disabled:cursor-not-allowed disabled:opacity-55"
                                     :disabled="isResettingSuggestionKey(entry.suggestion_key)"
-                                    @click="resetProductSuggestionStatsRow(entry)"
+                                    @click="resetSuggestionStatsRow(entry)"
                                 >
                                     {{ isResettingSuggestionKey(entry.suggestion_key) ? '\u2026' : '\u0421\u0431\u0440\u043e\u0441\u0438\u0442\u044c' }}
                                 </button>

@@ -11,12 +11,16 @@ const props = defineProps({
 });
 
 const startX = ref(0);
+const startY = ref(0);
 const dragX = ref(0);
 const dragging = ref(false);
 const touchId = ref(null);
 const pressStartedAt = ref(0);
+const touchSwipeLocked = ref(false);
 
 const gestureThreshold = 72;
+const swipeActivationDistance = 8;
+const maxSwipeAngleDeg = 35;
 
 const cardStyle = computed(() => ({
     transform: `translateX(${dragX.value}px)`,
@@ -36,6 +40,7 @@ function beginDrag(clientX) {
     dragX.value = 0;
     dragging.value = true;
     pressStartedAt.value = Date.now();
+    touchSwipeLocked.value = false;
 }
 
 function updateDrag(clientX) {
@@ -58,6 +63,7 @@ function endDrag() {
     dragX.value = 0;
     dragging.value = false;
     touchId.value = null;
+    touchSwipeLocked.value = false;
 
     if (delta >= gestureThreshold) {
         emit('complete');
@@ -78,6 +84,7 @@ function cancelDrag() {
     dragX.value = 0;
     dragging.value = false;
     touchId.value = null;
+    touchSwipeLocked.value = false;
 }
 
 function onMouseDown(event) {
@@ -128,6 +135,7 @@ function onTouchStart(event) {
     }
 
     touchId.value = touch.identifier;
+    startY.value = touch.clientY;
     beginDrag(touch.clientX);
 }
 
@@ -141,6 +149,27 @@ function onTouchMove(event) {
         return;
     }
 
+    const deltaX = touch.clientX - startX.value;
+    const deltaY = touch.clientY - startY.value;
+
+    if (!touchSwipeLocked.value) {
+        const travelDistance = Math.hypot(deltaX, deltaY);
+        if (travelDistance < swipeActivationDistance) {
+            return;
+        }
+
+        const absDeltaX = Math.abs(deltaX);
+        const absDeltaY = Math.abs(deltaY);
+        const angleDeg = Math.atan2(absDeltaY, Math.max(absDeltaX, 0.0001)) * (180 / Math.PI);
+        if (angleDeg > maxSwipeAngleDeg) {
+            cancelDrag();
+            return;
+        }
+
+        touchSwipeLocked.value = true;
+    }
+
+    event.preventDefault();
     updateDrag(touch.clientX);
 }
 
@@ -177,7 +206,7 @@ function onTouchEnd(event) {
             @mouseup="onMouseUp"
             @mouseleave="onMouseUp"
             @touchstart.passive="onTouchStart"
-            @touchmove.prevent="onTouchMove"
+            @touchmove="onTouchMove"
             @touchend="onTouchEnd"
             @touchcancel="cancelDrag"
         >

@@ -183,12 +183,21 @@ class ListItemSuggestionService
      */
     public function productStatsForOwner(int $ownerId, int $limit = 50, ?int $listLinkId = null): array
     {
+        return $this->suggestionStatsForOwner($ownerId, ListItem::TYPE_PRODUCT, $limit, $listLinkId);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function suggestionStatsForOwner(int $ownerId, string $type, int $limit = 50, ?int $listLinkId = null): array
+    {
+        $normalizedType = $this->normalizeSuggestionType($type);
         $limit = max(1, min(200, $limit));
-        $entries = $this->loadProductStatsEntriesForOwner($ownerId, $listLinkId);
+        $entries = $this->loadSuggestionStatsEntriesForOwner($ownerId, $normalizedType, $listLinkId);
 
         $statesByKey = ListItemSuggestionState::query()
             ->forOwner($ownerId)
-            ->ofType(ListItem::TYPE_PRODUCT)
+            ->ofType($normalizedType)
             ->get()
             ->keyBy('suggestion_key');
 
@@ -330,27 +339,36 @@ class ListItemSuggestionService
      */
     public function productStatsPayloadForOwner(int $ownerId, int $limit = 50, ?int $listLinkId = null): array
     {
-        $stats = $this->productStatsForOwner($ownerId, $limit, $listLinkId);
+        return $this->suggestionStatsPayloadForOwner($ownerId, ListItem::TYPE_PRODUCT, $limit, $listLinkId);
+    }
+
+    /**
+     * @return array{stats: array<int, array<string, mixed>>, summary: array<string, mixed>}
+     */
+    public function suggestionStatsPayloadForOwner(int $ownerId, string $type, int $limit = 50, ?int $listLinkId = null): array
+    {
+        $normalizedType = $this->normalizeSuggestionType($type);
+        $stats = $this->suggestionStatsForOwner($ownerId, $normalizedType, $limit, $listLinkId);
 
         $addedCount = $this->countEventsForOwner(
             $ownerId,
-            ListItem::TYPE_PRODUCT,
+            $normalizedType,
             ListItemEvent::EVENT_ADDED,
             $listLinkId
         );
         $completedCount = $this->countEventsForOwner(
             $ownerId,
-            ListItem::TYPE_PRODUCT,
+            $normalizedType,
             ListItemEvent::EVENT_COMPLETED,
             $listLinkId
         );
-        $uniqueProducts = $this->uniqueEventKeysForOwner($ownerId, ListItem::TYPE_PRODUCT, $listLinkId);
-        $lastActivityAt = $this->lastEventActivityForOwner($ownerId, ListItem::TYPE_PRODUCT, $listLinkId);
+        $uniqueItems = $this->uniqueEventKeysForOwner($ownerId, $normalizedType, $listLinkId);
+        $lastActivityAt = $this->lastEventActivityForOwner($ownerId, $normalizedType, $listLinkId);
 
         if ($addedCount === 0) {
             $itemsQuery = ListItem::query()
                 ->forOwner($ownerId)
-                ->ofType(ListItem::TYPE_PRODUCT);
+                ->ofType($normalizedType);
             $this->applyListLinkScope($itemsQuery, $listLinkId);
             $addedCount = (int) $itemsQuery->count();
         }
@@ -358,17 +376,17 @@ class ListItemSuggestionService
         if ($completedCount === 0) {
             $itemsQuery = ListItem::query()
                 ->forOwner($ownerId)
-                ->ofType(ListItem::TYPE_PRODUCT)
+                ->ofType($normalizedType)
                 ->where('is_completed', true);
             $this->applyListLinkScope($itemsQuery, $listLinkId);
             $completedCount = (int) $itemsQuery->count();
         }
 
-        if ($uniqueProducts === 0) {
-            $uniqueProducts = count($stats);
+        if ($uniqueItems === 0) {
+            $uniqueItems = count($stats);
         }
 
-        $activeSuggestions = $this->suggestForOwner($ownerId, ListItem::TYPE_PRODUCT, 50, $listLinkId);
+        $activeSuggestions = $this->suggestForOwner($ownerId, $normalizedType, 50, $listLinkId);
         $dueCount = count(array_filter(
             $activeSuggestions,
             static fn (array $entry): bool => (bool) ($entry['is_due'] ?? false),
@@ -379,7 +397,9 @@ class ListItemSuggestionService
             'summary' => [
                 'total_added' => $addedCount,
                 'total_completed' => $completedCount,
-                'unique_products' => $uniqueProducts,
+                'unique_items' => $uniqueItems,
+                'unique_products' => $normalizedType === ListItem::TYPE_PRODUCT ? $uniqueItems : 0,
+                'unique_todos' => $normalizedType === ListItem::TYPE_TODO ? $uniqueItems : 0,
                 'due_suggestions' => $dueCount,
                 'upcoming_suggestions' => max(0, count($activeSuggestions) - $dueCount),
                 'last_activity_at' => $lastActivityAt?->toISOString(),
@@ -540,9 +560,19 @@ class ListItemSuggestionService
      */
     private function loadProductStatsEntriesForOwner(int $ownerId, ?int $listLinkId = null): array
     {
+        return $this->loadSuggestionStatsEntriesForOwner($ownerId, ListItem::TYPE_PRODUCT, $listLinkId);
+    }
+
+    /**
+     * @return array<int, array{text: string, timestamp: CarbonImmutable}>
+     */
+    private function loadSuggestionStatsEntriesForOwner(int $ownerId, string $type, ?int $listLinkId = null): array
+    {
+        $normalizedType = $this->normalizeSuggestionType($type);
+
         if ($this->canUseEventsTable()) {
             try {
-                $events = $this->eventQueryForOwner($ownerId, ListItem::TYPE_PRODUCT, $listLinkId)
+                $events = $this->eventQueryForOwner($ownerId, $normalizedType, $listLinkId)
                     ->ofEventType(ListItemEvent::EVENT_COMPLETED)
                     ->orderBy('occurred_at')
                     ->get(['text', 'occurred_at']);
@@ -572,7 +602,7 @@ class ListItemSuggestionService
 
         $itemsQuery = ListItem::query()
             ->forOwner($ownerId)
-            ->ofType(ListItem::TYPE_PRODUCT)
+            ->ofType($normalizedType)
             ->where('is_completed', true)
             ->orderBy('completed_at')
             ->orderBy('created_at');
@@ -827,6 +857,13 @@ class ListItemSuggestionService
         });
 
         return $variants;
+    }
+
+    private function normalizeSuggestionType(string $type): string
+    {
+        return $type === ListItem::TYPE_TODO
+            ? ListItem::TYPE_TODO
+            : ListItem::TYPE_PRODUCT;
     }
 
     /**

@@ -299,6 +299,56 @@ class ListItemSuggestionTest extends TestCase
             ->assertJsonPath('summary.upcoming_suggestions', 0);
     }
 
+    public function test_todo_stats_response_contains_user_summary(): void
+    {
+        $user = User::factory()->create();
+
+        Carbon::setTestNow(CarbonImmutable::parse('2026-02-10 10:00:00'));
+        $firstItemId = (int) $this->actingAs($user)
+            ->postJson('/api/items', [
+                'owner_id' => $user->id,
+                'type' => ListItem::TYPE_TODO,
+                'text' => 'Send report',
+            ])
+            ->assertCreated()
+            ->json('item.id');
+
+        Carbon::setTestNow(CarbonImmutable::parse('2026-02-12 10:00:00'));
+        $this->actingAs($user)
+            ->postJson('/api/items', [
+                'owner_id' => $user->id,
+                'type' => ListItem::TYPE_TODO,
+                'text' => 'Call supplier',
+            ])
+            ->assertCreated();
+
+        Carbon::setTestNow(CarbonImmutable::parse('2026-02-13 10:00:00'));
+        $this->actingAs($user)
+            ->patchJson('/api/items/'.$firstItemId, [
+                'is_completed' => true,
+            ])
+            ->assertOk();
+
+        $response = $this->actingAs($user)
+            ->getJson('/api/items/suggestions/stats?owner_id='.$user->id.'&type=todo&limit=50')
+            ->assertOk();
+
+        $response
+            ->assertJsonStructure([
+                'stats',
+                'summary' => [
+                    'total_added',
+                    'total_completed',
+                    'unique_items',
+                    'due_suggestions',
+                    'upcoming_suggestions',
+                    'last_activity_at',
+                ],
+            ])
+            ->assertJsonPath('summary.total_added', 2)
+            ->assertJsonPath('summary.total_completed', 1);
+    }
+
     protected function tearDown(): void
     {
         Carbon::setTestNow();
