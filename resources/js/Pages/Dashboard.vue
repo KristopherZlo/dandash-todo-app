@@ -22,13 +22,16 @@ import {
 import { normalizeTodoComparableText } from '@/modules/dashboard/textNormalize';
 import { Head, usePage } from '@inertiajs/vue3';
 import {
+    Battery,
     CalendarDays,
     Check,
     ChevronDown,
+    Flame,
     Plus,
     RotateCcw,
     Search,
     Share2,
+    Smile,
     ShoppingCart,
     Trash2,
     UserRound,
@@ -61,6 +64,7 @@ const listOptions = ref(props.initialState.list_options ?? []);
 const invitations = ref(props.initialState.invitations ?? []);
 const links = ref(props.initialState.links ?? []);
 const pendingInvitationsCount = ref(props.initialState.pending_invitations_count ?? 0);
+const moodCards = ref(Array.isArray(props.initialState.mood_cards) ? props.initialState.mood_cards : []);
 
 const productItems = ref([]);
 const todoItems = ref([]);
@@ -92,6 +96,10 @@ const productStatsModalOpen = ref(false);
 const suggestionStatsType = ref('product');
 const productSuggestionsOpen = ref(true);
 const todoSuggestionsOpen = ref(true);
+const moodFireSliderActive = ref(false);
+const moodBatterySliderActive = ref(false);
+const logoutLoading = ref(false);
+const moodRelativeNowMs = ref(Date.now());
 const batchRemovingItemKeys = ref([]);
 const batchRemovalAnimating = ref(false);
 const batchCollapseHiddenItemKeys = ref([]);
@@ -185,11 +193,13 @@ const PRODUCTIVITY_STORAGE_KEY = `dandash:productivity:${CACHE_VERSION}:user-${l
 const PRODUCTIVITY_REWARD_HISTORY_STORAGE_KEY = `dandash:productivity-reward-history:${CACHE_VERSION}:user-${localUser.id}`;
 const XP_COLOR_SEED_STORAGE_KEY = `dandash:xp-color-seed:${CACHE_VERSION}:user-${localUser.id}`;
 const GAMIFICATION_UPDATED_AT_STORAGE_KEY = `dandash:gamification-updated-at:${CACHE_VERSION}:user-${localUser.id}`;
+const MOOD_UPDATED_AT_STORAGE_KEY = `dandash:mood-updated-at:${CACHE_VERSION}:user-${localUser.id}`;
 
 let itemsPollTimer = null;
 let statePollTimer = null;
 let suggestionsPollTimer = null;
 let queueSyncTimer = null;
+let moodRelativeTimeTimer = null;
 let listChannelName = null;
 let userChannelName = null;
 let swipeUndoTimer = null;
@@ -212,6 +222,7 @@ let xpGainProcessing = false;
 let pendingXpGain = 0;
 let lastXpGainSoundAt = 0;
 let localGamificationUpdatedAtMs = 0;
+let localMoodUpdatedAtMs = 0;
 let gamificationSyncEnabled = false;
 let suppressGamificationQueueDepth = 0;
 let gamificationSyncTimer = null;
@@ -286,6 +297,33 @@ const activeListStats = computed(() => (
     activeTab.value === 'products'
         ? productPurchasedStats.value
         : todoCompletedStats.value
+));
+const activeTabTitle = computed(() => {
+    if (activeTab.value === 'products') {
+        return 'Список продуктов';
+    }
+
+    if (activeTab.value === 'todos') {
+        return 'Список дел';
+    }
+
+    if (activeTab.value === 'mood') {
+        return 'Настроение';
+    }
+
+    return '';
+});
+const orderedMoodCards = computed(() => {
+    const nowMs = moodRelativeNowMs.value;
+
+    return normalizeMoodCards(moodCards.value).map((card) => ({
+        ...card,
+        mood: withMoodStaleFallback(card.mood, nowMs),
+    }));
+});
+const selfMoodCard = computed(() => (
+    orderedMoodCards.value.find((card) => Number(card?.id) === Number(localUser.id))
+    ?? null
 ));
 const visibleProductSuggestions = computed(() => {
     if (!Array.isArray(productSuggestions.value) || productSuggestions.value.length === 0) {
@@ -489,6 +527,281 @@ function cloneEntries(entries) {
     return entries
         .filter((entry) => entry && typeof entry === 'object')
         .map((entry) => ({ ...entry }));
+}
+
+const MOOD_COLOR_VALUES = Object.freeze(['red', 'yellow', 'green']);
+const MOOD_FIRE_EMOJIS = Object.freeze(['🥰', '😝', '😈']);
+const MOOD_BATTERY_EMOJIS = Object.freeze(['😴', '😡', '😄', '😊']);
+const MOOD_UNKNOWN_EMOJI = '❔';
+const MOOD_STALE_RESET_AFTER_MS = 24 * 60 * 60 * 1000;
+
+function createDefaultMoodPayload() {
+    return {
+        color: MOOD_COLOR_VALUES[1],
+        fire_level: 50,
+        fire_emoji: MOOD_FIRE_EMOJIS[0],
+        battery_level: 50,
+        battery_emoji: MOOD_BATTERY_EMOJIS[3],
+        updated_at: null,
+        updated_at_ms: null,
+    };
+}
+
+function normalizeMoodColor(value) {
+    const candidate = String(value ?? '').trim().toLowerCase();
+    return MOOD_COLOR_VALUES.includes(candidate) ? candidate : MOOD_COLOR_VALUES[1];
+}
+
+function normalizeMoodLevel(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+        return 50;
+    }
+
+    return Math.max(0, Math.min(100, Math.round(parsed)));
+}
+
+function normalizeMoodEmoji(value, allowed, fallback) {
+    const candidate = String(value ?? '').trim();
+    if (candidate === MOOD_UNKNOWN_EMOJI) {
+        return candidate;
+    }
+
+    return allowed.includes(candidate) ? candidate : fallback;
+}
+
+function isMoodStale(updatedAtMs, nowMs = Date.now()) {
+    const normalizedUpdatedAtMs = Number(updatedAtMs);
+    return Number.isFinite(normalizedUpdatedAtMs)
+        && normalizedUpdatedAtMs > 0
+        && (Number(nowMs) - normalizedUpdatedAtMs) >= MOOD_STALE_RESET_AFTER_MS;
+}
+
+function normalizeMoodPayload(payload) {
+    const source = asPlainObject(payload);
+    const rawUpdatedAt = typeof source.updated_at === 'string'
+        ? source.updated_at
+        : null;
+    const updatedAtCandidateMs = Number(source.updated_at_ms);
+    let updatedAtMs = Number.isFinite(updatedAtCandidateMs) && updatedAtCandidateMs > 0
+        ? Math.round(updatedAtCandidateMs)
+        : null;
+
+    if (updatedAtMs === null && rawUpdatedAt) {
+        const parsedUpdatedAtMs = Date.parse(rawUpdatedAt);
+        if (Number.isFinite(parsedUpdatedAtMs) && parsedUpdatedAtMs > 0) {
+            updatedAtMs = Math.round(parsedUpdatedAtMs);
+        }
+    }
+
+    return {
+        color: normalizeMoodColor(source.color),
+        fire_level: normalizeMoodLevel(source.fire_level),
+        fire_emoji: normalizeMoodEmoji(source.fire_emoji, MOOD_FIRE_EMOJIS, MOOD_FIRE_EMOJIS[0]),
+        battery_level: normalizeMoodLevel(source.battery_level),
+        battery_emoji: normalizeMoodEmoji(source.battery_emoji, MOOD_BATTERY_EMOJIS, MOOD_BATTERY_EMOJIS[3]),
+        updated_at: rawUpdatedAt,
+        updated_at_ms: updatedAtMs,
+    };
+}
+
+function withMoodStaleFallback(payload, nowMs = Date.now()) {
+    const normalized = normalizeMoodPayload(payload);
+    if (!isMoodStale(normalized.updated_at_ms, nowMs)) {
+        return normalized;
+    }
+
+    return {
+        ...normalized,
+        fire_level: 50,
+        fire_emoji: MOOD_UNKNOWN_EMOJI,
+        battery_level: 50,
+        battery_emoji: MOOD_UNKNOWN_EMOJI,
+    };
+}
+
+function resolveLinkedUserName(userId, linkEntries = links.value) {
+    const numericUserId = Number(userId);
+    if (!Number.isFinite(numericUserId) || numericUserId <= 0) {
+        return 'Пользователь';
+    }
+
+    if (numericUserId === Number(localUser.id)) {
+        return localUser.name;
+    }
+
+    const sourceLinks = Array.isArray(linkEntries) ? linkEntries : [];
+    const link = sourceLinks.find((entry) => Number(entry?.other_user?.id) === numericUserId);
+    const name = String(link?.other_user?.name ?? '').trim();
+    if (name !== '') {
+        return name;
+    }
+
+    return `Пользователь ${numericUserId}`;
+}
+
+function normalizeMoodCard(entry, linkEntries = links.value) {
+    const source = asPlainObject(entry);
+    const userId = Number(source.id ?? source.user_id);
+    if (!Number.isFinite(userId) || userId <= 0) {
+        return null;
+    }
+
+    const isSelf = Boolean(source.is_self) || userId === Number(localUser.id);
+    const moodSource = source.mood && typeof source.mood === 'object' ? source.mood : source;
+    const fallbackName = isSelf ? localUser.name : resolveLinkedUserName(userId, linkEntries);
+    const name = String(source.name ?? '').trim() || fallbackName;
+
+    return {
+        id: userId,
+        name,
+        is_self: isSelf,
+        mood: normalizeMoodPayload(moodSource),
+    };
+}
+
+function normalizeMoodCards(cards, linkEntries = links.value) {
+    const byUserId = new Map();
+    const sourceCards = Array.isArray(cards) ? cards : [];
+    const sourceLinks = Array.isArray(linkEntries) ? linkEntries : [];
+    const selfUserId = Number(localUser.id);
+    const participantUserIds = new Set([selfUserId]);
+
+    for (const link of sourceLinks) {
+        const otherUserId = Number(link?.other_user?.id ?? 0);
+        if (!Number.isFinite(otherUserId) || otherUserId <= 0) {
+            continue;
+        }
+
+        participantUserIds.add(otherUserId);
+    }
+
+    for (const entry of sourceCards) {
+        const normalized = normalizeMoodCard(entry, sourceLinks);
+        if (!normalized) {
+            continue;
+        }
+
+        if (!participantUserIds.has(Number(normalized.id))) {
+            continue;
+        }
+
+        byUserId.set(Number(normalized.id), normalized);
+    }
+
+    if (!byUserId.has(selfUserId)) {
+        byUserId.set(selfUserId, {
+            id: selfUserId,
+            name: localUser.name,
+            is_self: true,
+            mood: createDefaultMoodPayload(),
+        });
+    }
+
+    for (const link of sourceLinks) {
+        const otherUserId = Number(link?.other_user?.id ?? 0);
+        if (!Number.isFinite(otherUserId) || otherUserId <= 0 || byUserId.has(otherUserId)) {
+            continue;
+        }
+
+        byUserId.set(otherUserId, {
+            id: otherUserId,
+            name: resolveLinkedUserName(otherUserId, sourceLinks),
+            is_self: false,
+            mood: createDefaultMoodPayload(),
+        });
+    }
+
+    const normalizedCards = Array.from(byUserId.values()).map((card) => ({
+        id: Number(card.id),
+        name: String(card.name ?? '').trim() || resolveLinkedUserName(card.id, sourceLinks),
+        is_self: Number(card.id) === selfUserId || Boolean(card.is_self),
+        mood: normalizeMoodPayload(card.mood),
+    }));
+
+    const selfCard = normalizedCards.find((card) => Number(card.id) === selfUserId) ?? {
+        id: selfUserId,
+        name: localUser.name,
+        is_self: true,
+        mood: createDefaultMoodPayload(),
+    };
+    const otherCards = normalizedCards
+        .filter((card) => Number(card.id) !== selfUserId)
+        .sort((left, right) => String(left.name).localeCompare(String(right.name), 'ru'));
+
+    return [
+        {
+            ...selfCard,
+            id: selfUserId,
+            name: localUser.name,
+            is_self: true,
+            mood: normalizeMoodPayload(selfCard.mood),
+        },
+        ...otherCards.map((card) => ({
+            ...card,
+            is_self: false,
+        })),
+    ];
+}
+
+function moodColorDotClass(color) {
+    const normalizedColor = normalizeMoodColor(color);
+    if (normalizedColor === 'red') {
+        return 'bg-[#dd6e6e]';
+    }
+
+    if (normalizedColor === 'green') {
+        return 'bg-[#56b982]';
+    }
+
+    return 'bg-[#dfbe5a]';
+}
+
+function moodColorControlClass(color, selected) {
+    return selected
+        ? 'border-[#fcfcfa]/80 bg-[#343033]'
+        : 'border-[#403e41] bg-[#221f22] hover:border-[#6d696c]';
+}
+
+const moodRelativeTimeFormatter = new Intl.RelativeTimeFormat('ru', {
+    numeric: 'auto',
+});
+const moodUpdatedAtDateFormatter = new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+});
+
+function formatMoodUpdatedAgo(moodPayload) {
+    const mood = normalizeMoodPayload(moodPayload);
+    const updatedAtMs = Number(mood.updated_at_ms || 0);
+    if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0) {
+        return 'обновлений нет';
+    }
+
+    const diffSeconds = Math.max(0, Math.floor((moodRelativeNowMs.value - updatedAtMs) / 1000));
+
+    if (diffSeconds < 45) {
+        return 'обновлено только что';
+    }
+
+    if (diffSeconds < 3600) {
+        const minutes = Math.max(1, Math.floor(diffSeconds / 60));
+        return `обновлено ${moodRelativeTimeFormatter.format(-minutes, 'minute')}`;
+    }
+
+    if (diffSeconds < 86400) {
+        const hours = Math.max(1, Math.floor(diffSeconds / 3600));
+        return `обновлено ${moodRelativeTimeFormatter.format(-hours, 'hour')}`;
+    }
+
+    if (diffSeconds < 604800) {
+        const days = Math.max(1, Math.floor(diffSeconds / 86400));
+        return `обновлено ${moodRelativeTimeFormatter.format(-days, 'day')}`;
+    }
+
+    return `обновлено ${moodUpdatedAtDateFormatter.format(new Date(updatedAtMs))}`;
 }
 
 function persistSuggestionsCache() {
@@ -700,6 +1013,22 @@ function writeUserSearchToCache(query, users) {
     persistUserSearchCache();
 }
 
+function persistMoodUpdatedAtMs() {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    if (!Number.isFinite(localMoodUpdatedAtMs) || localMoodUpdatedAtMs <= 0) {
+        window.localStorage.removeItem(MOOD_UPDATED_AT_STORAGE_KEY);
+        return;
+    }
+
+    window.localStorage.setItem(
+        MOOD_UPDATED_AT_STORAGE_KEY,
+        String(Math.round(localMoodUpdatedAtMs)),
+    );
+}
+
 function persistGamificationUpdatedAtMs() {
     if (typeof window === 'undefined') {
         return;
@@ -765,6 +1094,16 @@ function shouldQueueGamificationSync() {
 function hasPendingGamificationOperation(excludeOpId = null) {
     return offlineQueue.value.some((operation) => (
         operation.action === 'sync_gamification'
+        && (
+            !excludeOpId
+            || String(operation?.op_id ?? '') !== String(excludeOpId)
+        )
+    ));
+}
+
+function hasPendingMoodOperation(excludeOpId = null) {
+    return offlineQueue.value.some((operation) => (
+        operation.action === 'update_mood'
         && (
             !excludeOpId
             || String(operation?.op_id ?? '') !== String(excludeOpId)
@@ -871,6 +1210,7 @@ function normalizeSyncStatePayload(state) {
     const invitations = cloneEntries(source.invitations);
     const links = cloneEntries(source.links);
     const listOptions = cloneEntries(source.list_options);
+    const moodCardsSource = cloneEntries(source.mood_cards);
     const gamificationSource = source.gamification && typeof source.gamification === 'object'
         ? source.gamification
         : null;
@@ -880,6 +1220,7 @@ function normalizeSyncStatePayload(state) {
         invitations,
         links,
         list_options: listOptions,
+        mood_cards: normalizeMoodCards(moodCardsSource, links),
         default_owner_id: Number(source.default_owner_id) || Number(localUser.id),
         gamification: gamificationSource ? normalizeGamificationStatePayload(gamificationSource) : null,
     };
@@ -891,6 +1232,7 @@ function buildCurrentSyncStatePayload() {
         invitations: invitations.value,
         links: links.value,
         list_options: listOptions.value,
+        mood_cards: moodCards.value,
         default_owner_id: selectedOwnerId.value,
         gamification: buildCurrentGamificationStatePayload(),
     });
@@ -2203,6 +2545,12 @@ function loadOfflineStateFromStorage() {
     localGamificationUpdatedAtMs = Number.isFinite(storedGamificationUpdatedAtMs) && storedGamificationUpdatedAtMs > 0
         ? Math.round(storedGamificationUpdatedAtMs)
         : 0;
+    const storedMoodUpdatedAtMs = Number(
+        window.localStorage.getItem(MOOD_UPDATED_AT_STORAGE_KEY),
+    );
+    localMoodUpdatedAtMs = Number.isFinite(storedMoodUpdatedAtMs) && storedMoodUpdatedAtMs > 0
+        ? Math.round(storedMoodUpdatedAtMs)
+        : 0;
 
     const cachedTempIds = Object.values(cachedItemsByList.value)
         .flatMap((items) => (Array.isArray(items) ? items : []))
@@ -2251,6 +2599,17 @@ function loadOfflineStateFromStorage() {
     if (localGamificationUpdatedAtMs <= 0 && cachedSyncState.value?.gamification?.updated_at_ms) {
         localGamificationUpdatedAtMs = Number(cachedSyncState.value.gamification.updated_at_ms) || 0;
         persistGamificationUpdatedAtMs();
+    }
+
+    const cachedSelfMood = normalizeMoodPayload(
+        cachedSyncState.value?.mood_cards?.find(
+            (card) => Number(card?.id) === Number(localUser.id),
+        )?.mood ?? null,
+    );
+    const cachedMoodUpdatedAtMs = Number(cachedSelfMood.updated_at_ms || 0);
+    if (cachedMoodUpdatedAtMs > localMoodUpdatedAtMs) {
+        localMoodUpdatedAtMs = Math.round(cachedMoodUpdatedAtMs);
+        persistMoodUpdatedAtMs();
     }
 
     const storedOwnerId = Number(window.localStorage.getItem(LOCAL_DEFAULT_OWNER_KEY));
@@ -2858,6 +3217,40 @@ function queueBreakLink(linkId) {
         payload: {
             link_id: numericLinkId,
         },
+    });
+}
+
+function queueMoodUpdate(payload) {
+    const normalizedPayload = normalizeMoodPayload(payload);
+    const payloadUpdatedAtMs = Number(normalizedPayload.updated_at_ms);
+    const nextUpdatedAtMs = Number.isFinite(payloadUpdatedAtMs) && payloadUpdatedAtMs > 0
+        ? Math.round(payloadUpdatedAtMs)
+        : Math.max(Date.now(), localMoodUpdatedAtMs + 1);
+    const nextPayload = normalizeMoodPayload({
+        ...normalizedPayload,
+        updated_at: new Date(nextUpdatedAtMs).toISOString(),
+        updated_at_ms: nextUpdatedAtMs,
+    });
+
+    localMoodUpdatedAtMs = Math.max(localMoodUpdatedAtMs, nextUpdatedAtMs);
+    persistMoodUpdatedAtMs();
+
+    const existingIndex = findQueueIndexFromEnd(
+        (operation) => operation.action === 'update_mood',
+    );
+
+    if (existingIndex !== -1 && !isOperationBeingSynced(offlineQueue.value[existingIndex]?.op_id)) {
+        offlineQueue.value[existingIndex] = {
+            ...offlineQueue.value[existingIndex],
+            payload: nextPayload,
+        };
+        persistQueue();
+        return;
+    }
+
+    enqueueOperation({
+        action: 'update_mood',
+        payload: nextPayload,
     });
 }
 
@@ -3947,6 +4340,7 @@ function shouldDropOperationOnClientError(operation, statusCode) {
         'update_profile',
         'update_password',
         'sync_gamification',
+        'update_mood',
     ].includes(action);
 }
 
@@ -4181,6 +4575,15 @@ function applySuccessfulSyncedOperation(operation, resultData) {
         profileForm.name = localUser.name;
         profileForm.tag = localUser.tag;
         profileForm.email = localUser.email;
+        return;
+    }
+
+    if (action === 'update_mood') {
+        if (resultData && typeof resultData === 'object') {
+            applyMoodSyncPayload(resultData, {
+                excludePendingOpId: operation?.op_id ?? null,
+            });
+        }
         return;
     }
 
@@ -4596,6 +4999,7 @@ function applyState(state, options = {}) {
     invitations.value = normalizedState.invitations;
     links.value = normalizedState.links;
     listOptions.value = normalizedState.list_options;
+    applyMoodCardsFromServer(normalizedState.mood_cards);
 
     const defaultOwnerId = Number(normalizedState.default_owner_id ?? localUser.id);
     const defaultExists = listOptions.value.some((option) => Number(option.owner_id) === defaultOwnerId);
@@ -5171,6 +5575,214 @@ async function addTodo() {
     }
 }
 
+function applyMoodCardsFromServer(cards, options = {}) {
+    const {
+        force = false,
+        excludePendingOpId = null,
+    } = options;
+    const normalizedServerCards = normalizeMoodCards(cards, links.value);
+    const selfUserId = Number(localUser.id);
+    const serverSelfMood = normalizeMoodPayload(
+        normalizedServerCards.find((card) => Number(card?.id) === selfUserId)?.mood ?? null,
+    );
+    const currentSelfMood = normalizeMoodPayload(selfMoodCard.value?.mood ?? null);
+    const serverSelfUpdatedAtMs = Number(serverSelfMood.updated_at_ms || 0);
+    const currentSelfUpdatedAtMs = Number(currentSelfMood.updated_at_ms || 0);
+    const knownLocalUpdatedAtMs = Math.max(localMoodUpdatedAtMs, currentSelfUpdatedAtMs);
+    const hasPendingMoodSync = hasPendingMoodOperation(excludePendingOpId);
+    const hasActiveMoodSlider = moodFireSliderActive.value || moodBatterySliderActive.value;
+    const preserveLocalSelfMood = !force && (
+        hasActiveMoodSlider
+        || (serverSelfUpdatedAtMs > 0 && serverSelfUpdatedAtMs < knownLocalUpdatedAtMs)
+        || (hasPendingMoodSync && serverSelfUpdatedAtMs <= knownLocalUpdatedAtMs)
+    );
+
+    if (preserveLocalSelfMood) {
+        moodCards.value = normalizeMoodCards([
+            ...normalizedServerCards.filter((card) => Number(card?.id) !== selfUserId),
+            {
+                id: selfUserId,
+                name: localUser.name,
+                is_self: true,
+                mood: currentSelfMood,
+            },
+        ], links.value);
+
+        if (knownLocalUpdatedAtMs > 0) {
+            localMoodUpdatedAtMs = knownLocalUpdatedAtMs;
+            persistMoodUpdatedAtMs();
+        }
+    } else {
+        moodCards.value = normalizedServerCards;
+        if (serverSelfUpdatedAtMs > 0) {
+            localMoodUpdatedAtMs = serverSelfUpdatedAtMs;
+            persistMoodUpdatedAtMs();
+        }
+    }
+
+    persistCurrentSyncStateCache();
+}
+
+function upsertSelfMoodCard(nextMood, options = {}) {
+    const { markLocalUpdate = false } = options;
+    let nextMoodPayload = asPlainObject(nextMood);
+
+    if (markLocalUpdate) {
+        const nextUpdatedAtMs = Math.max(localMoodUpdatedAtMs, Date.now());
+        localMoodUpdatedAtMs = nextUpdatedAtMs;
+        persistMoodUpdatedAtMs();
+        nextMoodPayload = {
+            ...nextMoodPayload,
+            updated_at: new Date(nextUpdatedAtMs).toISOString(),
+            updated_at_ms: nextUpdatedAtMs,
+        };
+    }
+
+    const normalizedMood = normalizeMoodPayload(nextMoodPayload);
+    const normalizedUpdatedAtMs = Number(normalizedMood.updated_at_ms || 0);
+    if (normalizedUpdatedAtMs > 0) {
+        localMoodUpdatedAtMs = Math.max(localMoodUpdatedAtMs, normalizedUpdatedAtMs);
+        persistMoodUpdatedAtMs();
+    }
+
+    const selfUserId = Number(localUser.id);
+    const remainingCards = moodCards.value.filter((card) => Number(card?.id) !== selfUserId);
+
+    moodCards.value = normalizeMoodCards([
+        {
+            id: selfUserId,
+            name: localUser.name,
+            is_self: true,
+            mood: normalizedMood,
+        },
+        ...remainingCards,
+    ]);
+    persistCurrentSyncStateCache();
+
+    return normalizedMood;
+}
+
+function applyMoodSyncPayload(payload, options = {}) {
+    const source = asPlainObject(payload);
+
+    if (Array.isArray(source.mood_cards)) {
+        applyMoodCardsFromServer(source.mood_cards, options);
+        return;
+    }
+
+    if (source.mood && typeof source.mood === 'object') {
+        const selfUserId = Number(localUser.id);
+        const serverSelfMood = normalizeMoodPayload(source.mood);
+        const currentOtherCards = normalizeMoodCards(moodCards.value, links.value)
+            .filter((card) => Number(card?.id) !== selfUserId);
+
+        applyMoodCardsFromServer([
+            {
+                id: selfUserId,
+                name: localUser.name,
+                is_self: true,
+                mood: serverSelfMood,
+            },
+            ...currentOtherCards,
+        ], options);
+    }
+}
+
+function setMoodColor(color) {
+    if (!selfMoodCard.value) {
+        return;
+    }
+
+    const normalizedMood = upsertSelfMoodCard({
+        ...selfMoodCard.value.mood,
+        color,
+    }, { markLocalUpdate: true });
+    queueMoodUpdate(normalizedMood);
+    syncOfflineQueue().catch(() => {});
+}
+
+function previewMoodFireLevel(value) {
+    if (!selfMoodCard.value) {
+        moodFireSliderActive.value = false;
+        return;
+    }
+
+    moodFireSliderActive.value = true;
+    upsertSelfMoodCard({
+        ...selfMoodCard.value.mood,
+        fire_level: value,
+    });
+}
+
+function setMoodFireLevel(value) {
+    if (!selfMoodCard.value) {
+        moodFireSliderActive.value = false;
+        return;
+    }
+
+    const normalizedMood = upsertSelfMoodCard({
+        ...selfMoodCard.value.mood,
+        fire_level: value,
+    }, { markLocalUpdate: true });
+    moodFireSliderActive.value = false;
+    queueMoodUpdate(normalizedMood);
+    syncOfflineQueue().catch(() => {});
+}
+
+function setMoodFireEmoji(emoji) {
+    if (!selfMoodCard.value) {
+        return;
+    }
+
+    const normalizedMood = upsertSelfMoodCard({
+        ...selfMoodCard.value.mood,
+        fire_emoji: emoji,
+    }, { markLocalUpdate: true });
+    queueMoodUpdate(normalizedMood);
+    syncOfflineQueue().catch(() => {});
+}
+
+function previewMoodBatteryLevel(value) {
+    if (!selfMoodCard.value) {
+        moodBatterySliderActive.value = false;
+        return;
+    }
+
+    moodBatterySliderActive.value = true;
+    upsertSelfMoodCard({
+        ...selfMoodCard.value.mood,
+        battery_level: value,
+    });
+}
+
+function setMoodBatteryLevel(value) {
+    if (!selfMoodCard.value) {
+        moodBatterySliderActive.value = false;
+        return;
+    }
+
+    const normalizedMood = upsertSelfMoodCard({
+        ...selfMoodCard.value.mood,
+        battery_level: value,
+    }, { markLocalUpdate: true });
+    moodBatterySliderActive.value = false;
+    queueMoodUpdate(normalizedMood);
+    syncOfflineQueue().catch(() => {});
+}
+
+function setMoodBatteryEmoji(emoji) {
+    if (!selfMoodCard.value) {
+        return;
+    }
+
+    const normalizedMood = upsertSelfMoodCard({
+        ...selfMoodCard.value.mood,
+        battery_emoji: emoji,
+    }, { markLocalUpdate: true });
+    queueMoodUpdate(normalizedMood);
+    syncOfflineQueue().catch(() => {});
+}
+
 async function findUsers() {
     const query = searchQuery.value.trim();
     const assignCached = () => {
@@ -5330,6 +5942,31 @@ async function savePassword() {
     passwordForm.loading = false;
 }
 
+async function logoutAccount() {
+    if (logoutLoading.value) {
+        return;
+    }
+
+    resetMessages();
+    logoutLoading.value = true;
+
+    try {
+        await requestApi(() => window.axios.post(route('logout')));
+        window.location.href = route('login');
+        return;
+    } catch (error) {
+        const statusCode = Number(error?.response?.status ?? 0);
+        if (statusCode === 401 || statusCode === 419) {
+            window.location.href = route('login');
+            return;
+        }
+
+        showError(error);
+    } finally {
+        logoutLoading.value = false;
+    }
+}
+
 function subscribeUserChannel() {
     if (!window.Echo) {
         return;
@@ -5429,33 +6066,17 @@ onMounted(async () => {
     subscribeUserChannel();
     subscribeListChannel(selectedOwnerId.value);
 
-    itemsPollTimer = window.setInterval(() => {
-        if (document.hidden) {
-            return;
-        }
-
-        loadActiveTabItems();
-    }, 2500);
-
-    statePollTimer = window.setInterval(() => {
-        if (document.hidden) {
-            return;
-        }
-
-        refreshState();
-    }, 3000);
-
-    suggestionsPollTimer = window.setInterval(() => {
-        if (document.hidden) {
-            return;
-        }
-
-        loadActiveTabSuggestions();
-    }, 20000);
-
     queueSyncTimer = window.setInterval(() => {
         syncOfflineQueue();
     }, 1000);
+    moodRelativeNowMs.value = Date.now();
+    moodRelativeTimeTimer = window.setInterval(() => {
+        if (document.hidden) {
+            return;
+        }
+
+        moodRelativeNowMs.value = Date.now();
+    }, 30000);
 
     handleOnlineEvent = async () => {
         isBrowserOnline.value = true;
@@ -5521,6 +6142,11 @@ onBeforeUnmount(() => {
         clearInterval(queueSyncTimer);
     }
 
+    if (moodRelativeTimeTimer) {
+        clearInterval(moodRelativeTimeTimer);
+        moodRelativeTimeTimer = null;
+    }
+
     if (gamificationSyncTimer) {
         clearTimeout(gamificationSyncTimer);
         gamificationSyncTimer = null;
@@ -5575,10 +6201,13 @@ onBeforeUnmount(() => {
             </div>
 
 
-            <section v-if="activeTab !== 'profile'" class="mb-4 flex items-center justify-between">
+            <section
+                v-if="activeTab === 'products' || activeTab === 'todos' || activeTab === 'mood'"
+                class="mb-4 flex items-center justify-between"
+            >
                 <div class="flex items-center gap-2">
                     <h1 class="text-base font-semibold">
-                        {{ activeTab === 'products' ? 'Список продуктов' : 'Список дел' }}
+                        {{ activeTabTitle }}
                     </h1>
                     <span
                         v-if="activeTab === 'products' || activeTab === 'todos'"
@@ -5588,7 +6217,7 @@ onBeforeUnmount(() => {
                     </span>
                 </div>
 
-                <div class="relative">
+                <div v-if="activeTab === 'products' || activeTab === 'todos'" class="relative">
                     <button
                         type="button"
                         class="inline-flex items-center gap-2 rounded-xl border border-[#403e41] bg-[#221f22] px-3 py-2 text-xs text-[#fcfcfa]"
@@ -5931,6 +6560,133 @@ onBeforeUnmount(() => {
                 </draggable>
             </section>
 
+            <section v-if="activeTab === 'mood'" class="flex-1 space-y-3">
+                <article
+                    v-for="card in orderedMoodCards"
+                    :key="`mood-card-${card.id}`"
+                    class="rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4"
+                >
+                    <div class="flex items-center justify-between gap-3">
+                        <div class="min-w-0">
+                            <p class="truncate text-sm font-semibold text-[#fcfcfa]">
+                                {{ card.name }}
+                            </p>
+                            <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">
+                                {{ card.is_self ? 'вы' : 'участник' }}
+                            </p>
+                            <p class="mt-0.5 text-[11px] text-[#9f9a9d]">
+                                {{ formatMoodUpdatedAgo(card.mood) }}
+                            </p>
+                        </div>
+
+                        <div v-if="card.is_self" class="flex shrink-0 items-center gap-1.5">
+                            <button
+                                v-for="color in MOOD_COLOR_VALUES"
+                                :key="`mood-color-${card.id}-${color}`"
+                                type="button"
+                                class="inline-flex h-8 w-8 items-center justify-center rounded-full border transition"
+                                :class="moodColorControlClass(color, card.mood.color === color)"
+                                @click="setMoodColor(color)"
+                            >
+                                <span
+                                    class="h-4 w-4 rounded-full"
+                                    :class="moodColorDotClass(color)"
+                                />
+                            </button>
+                        </div>
+                        <div
+                            v-else
+                            class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[#403e41] bg-[#221f22]"
+                        >
+                            <span
+                                class="h-4 w-4 rounded-full"
+                                :class="moodColorDotClass(card.mood.color)"
+                            />
+                        </div>
+                    </div>
+
+                    <div class="mt-3 flex items-center gap-3">
+                        <Flame class="h-4 w-4 shrink-0 text-[#bcb7ba]" />
+                        <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="1"
+                            class="mood-range-slider"
+                            :class="card.is_self ? '' : 'pointer-events-none opacity-85'"
+                            :value="card.mood.fire_level"
+                            :disabled="!card.is_self"
+                            @input="card.is_self ? previewMoodFireLevel($event.target.value) : null"
+                            @change="card.is_self ? setMoodFireLevel($event.target.value) : null"
+                        >
+                    </div>
+                    <div class="mt-2 flex items-center gap-2">
+                        <template v-if="card.is_self">
+                            <button
+                                v-for="emoji in MOOD_FIRE_EMOJIS"
+                                :key="`mood-fire-emoji-${card.id}-${emoji}`"
+                                type="button"
+                                class="inline-flex h-9 w-9 items-center justify-center rounded-xl border text-lg transition"
+                                :class="
+                                    card.mood.fire_emoji === emoji
+                                        ? 'border-[#5b7fff]/70 bg-[#5b7fff]/18'
+                                        : 'border-[#403e41] bg-[#221f22]'
+                                "
+                                @click="setMoodFireEmoji(emoji)"
+                            >
+                                {{ emoji }}
+                            </button>
+                        </template>
+                        <div
+                            v-else
+                            class="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#403e41] bg-[#221f22] text-lg"
+                        >
+                            {{ card.mood.fire_emoji }}
+                        </div>
+                    </div>
+
+                    <div class="mt-3 flex items-center gap-3">
+                        <Battery class="h-4 w-4 shrink-0 text-[#bcb7ba]" />
+                        <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="1"
+                            class="mood-range-slider"
+                            :class="card.is_self ? '' : 'pointer-events-none opacity-85'"
+                            :value="card.mood.battery_level"
+                            :disabled="!card.is_self"
+                            @input="card.is_self ? previewMoodBatteryLevel($event.target.value) : null"
+                            @change="card.is_self ? setMoodBatteryLevel($event.target.value) : null"
+                        >
+                    </div>
+                    <div class="mt-2 flex items-center gap-2">
+                        <template v-if="card.is_self">
+                            <button
+                                v-for="emoji in MOOD_BATTERY_EMOJIS"
+                                :key="`mood-battery-emoji-${card.id}-${emoji}`"
+                                type="button"
+                                class="inline-flex h-9 w-9 items-center justify-center rounded-xl border text-lg transition"
+                                :class="
+                                    card.mood.battery_emoji === emoji
+                                        ? 'border-[#5b7fff]/70 bg-[#5b7fff]/18'
+                                        : 'border-[#403e41] bg-[#221f22]'
+                                "
+                                @click="setMoodBatteryEmoji(emoji)"
+                            >
+                                {{ emoji }}
+                            </button>
+                        </template>
+                        <div
+                            v-else
+                            class="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[#403e41] bg-[#221f22] text-lg"
+                        >
+                            {{ card.mood.battery_emoji }}
+                        </div>
+                    </div>
+                </article>
+            </section>
+
             <section v-if="activeTab === 'profile'" class="flex-1 space-y-4">
                 <div class="rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                     <div class="text-[11px] uppercase tracking-[0.18em] text-[#7f7b7e]">
@@ -6057,6 +6813,14 @@ onBeforeUnmount(() => {
                         </button>
                     </div>
                 </div>
+                <button
+                    type="button"
+                    class="w-full rounded-2xl border border-[#ee5c81]/55 bg-[#ee5c81]/12 px-4 py-3 text-sm font-semibold text-[#ee5c81] transition hover:border-[#ee5c81] hover:bg-[#ee5c81]/18 disabled:cursor-not-allowed disabled:opacity-60"
+                    :disabled="logoutLoading"
+                    @click="logoutAccount"
+                >
+                    {{ logoutLoading ? '\u0412\u044b\u0445\u043e\u0434...' : '\u0412\u044b\u0439\u0442\u0438 \u0438\u0437 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430' }}
+                </button>
             </section>
         </div>
 
@@ -6316,6 +7080,15 @@ onBeforeUnmount(() => {
             >
                 <Check class="bottom-menu-icon mb-1 h-4 w-4" />
                 Дела
+            </button>
+            <button
+                type="button"
+                class="flex flex-1 flex-col items-center rounded-2xl px-3 py-2 text-xs"
+                :class="activeTab === 'mood' ? 'bg-[#fcfcfa] text-[#19181a]' : 'text-[#bcb7ba]'"
+                @click="activeTab = 'mood'"
+            >
+                <Smile class="bottom-menu-icon mb-1 h-4 w-4" />
+                Настроение
             </button>
             <button
                 type="button"
@@ -6668,6 +7441,58 @@ onBeforeUnmount(() => {
 
 .bottom-menu-icon {
     stroke-width: 2.65;
+}
+
+.mood-range-slider {
+    width: 100%;
+    height: 10px;
+    appearance: none;
+    -webkit-appearance: none;
+    border: 1px solid rgb(64 62 65 / 88%);
+    border-radius: 9999px;
+    background: linear-gradient(
+        90deg,
+        rgb(220 108 108 / 90%) 0%,
+        rgb(216 182 82 / 90%) 52%,
+        rgb(74 176 120 / 88%) 100%
+    );
+}
+
+.mood-range-slider:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px rgb(91 127 255 / 22%);
+}
+
+.mood-range-slider::-webkit-slider-thumb {
+    width: 18px;
+    height: 18px;
+    appearance: none;
+    -webkit-appearance: none;
+    border: 2px solid rgb(34 31 34 / 96%);
+    border-radius: 9999px;
+    background: rgb(252 252 250 / 98%);
+    box-shadow: 0 2px 6px rgb(0 0 0 / 30%);
+}
+
+.mood-range-slider::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgb(34 31 34 / 96%);
+    border-radius: 9999px;
+    background: rgb(252 252 250 / 98%);
+    box-shadow: 0 2px 6px rgb(0 0 0 / 30%);
+}
+
+.mood-range-slider::-moz-range-track {
+    height: 10px;
+    border: 1px solid rgb(64 62 65 / 88%);
+    border-radius: 9999px;
+    background: linear-gradient(
+        90deg,
+        rgb(220 108 108 / 90%) 0%,
+        rgb(216 182 82 / 90%) 52%,
+        rgb(74 176 120 / 88%) 100%
+    );
 }
 
 .drag-handle {

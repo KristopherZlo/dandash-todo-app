@@ -27,6 +27,12 @@ class User extends Authenticatable
         'productivity_reward_history',
         'xp_color_seed',
         'gamification_updated_at',
+        'mood_color',
+        'mood_fire_level',
+        'mood_fire_emoji',
+        'mood_battery_level',
+        'mood_battery_emoji',
+        'mood_updated_at',
         'email',
         'password',
     ];
@@ -56,6 +62,9 @@ class User extends Authenticatable
             'productivity_reward_history' => 'array',
             'xp_color_seed' => 'integer',
             'gamification_updated_at' => 'datetime',
+            'mood_fire_level' => 'integer',
+            'mood_battery_level' => 'integer',
+            'mood_updated_at' => 'datetime',
         ];
     }
 

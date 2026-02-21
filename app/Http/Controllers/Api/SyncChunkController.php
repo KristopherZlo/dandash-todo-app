@@ -21,6 +21,10 @@ use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 class SyncChunkController extends Controller
 {
     private const OPERATION_RESERVATION_TTL_SECONDS = 60;
+    private const MOOD_COLOR_VALUES = ['red', 'yellow', 'green'];
+    private const MOOD_FIRE_EMOJIS = ['🥰', '😝', '😈'];
+    private const MOOD_BATTERY_EMOJIS = ['😴', '😡', '😄', '😊'];
+    private const MOOD_UNKNOWN_EMOJI = '❔';
 
     public function __construct(
         private readonly ListItemController $listItemController,
@@ -145,6 +149,7 @@ class SyncChunkController extends Controller
             'update_profile' => $this->handleUpdateProfileOperation($request, $operation),
             'update_password' => $this->handleUpdatePasswordOperation($request, $operation),
             'sync_gamification' => $this->handleSyncGamificationOperation($request, $operation),
+            'update_mood' => $this->handleUpdateMoodOperation($request, $operation),
             default => [],
         };
     }
@@ -393,6 +398,50 @@ class SyncChunkController extends Controller
         ];
     }
 
+    private function handleUpdateMoodOperation(Request $request, array $operation): array
+    {
+        $payload = is_array($operation['payload'] ?? null) ? $operation['payload'] : [];
+        $user = $request->user();
+        $incomingUpdatedAtMs = $this->normalizeMoodUpdatedAtMs($payload);
+        $currentUpdatedAtMs = $user->mood_updated_at?->valueOf();
+
+        if ($incomingUpdatedAtMs === null || ($currentUpdatedAtMs !== null && $incomingUpdatedAtMs < $currentUpdatedAtMs)) {
+            $freshUser = $user->fresh();
+
+            return [
+                'mood' => $this->listSyncService->getMoodState($freshUser),
+                'mood_cards' => $this->listSyncService->getMoodCards($freshUser)->values()->all(),
+                'applied' => false,
+            ];
+        }
+
+        $user->mood_color = $this->normalizeMoodColor($payload['color'] ?? null);
+        $user->mood_fire_level = $this->normalizeMoodLevel($payload['fire_level'] ?? null);
+        $user->mood_fire_emoji = $this->normalizeMoodEmoji(
+            $payload['fire_emoji'] ?? null,
+            self::MOOD_FIRE_EMOJIS,
+            self::MOOD_FIRE_EMOJIS[0]
+        );
+        $user->mood_battery_level = $this->normalizeMoodLevel($payload['battery_level'] ?? null);
+        $user->mood_battery_emoji = $this->normalizeMoodEmoji(
+            $payload['battery_emoji'] ?? null,
+            self::MOOD_BATTERY_EMOJIS,
+            self::MOOD_BATTERY_EMOJIS[3]
+        );
+        $user->mood_updated_at = now();
+        $user->save();
+
+        $this->dispatchUserSyncStateChangedForLinkedUsers((int) $user->id, 'mood_changed');
+
+        $freshUser = $user->fresh();
+
+        return [
+            'mood' => $this->listSyncService->getMoodState($freshUser),
+            'mood_cards' => $this->listSyncService->getMoodCards($freshUser)->values()->all(),
+            'applied' => true,
+        ];
+    }
+
     private function makeActionRequest(Request $baseRequest, array $payload): Request
     {
         $actionRequest = Request::create('/', 'POST', $payload);
@@ -421,6 +470,26 @@ class SyncChunkController extends Controller
         return $parsed > 0 ? $parsed : null;
     }
 
+    private function normalizeMoodUpdatedAtMs(array $payload): ?int
+    {
+        $updatedAtMs = $this->normalizePositiveInteger($payload['updated_at_ms'] ?? null);
+        if ($updatedAtMs !== null) {
+            return $updatedAtMs;
+        }
+
+        $updatedAt = trim((string) ($payload['updated_at'] ?? ''));
+        if ($updatedAt === '') {
+            return null;
+        }
+
+        $timestamp = strtotime($updatedAt);
+        if ($timestamp === false || $timestamp <= 0) {
+            return null;
+        }
+
+        return $timestamp * 1000;
+    }
+
     private function normalizeXpProgress(mixed $value): float
     {
         $parsed = (float) $value;
@@ -447,6 +516,32 @@ class SyncChunkController extends Controller
         }
 
         return $normalized;
+    }
+
+    private function normalizeMoodColor(mixed $value): string
+    {
+        $candidate = strtolower(trim((string) $value));
+
+        return in_array($candidate, self::MOOD_COLOR_VALUES, true)
+            ? $candidate
+            : self::MOOD_COLOR_VALUES[1];
+    }
+
+    private function normalizeMoodLevel(mixed $value): int
+    {
+        return max(0, min(100, (int) $value));
+    }
+
+    private function normalizeMoodEmoji(mixed $value, array $allowed, string $fallback): string
+    {
+        $candidate = trim((string) ($value ?? ''));
+        if ($candidate === self::MOOD_UNKNOWN_EMOJI) {
+            return $candidate;
+        }
+
+        return in_array($candidate, $allowed, true)
+            ? $candidate
+            : $fallback;
     }
 
     private function resolveStoredOperationResult(int $userId, string $opId, string $fallbackAction): ?array
@@ -571,11 +666,33 @@ class SyncChunkController extends Controller
         try {
             UserSyncStateChanged::dispatch($userId, $reason);
         } catch (\Throwable $exception) {
-            Log::warning('Realtime gamification sync dispatch failed.', [
+            Log::warning('Realtime user sync dispatch failed.', [
                 'user_id' => $userId,
                 'reason' => $reason,
                 'error' => $exception->getMessage(),
             ]);
+        }
+    }
+
+    private function dispatchUserSyncStateChangedForLinkedUsers(int $userId, string $reason): void
+    {
+        $targets = ListLink::query()
+            ->where('is_active', true)
+            ->where(function ($query) use ($userId): void {
+                $query->where('user_one_id', $userId)
+                    ->orWhere('user_two_id', $userId);
+            })
+            ->get(['user_one_id', 'user_two_id'])
+            ->flatMap(static fn (ListLink $link): array => [
+                (int) $link->user_one_id,
+                (int) $link->user_two_id,
+            ])
+            ->push($userId)
+            ->unique()
+            ->values();
+
+        foreach ($targets as $targetUserId) {
+            $this->dispatchUserSyncStateChangedSafely((int) $targetUserId, $reason);
         }
     }
 }

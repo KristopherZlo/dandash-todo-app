@@ -10,6 +10,12 @@ use Illuminate\Support\Collection;
 
 class ListSyncService
 {
+    private const MOOD_COLOR_VALUES = ['red', 'yellow', 'green'];
+    private const MOOD_FIRE_EMOJIS = ['🥰', '😝', '😈'];
+    private const MOOD_BATTERY_EMOJIS = ['😴', '😡', '😄', '😊'];
+    private const MOOD_UNKNOWN_EMOJI = '❔';
+    private const MOOD_STALE_RESET_AFTER_SECONDS = 86400;
+
     public function canonicalUserPair(int $firstUserId, int $secondUserId): array
     {
         return $firstUserId < $secondUserId
@@ -49,6 +55,7 @@ class ListSyncService
             'list_options' => $listOptions->all(),
             'default_owner_id' => $this->resolveDefaultOwnerId($user, $listOptions),
             'gamification' => $this->getGamificationState($user),
+            'mood_cards' => $this->getMoodCards($user)->values()->all(),
         ];
     }
 
@@ -70,6 +77,75 @@ class ListSyncService
             'xp_color_seed' => max(1, (int) ($user->xp_color_seed ?? 1)),
             'updated_at_ms' => $user->gamification_updated_at?->valueOf(),
         ];
+    }
+
+    public function getMoodState(User $user): array
+    {
+        $updatedAt = $user->mood_updated_at;
+        $updatedAtMs = $updatedAt?->valueOf();
+        $isStale = $this->isMoodStale($updatedAt);
+
+        return [
+            'color' => $this->normalizeMoodColor($user->mood_color),
+            'fire_level' => $isStale
+                ? 50
+                : $this->normalizeMoodLevel($user->mood_fire_level),
+            'fire_emoji' => $isStale
+                ? self::MOOD_UNKNOWN_EMOJI
+                : $this->normalizeMoodEmoji(
+                    $user->mood_fire_emoji,
+                    self::MOOD_FIRE_EMOJIS,
+                    self::MOOD_FIRE_EMOJIS[0]
+                ),
+            'battery_level' => $isStale
+                ? 50
+                : $this->normalizeMoodLevel($user->mood_battery_level),
+            'battery_emoji' => $isStale
+                ? self::MOOD_UNKNOWN_EMOJI
+                : $this->normalizeMoodEmoji(
+                    $user->mood_battery_emoji,
+                    self::MOOD_BATTERY_EMOJIS,
+                    self::MOOD_BATTERY_EMOJIS[3]
+                ),
+            'updated_at' => optional($updatedAt)->toISOString(),
+            'updated_at_ms' => $updatedAtMs,
+        ];
+    }
+
+    public function getMoodCards(User $user): Collection
+    {
+        $cards = collect([
+            $this->buildMoodCardPayload($user, true),
+        ]);
+
+        $links = $this->baseLinksForUser($user)
+            ->with([
+                'userOne:id,name,mood_color,mood_fire_level,mood_fire_emoji,mood_battery_level,mood_battery_emoji,mood_updated_at',
+                'userTwo:id,name,mood_color,mood_fire_level,mood_fire_emoji,mood_battery_level,mood_battery_emoji,mood_updated_at',
+            ])
+            ->get();
+
+        foreach ($links as $link) {
+            $otherUser = $link->user_one_id === $user->id ? $link->userTwo : $link->userOne;
+            if (! $otherUser) {
+                continue;
+            }
+
+            $cards->push($this->buildMoodCardPayload($otherUser, false));
+        }
+
+        $uniqueCards = $cards
+            ->unique(fn (array $card): int => (int) ($card['id'] ?? 0))
+            ->values();
+        $selfCard = $uniqueCards->firstWhere('is_self', true) ?? $this->buildMoodCardPayload($user, true);
+        $otherCards = $uniqueCards
+            ->filter(fn (array $card): bool => ! ((bool) ($card['is_self'] ?? false)))
+            ->sortBy(fn (array $card): string => strtolower((string) ($card['name'] ?? '')))
+            ->values();
+
+        return collect([$selfCard])
+            ->merge($otherCards)
+            ->values();
     }
 
     public function getPendingInvitations(User $user): Collection
@@ -161,6 +237,51 @@ class ListSyncService
                 $query->where('user_one_id', $user->id)
                     ->orWhere('user_two_id', $user->id);
             });
+    }
+
+    private function buildMoodCardPayload(User $user, bool $isSelf): array
+    {
+        return [
+            'id' => (int) $user->id,
+            'name' => $user->name,
+            'is_self' => $isSelf,
+            'mood' => $this->getMoodState($user),
+        ];
+    }
+
+    private function normalizeMoodColor(mixed $value): string
+    {
+        $candidate = strtolower(trim((string) $value));
+
+        return in_array($candidate, self::MOOD_COLOR_VALUES, true)
+            ? $candidate
+            : self::MOOD_COLOR_VALUES[1];
+    }
+
+    private function normalizeMoodLevel(mixed $value): int
+    {
+        return max(0, min(100, (int) $value));
+    }
+
+    private function normalizeMoodEmoji(mixed $value, array $allowed, string $fallback): string
+    {
+        $candidate = trim((string) ($value ?? ''));
+        if ($candidate === self::MOOD_UNKNOWN_EMOJI) {
+            return $candidate;
+        }
+
+        return in_array($candidate, $allowed, true)
+            ? $candidate
+            : $fallback;
+    }
+
+    private function isMoodStale(mixed $updatedAt): bool
+    {
+        if (! $updatedAt || ! method_exists($updatedAt, 'lt')) {
+            return false;
+        }
+
+        return $updatedAt->lt(now()->subSeconds(self::MOOD_STALE_RESET_AFTER_SECONDS));
     }
 
     private function resolveDefaultOwnerId(User $user, Collection $listOptions): int

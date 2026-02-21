@@ -3,6 +3,7 @@
 namespace Tests\Feature\Api;
 
 use App\Models\ListItem;
+use App\Models\ListLink;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -181,6 +182,83 @@ class SyncChunkTest extends TestCase
         $this->assertNotNull($user->gamification_updated_at);
     }
 
+    public function test_chunk_sync_updates_user_mood_state(): void
+    {
+        $user = User::factory()->create([
+            'mood_color' => 'yellow',
+            'mood_fire_level' => 40,
+            'mood_battery_level' => 60,
+        ]);
+
+        $response = $this->actingAs($user)->postJson('/api/sync/chunk', [
+            'operations' => [
+                [
+                    'op_id' => 'op-mood-1',
+                    'action' => 'update_mood',
+                    'payload' => [
+                        'color' => 'red',
+                        'fire_level' => 83,
+                        'battery_level' => 27,
+                        'updated_at_ms' => now()->addSecond()->valueOf(),
+                    ],
+                ],
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('results.0.status', 'ok')
+            ->assertJsonPath('results.0.data.mood.color', 'red')
+            ->assertJsonPath('results.0.data.mood.fire_level', 83)
+            ->assertJsonPath('results.0.data.mood.battery_level', 27)
+            ->assertJsonPath('results.0.data.mood_cards.0.id', $user->id)
+            ->assertJsonPath('results.0.data.applied', true);
+
+        $user->refresh();
+
+        $this->assertSame('red', $user->mood_color);
+        $this->assertSame(83, (int) $user->mood_fire_level);
+        $this->assertSame(27, (int) $user->mood_battery_level);
+        $this->assertNotNull($user->mood_updated_at);
+    }
+
+    public function test_chunk_sync_rejects_stale_mood_update_state(): void
+    {
+        $user = User::factory()->create([
+            'mood_color' => 'green',
+            'mood_fire_level' => 75,
+            'mood_battery_level' => 64,
+            'mood_updated_at' => now(),
+        ]);
+
+        $response = $this->actingAs($user)->postJson('/api/sync/chunk', [
+            'operations' => [
+                [
+                    'op_id' => 'op-mood-stale-1',
+                    'action' => 'update_mood',
+                    'payload' => [
+                        'color' => 'red',
+                        'fire_level' => 10,
+                        'battery_level' => 11,
+                        'updated_at_ms' => now()->subSecond()->valueOf(),
+                    ],
+                ],
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('results.0.status', 'ok')
+            ->assertJsonPath('results.0.data.applied', false)
+            ->assertJsonPath('results.0.data.mood.color', 'green')
+            ->assertJsonPath('results.0.data.mood.fire_level', 75)
+            ->assertJsonPath('results.0.data.mood.battery_level', 64);
+
+        $user->refresh();
+
+        $this->assertSame('green', $user->mood_color);
+        $this->assertSame(75, (int) $user->mood_fire_level);
+        $this->assertSame(64, (int) $user->mood_battery_level);
+    }
+
     public function test_sync_state_contains_gamification_payload(): void
     {
         $user = User::factory()->create([
@@ -199,5 +277,68 @@ class SyncChunkTest extends TestCase
             ->assertJsonPath('gamification.xp_color_seed', 77)
             ->assertJsonPath('gamification.productivity_reward_history.0', 8)
             ->assertJsonPath('gamification.productivity_reward_history.1', 6);
+    }
+
+    public function test_sync_state_contains_mood_cards_for_self_and_connected_users(): void
+    {
+        $owner = User::factory()->create([
+            'name' => 'Owner',
+            'mood_color' => 'green',
+            'mood_fire_level' => 72,
+            'mood_battery_level' => 63,
+        ]);
+        $friend = User::factory()->create([
+            'name' => 'Friend',
+            'mood_color' => 'red',
+            'mood_fire_level' => 24,
+            'mood_battery_level' => 31,
+        ]);
+
+        [$userOneId, $userTwoId] = $owner->id < $friend->id
+            ? [$owner->id, $friend->id]
+            : [$friend->id, $owner->id];
+
+        ListLink::query()->create([
+            'user_one_id' => $userOneId,
+            'user_two_id' => $userTwoId,
+            'is_active' => true,
+            'accepted_at' => now(),
+        ]);
+
+        $response = $this->actingAs($owner)
+            ->getJson('/api/sync/state')
+            ->assertOk();
+
+        $response
+            ->assertJsonPath('mood_cards.0.id', $owner->id)
+            ->assertJsonPath('mood_cards.0.is_self', true)
+            ->assertJsonPath('mood_cards.0.mood.color', 'green')
+            ->assertJsonPath('mood_cards.1.id', $friend->id)
+            ->assertJsonPath('mood_cards.1.is_self', false)
+            ->assertJsonPath('mood_cards.1.mood.color', 'red');
+    }
+
+    public function test_sync_state_resets_stale_mood_after_24_hours(): void
+    {
+        $user = User::factory()->create([
+            'mood_color' => 'yellow',
+            'mood_fire_level' => 88,
+            'mood_fire_emoji' => '🥰',
+            'mood_battery_level' => 12,
+            'mood_battery_emoji' => '😡',
+            'mood_updated_at' => now()->subDay()->subMinute(),
+        ]);
+
+        $response = $this->actingAs($user)
+            ->getJson('/api/sync/state')
+            ->assertOk();
+
+        $response
+            ->assertJsonPath('mood_cards.0.id', $user->id)
+            ->assertJsonPath('mood_cards.0.mood.color', 'yellow')
+            ->assertJsonPath('mood_cards.0.mood.fire_level', 50)
+            ->assertJsonPath('mood_cards.0.mood.battery_level', 50)
+            ->assertJsonPath('mood_cards.0.mood.fire_emoji', '❔')
+            ->assertJsonPath('mood_cards.0.mood.battery_emoji', '❔');
     }
 }
