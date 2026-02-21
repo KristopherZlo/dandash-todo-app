@@ -6378,6 +6378,7 @@ onBeforeUnmount(() => {
                 >
                     <template #item="{ element: item }">
                         <div
+                            class="drag-item-shell"
                             :ref="(element) => setItemCardRef('product', item, element)"
                             :class="{
                                 'batch-remove-fly': isBatchRemovingItem(item),
@@ -6526,6 +6527,7 @@ onBeforeUnmount(() => {
                 >
                     <template #item="{ element: item }">
                         <div
+                            class="drag-item-shell"
                             :ref="(element) => setItemCardRef('todo', item, element)"
                             :class="{
                                 'batch-remove-fly': isBatchRemovingItem(item),
@@ -7547,16 +7549,37 @@ onBeforeUnmount(() => {
     cursor: grabbing;
 }
 
+.drag-item-shell {
+    border-radius: 1rem;
+    transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.22s ease;
+}
+
 .drag-ghost {
     opacity: 0.35;
 }
 
 .drag-chosen {
-    transform: scale(1.01);
+    animation: drag-ready-glow 0.24s ease forwards;
 }
 
 .drag-dragging {
     opacity: 0.92;
+}
+
+@keyframes drag-ready-glow {
+    from {
+        transform: scale(1);
+        box-shadow:
+            0 0 0 0 rgb(252 252 250 / 0%),
+            0 0 0 0 rgb(252 252 250 / 0%);
+    }
+
+    to {
+        transform: scale(1.01);
+        box-shadow:
+            0 0 0 1px rgb(252 252 250 / 20%),
+            0 0 16px rgb(252 252 250 / 16%);
+    }
 }
 
 .batch-remove-fly {

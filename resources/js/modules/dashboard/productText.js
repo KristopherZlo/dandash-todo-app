@@ -174,6 +174,8 @@ export function parseProductTextPayload(rawText) {
     const separatorPattern = '[\\.,;:]?';
     const prefixMatcher = new RegExp(`^${numberPattern}\\s*${unitPattern}${separatorPattern}\\s+(.+)$`, 'iu');
     const suffixMatcher = new RegExp(`^(.+?)\\s+${numberPattern}\\s*${unitPattern}${separatorPattern}$`, 'iu');
+    const prefixNumberOnlyMatcher = new RegExp(`^${numberPattern}${separatorPattern}\\s+(.+)$`, 'iu');
+    const suffixNumberOnlyMatcher = new RegExp(`^(.+?)\\s+${numberPattern}${separatorPattern}$`, 'iu');
 
     let text = source;
     let quantity = null;
@@ -190,6 +192,20 @@ export function parseProductTextPayload(rawText) {
             text = String(suffixMatch[1] ?? '').trim();
             quantity = normalizeQuantityInput(suffixMatch[2]);
             unit = normalizeUnitInput(suffixMatch[3]);
+        } else {
+            const prefixNumberOnlyMatch = source.match(prefixNumberOnlyMatcher);
+            if (prefixNumberOnlyMatch) {
+                quantity = normalizeQuantityInput(prefixNumberOnlyMatch[1]);
+                unit = 'шт';
+                text = String(prefixNumberOnlyMatch[2] ?? '').trim();
+            } else {
+                const suffixNumberOnlyMatch = source.match(suffixNumberOnlyMatcher);
+                if (suffixNumberOnlyMatch) {
+                    text = String(suffixNumberOnlyMatch[1] ?? '').trim();
+                    quantity = normalizeQuantityInput(suffixNumberOnlyMatch[2]);
+                    unit = 'шт';
+                }
+            }
         }
     }
 
