@@ -27,7 +27,12 @@ const shouldUseCurrentHostForReverb = configuredReverbHost === ''
         && !LOCALHOST_ALIASES.has(currentHost.toLowerCase())
     );
 const reverbHost = shouldUseCurrentHostForReverb ? currentHost : configuredReverbHost;
-const reverbPort = Number(import.meta.env.VITE_REVERB_PORT ?? 8080);
+const configuredReverbPort = Number(import.meta.env.VITE_REVERB_PORT ?? 0);
+const locationPort = Number(window.location.port || 0);
+const defaultReverbPort = reverbScheme === 'https' ? 443 : 80;
+const reverbPort = configuredReverbPort > 0
+    ? configuredReverbPort
+    : (locationPort > 0 ? locationPort : defaultReverbPort);
 const authEndpoint = appBaseUrl
     ? `${appBaseUrl}/broadcasting/auth`
     : '/broadcasting/auth';
