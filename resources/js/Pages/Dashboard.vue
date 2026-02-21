@@ -56,7 +56,30 @@ const localUser = reactive({
     email: page.props.auth.user.email,
 });
 
-const activeTab = ref('products');
+const DASHBOARD_TAB_VALUES = ['products', 'todos', 'mood', 'profile'];
+const DASHBOARD_TAB_SET = new Set(DASHBOARD_TAB_VALUES);
+const ACTIVE_TAB_STORAGE_KEY = `dandash:active-tab:v1:user-${localUser.id}`;
+const TOUCH_DRAG_HOLD_DELAY_MS = 500;
+
+function normalizeDashboardTab(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    return DASHBOARD_TAB_SET.has(normalized) ? normalized : 'products';
+}
+
+function readPersistedDashboardTab() {
+    if (typeof window === 'undefined') {
+        return 'products';
+    }
+
+    try {
+        const saved = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+        return normalizeDashboardTab(saved);
+    } catch (error) {
+        return 'products';
+    }
+}
+
+const activeTab = ref(readPersistedDashboardTab());
 const listDropdownOpen = ref(false);
 const selectedOwnerId = ref(props.initialState.default_owner_id ?? localUser.id);
 
@@ -194,6 +217,18 @@ const PRODUCTIVITY_REWARD_HISTORY_STORAGE_KEY = `dandash:productivity-reward-his
 const XP_COLOR_SEED_STORAGE_KEY = `dandash:xp-color-seed:${CACHE_VERSION}:user-${localUser.id}`;
 const GAMIFICATION_UPDATED_AT_STORAGE_KEY = `dandash:gamification-updated-at:${CACHE_VERSION}:user-${localUser.id}`;
 const MOOD_UPDATED_AT_STORAGE_KEY = `dandash:mood-updated-at:${CACHE_VERSION}:user-${localUser.id}`;
+
+function persistActiveTabToStorage(tab) {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    try {
+        window.localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, normalizeDashboardTab(tab));
+    } catch (error) {
+        // Ignore storage write errors (private mode / quota exceeded).
+    }
+}
 
 let itemsPollTimer = null;
 let statePollTimer = null;
@@ -6022,6 +6057,7 @@ watch(selectedOwnerId, async (ownerId) => {
 });
 
 watch(activeTab, async (tab) => {
+    persistActiveTabToStorage(tab);
     listDropdownOpen.value = false;
     await Promise.all([loadActiveTabItems(), loadActiveTabSuggestions()]);
 
@@ -6046,6 +6082,7 @@ watch(isSkippableAnimationPlaying, (isActive) => {
 }, { immediate: true });
 
 onMounted(async () => {
+    persistActiveTabToStorage(activeTab.value);
     loadOfflineStateFromStorage();
     applyCachedSyncState(true);
     hydrateSelectedListsFromCache();
@@ -6330,6 +6367,8 @@ onBeforeUnmount(() => {
                     v-model="productItems"
                     item-key="local_id"
                     handle=".drag-handle"
+                    :delay="TOUCH_DRAG_HOLD_DELAY_MS"
+                    :delay-on-touch-only="true"
                     ghost-class="drag-ghost"
                     chosen-class="drag-chosen"
                     drag-class="drag-dragging"
@@ -6476,6 +6515,8 @@ onBeforeUnmount(() => {
                     v-model="todoItems"
                     item-key="local_id"
                     handle=".drag-handle"
+                    :delay="TOUCH_DRAG_HOLD_DELAY_MS"
+                    :delay-on-touch-only="true"
                     ghost-class="drag-ghost"
                     chosen-class="drag-chosen"
                     drag-class="drag-dragging"
