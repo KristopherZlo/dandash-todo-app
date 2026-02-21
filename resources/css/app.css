@@ -48,6 +48,15 @@
         background: rgba(165, 215, 116, 0.28);
         color: #19181a;
     }
+
+    /* iOS Safari focus-zoom fix: keep form controls at 16px+ */
+    @supports (-webkit-touch-callout: none) {
+        input,
+        textarea,
+        select {
+            font-size: 16px !important;
+        }
+    }
 }
 
 @layer components {
