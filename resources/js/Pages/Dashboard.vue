@@ -20,6 +20,7 @@ import {
     todoPriorityLabel,
 } from '@/modules/dashboard/todoPriority';
 import { normalizeTodoComparableText } from '@/modules/dashboard/textNormalize';
+import adBannersConfig from '@/config/adBanners.json';
 import { Head, usePage } from '@inertiajs/vue3';
 import {
     Battery,
@@ -64,7 +65,13 @@ const ACTIVE_TAB_STORAGE_KEY = `dandash:active-tab:v1:user-${localUser.id}`;
 const THEME_MODE_VALUES = ['system', 'light', 'dark'];
 const THEME_MODE_SET = new Set(THEME_MODE_VALUES);
 const THEME_MODE_STORAGE_KEY = 'dandash:theme-mode:v1';
+const ADS_ENABLED_STORAGE_KEY = `dandash:ads-enabled:v1:user-${localUser.id}`;
 const TOUCH_DRAG_HOLD_DELAY_MS = 500;
+const AD_MODAL_SHOW_CHANCE = 1;
+const AD_BANNER_PATHS = (Array.isArray(adBannersConfig?.banners) ? adBannersConfig.banners : [])
+    .map((entry) => (typeof entry === 'string' ? entry : entry?.path))
+    .map((entry) => String(entry ?? '').trim())
+    .filter((entry) => entry !== '');
 
 function normalizeDashboardTab(value) {
     const normalized = String(value ?? '').trim().toLowerCase();
@@ -102,6 +109,23 @@ function readPersistedThemeMode() {
     }
 }
 
+function readPersistedAdsEnabled() {
+    if (typeof window === 'undefined') {
+        return true;
+    }
+
+    try {
+        const saved = window.localStorage.getItem(ADS_ENABLED_STORAGE_KEY);
+        if (saved === null) {
+            return true;
+        }
+
+        return saved !== '0' && saved !== 'false';
+    } catch (error) {
+        return true;
+    }
+}
+
 function resolveThemeByMode(mode) {
     const normalized = normalizeThemeMode(mode);
     if (normalized === 'light' || normalized === 'dark') {
@@ -115,8 +139,49 @@ function resolveThemeByMode(mode) {
     return 'dark';
 }
 
+function pickRandomAdBannerPath() {
+    if (AD_BANNER_PATHS.length === 0) {
+        return '';
+    }
+
+    const randomIndex = Math.floor(Math.random() * AD_BANNER_PATHS.length);
+    return AD_BANNER_PATHS[randomIndex] ?? '';
+}
+
+function resolveAdBannerPath(path) {
+    const rawPath = String(path ?? '').trim();
+    if (rawPath === '') {
+        return '';
+    }
+
+    if (/^https?:\/\//i.test(rawPath) || rawPath.startsWith('data:')) {
+        return rawPath;
+    }
+
+    return resolvePublicAssetUrl(rawPath.replace(/^\/+/, ''));
+}
+
+function maybeOpenRandomAdModal() {
+    if (!adsEnabled.value || AD_BANNER_PATHS.length === 0 || Math.random() >= AD_MODAL_SHOW_CHANCE) {
+        return;
+    }
+
+    const nextBannerPath = resolveAdBannerPath(pickRandomAdBannerPath());
+    if (!nextBannerPath) {
+        return;
+    }
+
+    activeAdBannerPath.value = nextBannerPath;
+    adModalOpen.value = true;
+}
+
+function closeAdModal() {
+    adModalOpen.value = false;
+}
+
 const activeTab = ref(readPersistedDashboardTab());
 const themeMode = ref(readPersistedThemeMode());
+const adsEnabled = ref(readPersistedAdsEnabled());
 const resolvedTheme = ref(resolveThemeByMode(themeMode.value));
 const listDropdownOpen = ref(false);
 const selectedOwnerId = ref(props.initialState.default_owner_id ?? localUser.id);
@@ -148,6 +213,26 @@ const editingDueAt = ref('');
 const shareModalOpen = ref(false);
 const inviteModalOpen = ref(false);
 const inviteModalTab = ref('invitations');
+const adModalOpen = ref(false);
+const activeAdBannerPath = ref('');
+
+function toggleAdsEnabled() {
+    adsEnabled.value = !adsEnabled.value;
+
+    if (!adsEnabled.value) {
+        closeAdModal();
+    }
+
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    try {
+        window.localStorage.setItem(ADS_ENABLED_STORAGE_KEY, adsEnabled.value ? '1' : '0');
+    } catch (error) {
+        // Ignore storage write errors (private mode / quota exceeded).
+    }
+}
 
 const searchQuery = ref('');
 const searchResults = ref([]);
@@ -165,6 +250,7 @@ const batchRemovingItemKeys = ref([]);
 const batchRemovalAnimating = ref(false);
 const batchCollapseHiddenItemKeys = ref([]);
 const batchCollapseScene = ref(null);
+const recentlyAddedItemKeys = ref([]);
 const deleteFeedbackBursts = ref([]);
 const xpStars = ref([]);
 const progressBarRef = ref(null);
@@ -1559,6 +1645,25 @@ function isBatchRemovingItem(item) {
 
 function isBatchCollapseHiddenItem(item) {
     return batchCollapseHiddenItemKeys.value.includes(itemViewKey(item));
+}
+
+function isRecentlyAddedItem(item) {
+    return recentlyAddedItemKeys.value.includes(itemViewKey(item));
+}
+
+function markRecentlyAddedItem(item) {
+    const key = itemViewKey(item);
+    if (!key) {
+        return;
+    }
+
+    if (!recentlyAddedItemKeys.value.includes(key)) {
+        recentlyAddedItemKeys.value = [...recentlyAddedItemKeys.value, key];
+    }
+
+    scheduleEffectTimeout(() => {
+        recentlyAddedItemKeys.value = recentlyAddedItemKeys.value.filter((entry) => entry !== key);
+    }, 460);
 }
 
 function scheduleEffectTimeout(callback, delayMs) {
@@ -5184,6 +5289,7 @@ async function createItemOptimistically(type, text, dueAt = null, options = {}) 
     });
 
     upsertLocalItem(ownerId, type, optimisticItem, { atTop: true, linkId });
+    markRecentlyAddedItem(optimisticItem);
     queueCreate(ownerId, type, optimisticItem, linkId);
     await syncOfflineQueue();
 }
@@ -6372,6 +6478,7 @@ watch(isSkippableAnimationPlaying, (isActive) => {
 
 onMounted(async () => {
     applyThemeMode(themeMode.value, { persist: false });
+    maybeOpenRandomAdModal();
 
     if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
         systemThemeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -6567,34 +6674,38 @@ onBeforeUnmount(() => {
                         <ChevronDown class="h-4 w-4" />
                     </button>
 
-                    <div
-                        v-if="listDropdownOpen"
-                        class="absolute right-0 z-20 mt-2 w-56 rounded-2xl border border-[#403e41] bg-[#221f22] p-2 shadow-2xl"
-                    >
-                        <button
-                            v-for="option in listOptions"
-                            :key="`option-${option.owner_id}-${option.link_id ?? 'personal'}`"
-                            type="button"
-                            class="mb-1 w-full rounded-xl px-3 py-2 text-left text-sm transition last:mb-0"
-                            :class="
-                                Number(option.owner_id) === Number(selectedOwnerId)
-                                    ? 'bg-[#2d2a2c] text-[#fcfcfa]'
-                                    : 'text-[#bcb7ba] hover:bg-[#2d2a2c]'
-                            "
-                            @click="selectedOwnerId = option.owner_id"
+                    <Transition name="dropdown-panel">
+                        <div
+                            v-if="listDropdownOpen"
+                            class="absolute right-0 z-20 mt-2 w-56 rounded-2xl border border-[#403e41] bg-[#221f22] p-2 shadow-2xl"
                         >
-                            <span class="flex items-center justify-between gap-2">
-                                <span class="truncate">{{ option.label }}</span>
-                                <Check
-                                    v-if="Number(option.owner_id) === Number(selectedOwnerId)"
-                                    class="h-4 w-4 shrink-0"
-                                />
-                            </span>
-                        </button>
-                    </div>
+                            <button
+                                v-for="option in listOptions"
+                                :key="`option-${option.owner_id}-${option.link_id ?? 'personal'}`"
+                                type="button"
+                                class="mb-1 w-full rounded-xl px-3 py-2 text-left text-sm transition last:mb-0"
+                                :class="
+                                    Number(option.owner_id) === Number(selectedOwnerId)
+                                        ? 'bg-[#2d2a2c] text-[#fcfcfa]'
+                                        : 'text-[#bcb7ba] hover:bg-[#2d2a2c]'
+                                "
+                                @click="selectedOwnerId = option.owner_id"
+                            >
+                                <span class="flex items-center justify-between gap-2">
+                                    <span class="truncate">{{ option.label }}</span>
+                                    <Check
+                                        v-if="Number(option.owner_id) === Number(selectedOwnerId)"
+                                        class="h-4 w-4 shrink-0"
+                                    />
+                                </span>
+                            </button>
+                        </div>
+                    </Transition>
                 </div>
             </section>
 
+            <Transition name="tab-panel" mode="out-in">
+                <div :key="`dashboard-tab-${activeTab}`" class="flex-1 flex flex-col">
             <section v-if="activeTab === 'products'" class="flex-1">
                 <div class="mb-4 space-y-2">
                     <div class="flex gap-2">
@@ -6684,6 +6795,7 @@ onBeforeUnmount(() => {
                             :class="{
                                 'batch-remove-fly': isBatchRemovingItem(item),
                                 'batch-remove-hidden': isBatchCollapseHiddenItem(item),
+                                'item-added-pop': isRecentlyAddedItem(item),
                             }"
                         >
                             <SwipeListItem
@@ -6833,6 +6945,7 @@ onBeforeUnmount(() => {
                             :class="{
                                 'batch-remove-fly': isBatchRemovingItem(item),
                                 'batch-remove-hidden': isBatchCollapseHiddenItem(item),
+                                'item-added-pop': isRecentlyAddedItem(item),
                             }"
                         >
                             <SwipeListItem
@@ -7223,7 +7336,32 @@ onBeforeUnmount(() => {
                         <span class="font-mono text-[#d7d2d5]">{{ buildVersion }}</span>
                     </div>
                 </div>
+                <button
+                    type="button"
+                    role="switch"
+                    :aria-checked="adsEnabled ? 'true' : 'false'"
+                    class="flex w-full items-center justify-between gap-3 rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-3 text-left transition hover:border-[#fcfcfa]/35"
+                    @click="toggleAdsEnabled"
+                >
+                    <div class="min-w-0">
+                        <p class="text-sm font-semibold text-[#fcfcfa]">Ads</p>
+                        <p class="mt-0.5 text-xs text-[#9f9a9d]">
+                            {{ adsEnabled ? 'Enabled on load' : 'Disabled locally' }}
+                        </p>
+                    </div>
+                    <span
+                        class="relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition"
+                        :class="adsEnabled ? 'border-[#5b7fff]/70 bg-[#5b7fff]/18' : 'border-[#403e41] bg-[#2d2a2c]'"
+                    >
+                        <span
+                            class="absolute h-5 w-5 rounded-full bg-[#fcfcfa] shadow transition-transform duration-200 ease-out"
+                            :class="adsEnabled ? 'translate-x-6' : 'translate-x-1'"
+                        />
+                    </span>
+                </button>
             </section>
+        </div>
+            </Transition>
         </div>
 
 
@@ -7289,8 +7427,8 @@ onBeforeUnmount(() => {
             @change="applyTodoItemDuePickerValue"
         >
 
-        <div class="delete-burst-layer" aria-hidden="true">
-            <div v-if="batchCollapseScene" class="batch-collapse-scene">
+        <div v-if="batchCollapseScene" class="batch-collapse-layer" aria-hidden="true">
+            <div class="batch-collapse-scene">
                 <div
                     v-for="incoming in batchCollapseScene.incoming"
                     :key="`batch-collapse-incoming-${incoming.id}`"
@@ -7327,7 +7465,9 @@ onBeforeUnmount(() => {
                     }"
                 />
             </div>
+        </div>
 
+        <div class="delete-burst-layer" aria-hidden="true">
             <div
                 v-for="burst in deleteFeedbackBursts"
                 :key="`delete-burst-${burst.id}`"
@@ -7467,8 +7607,8 @@ onBeforeUnmount(() => {
         >
             <button
                 type="button"
-                class="flex flex-1 flex-col items-center rounded-2xl px-3 py-2 text-xs"
-                :class="activeTab === 'products' ? 'bg-[#fcfcfa] text-[#19181a]' : 'text-[#bcb7ba]'"
+                class="dashboard-tab-btn flex flex-1 flex-col items-center rounded-2xl px-3 py-2 text-xs transition-[background-color,color,transform] duration-220 ease-out"
+                :class="activeTab === 'products' ? 'dashboard-tab-btn--active bg-[#fcfcfa] text-[#19181a]' : 'dashboard-tab-btn--idle text-[#bcb7ba]'"
                 @click="activeTab = 'products'"
             >
                 <ShoppingCart class="bottom-menu-icon mb-1 h-4 w-4" />
@@ -7476,8 +7616,8 @@ onBeforeUnmount(() => {
             </button>
             <button
                 type="button"
-                class="flex flex-1 flex-col items-center rounded-2xl px-3 py-2 text-xs"
-                :class="activeTab === 'todos' ? 'bg-[#fcfcfa] text-[#19181a]' : 'text-[#bcb7ba]'"
+                class="dashboard-tab-btn flex flex-1 flex-col items-center rounded-2xl px-3 py-2 text-xs transition-[background-color,color,transform] duration-220 ease-out"
+                :class="activeTab === 'todos' ? 'dashboard-tab-btn--active bg-[#fcfcfa] text-[#19181a]' : 'dashboard-tab-btn--idle text-[#bcb7ba]'"
                 @click="activeTab = 'todos'"
             >
                 <Check class="bottom-menu-icon mb-1 h-4 w-4" />
@@ -7485,8 +7625,8 @@ onBeforeUnmount(() => {
             </button>
             <button
                 type="button"
-                class="flex flex-1 flex-col items-center rounded-2xl px-3 py-2 text-xs"
-                :class="activeTab === 'mood' ? 'bg-[#fcfcfa] text-[#19181a]' : 'text-[#bcb7ba]'"
+                class="dashboard-tab-btn flex flex-1 flex-col items-center rounded-2xl px-3 py-2 text-xs transition-[background-color,color,transform] duration-220 ease-out"
+                :class="activeTab === 'mood' ? 'dashboard-tab-btn--active bg-[#fcfcfa] text-[#19181a]' : 'dashboard-tab-btn--idle text-[#bcb7ba]'"
                 @click="activeTab = 'mood'"
             >
                 <Smile class="bottom-menu-icon mb-1 h-4 w-4" />
@@ -7494,14 +7634,38 @@ onBeforeUnmount(() => {
             </button>
             <button
                 type="button"
-                class="flex flex-1 flex-col items-center rounded-2xl px-3 py-2 text-xs"
-                :class="activeTab === 'profile' ? 'bg-[#fcfcfa] text-[#19181a]' : 'text-[#bcb7ba]'"
+                class="dashboard-tab-btn flex flex-1 flex-col items-center rounded-2xl px-3 py-2 text-xs transition-[background-color,color,transform] duration-220 ease-out"
+                :class="activeTab === 'profile' ? 'dashboard-tab-btn--active bg-[#fcfcfa] text-[#19181a]' : 'dashboard-tab-btn--idle text-[#bcb7ba]'"
                 @click="activeTab = 'profile'"
             >
                 <UserRound class="bottom-menu-icon mb-1 h-4 w-4" />
                 Профиль
             </button>
         </nav>
+
+        <Transition name="app-modal">
+            <div v-if="adModalOpen" class="fixed inset-0 z-[120] bg-[#19181a]/90 p-2.5" @click.self="closeAdModal">
+                <div class="relative flex h-full flex-col overflow-hidden rounded-3xl border border-[#403e41] bg-[#2d2a2c]">
+                    <div class="absolute left-3 top-3 z-10 rounded-lg bg-black/35 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white">
+                        advertisement
+                    </div>
+                    <button
+                        type="button"
+                        class="absolute right-3 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-black/35 text-white transition hover:bg-black/55"
+                        aria-label="Закрыть рекламу"
+                        @click="closeAdModal"
+                    >
+                        <X class="h-5 w-5" />
+                    </button>
+                    <img
+                        v-if="activeAdBannerPath"
+                        :src="activeAdBannerPath"
+                        alt="Рекламный баннер"
+                        class="h-full w-full object-fill"
+                    >
+                </div>
+            </div>
+        </Transition>
 
         <Transition name="app-modal">
             <div v-if="shareModalOpen" class="fixed inset-0 z-[120] bg-[#19181a]/90 p-2.5" @click.self="shareModalOpen = false">
@@ -7760,6 +7924,33 @@ onBeforeUnmount(() => {
     transform: translateY(8px) scale(0.98);
 }
 
+.tab-panel-enter-active,
+.tab-panel-leave-active {
+    transition: opacity 0.2s ease, transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.tab-panel-enter-from {
+    opacity: 0;
+    transform: translateY(10px);
+}
+
+.tab-panel-leave-to {
+    opacity: 0;
+    transform: translateY(-8px);
+}
+
+.dropdown-panel-enter-active,
+.dropdown-panel-leave-active {
+    transition: opacity 0.18s ease, transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+    transform-origin: top right;
+}
+
+.dropdown-panel-enter-from,
+.dropdown-panel-leave-to {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+}
+
 .smart-suggestions-enter-active,
 .smart-suggestions-leave-active {
     overflow: hidden;
@@ -7841,6 +8032,21 @@ onBeforeUnmount(() => {
     touch-action: pan-y;
 }
 
+.dashboard-tab-btn--active {
+    transform: translateY(-1px) scale(1);
+    box-shadow:
+        inset 0 0 0 1px rgb(252 252 250 / 10%),
+        0 5px 14px rgb(0 0 0 / 20%);
+}
+
+.dashboard-tab-btn--idle {
+    transform: translateY(0) scale(0.985);
+}
+
+.dashboard-tab-btn:active {
+    transform: scale(0.96);
+}
+
 .bottom-menu-icon {
     stroke-width: 2.65;
 }
@@ -7913,6 +8119,10 @@ onBeforeUnmount(() => {
     transition: box-shadow 0.22s ease;
 }
 
+.item-added-pop {
+    animation: item-added-pop 0.42s cubic-bezier(0.2, 0.78, 0.24, 1);
+}
+
 .drag-ghost {
     opacity: 0.35;
 }
@@ -7939,6 +8149,28 @@ onBeforeUnmount(() => {
     }
 }
 
+@keyframes item-added-pop {
+    0% {
+        opacity: 0;
+        transform: translateY(12px) scale(0.97);
+        box-shadow: 0 0 0 0 rgb(252 252 250 / 0%);
+    }
+
+    58% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        box-shadow:
+            0 0 0 1px rgb(252 252 250 / 18%),
+            0 0 12px rgb(252 252 250 / 14%);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        box-shadow: 0 0 0 0 rgb(252 252 250 / 0%);
+    }
+}
+
 .batch-remove-fly {
     animation: batch-remove-fly 0.19s cubic-bezier(0.2, 0.85, 0.3, 1) forwards;
 }
@@ -7962,6 +8194,14 @@ onBeforeUnmount(() => {
 .batch-collapse-scene {
     position: absolute;
     inset: 0;
+}
+
+.batch-collapse-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 35;
+    pointer-events: none;
+    overflow: hidden;
 }
 
 .batch-collapse-incoming,
