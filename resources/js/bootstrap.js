@@ -14,6 +14,12 @@ if (appBaseUrl) {
 }
 
 window.axios.defaults.headers.common['X-Requested-With'] = 'XMLHttpRequest';
+
+const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+if (csrfToken) {
+    window.axios.defaults.headers.common['X-CSRF-TOKEN'] = csrfToken;
+}
+
 window.Pusher = Pusher;
 
 const LOCALHOST_ALIASES = new Set(['localhost', '127.0.0.1', '::1']);
@@ -46,4 +52,26 @@ window.Echo = new Echo({
     forceTLS: reverbScheme === 'https',
     authEndpoint,
     enabledTransports: ['ws', 'wss'],
+});
+
+const applyEchoSocketIdToAxios = () => {
+    const socketId = window.Echo?.socketId?.();
+    if (!socketId) {
+        return;
+    }
+
+    window.axios.defaults.headers.common['X-Socket-ID'] = socketId;
+};
+
+window.Echo.connector.pusher.connection.bind('connected', applyEchoSocketIdToAxios);
+applyEchoSocketIdToAxios();
+
+window.axios.interceptors.request.use((config) => {
+    const socketId = window.Echo?.socketId?.();
+    if (socketId) {
+        config.headers = config.headers ?? {};
+        config.headers['X-Socket-ID'] = socketId;
+    }
+
+    return config;
 });

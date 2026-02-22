@@ -15,7 +15,10 @@ class ListItemsChanged implements ShouldBroadcastNow
     public function __construct(
         public int $ownerId,
         public string $type,
-        public ?int $listLinkId = null
+        public ?int $listLinkId = null,
+        public ?int $actorUserId = null,
+        public int $listVersion = 0,
+        public array $items = []
     ) {
     }
 
@@ -39,6 +42,9 @@ class ListItemsChanged implements ShouldBroadcastNow
             'owner_id' => $this->ownerId,
             'list_link_id' => $this->listLinkId,
             'type' => $this->type,
+            'actor_user_id' => $this->actorUserId,
+            'list_version' => $this->listVersion,
+            'items' => $this->items,
             'changed_at' => now()->toISOString(),
         ];
     }

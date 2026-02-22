@@ -9,6 +9,7 @@ use App\Services\ListItems\ListItemInputNormalizer;
 use App\Services\ListItems\ListItemOrderingService;
 use App\Services\ListItems\ListItemRealtimeNotifier;
 use App\Services\ListItems\ListItemSerializer;
+use App\Services\ListItems\ListSyncVersionService;
 use App\Services\ListItemSuggestionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,7 +23,8 @@ class ListItemController extends Controller
         private readonly ListItemSerializer $itemSerializer,
         private readonly ListItemInputNormalizer $inputNormalizer,
         private readonly ListItemOrderingService $orderingService,
-        private readonly ListItemRealtimeNotifier $realtimeNotifier
+        private readonly ListItemRealtimeNotifier $realtimeNotifier,
+        private readonly ListSyncVersionService $listSyncVersionService
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -58,6 +60,11 @@ class ListItemController extends Controller
 
         return response()->json([
             'items' => $items,
+            'list_version' => $this->listSyncVersionService->getVersion(
+                $context->ownerId,
+                $type,
+                $context->linkId
+            ),
         ]);
     }
 
@@ -101,15 +108,23 @@ class ListItemController extends Controller
             'updated_by_id' => $request->user()->id,
         ]);
         $this->listItemSuggestionService->recordAddedEvent($item);
+        $listVersion = $this->listSyncVersionService->bumpVersion(
+            (int) $item->owner_id,
+            (string) $item->type,
+            $item->list_link_id ? (int) $item->list_link_id : null
+        );
 
         $this->realtimeNotifier->dispatchListItemsChangedSafely(
             $item->owner_id,
             $item->type,
-            $item->list_link_id ? (int) $item->list_link_id : null
+            $item->list_link_id ? (int) $item->list_link_id : null,
+            (int) $request->user()->id,
+            $listVersion
         );
 
         return response()->json([
             'item' => $this->itemSerializer->serialize($item->fresh()),
+            'list_version' => $listVersion,
         ], 201);
     }
 
@@ -296,6 +311,11 @@ class ListItemController extends Controller
         if (! $item->isDirty()) {
             return response()->json([
                 'item' => $this->itemSerializer->serialize($item),
+                'list_version' => $this->listSyncVersionService->getVersion(
+                    (int) $item->owner_id,
+                    (string) $item->type,
+                    $item->list_link_id ? (int) $item->list_link_id : null
+                ),
             ]);
         }
 
@@ -305,15 +325,23 @@ class ListItemController extends Controller
         if ($completionChanged && (bool) $item->is_completed) {
             $this->listItemSuggestionService->recordCompletedEvent($item);
         }
+        $listVersion = $this->listSyncVersionService->bumpVersion(
+            (int) $item->owner_id,
+            (string) $item->type,
+            $item->list_link_id ? (int) $item->list_link_id : null
+        );
 
         $this->realtimeNotifier->dispatchListItemsChangedSafely(
             $item->owner_id,
             $item->type,
-            $item->list_link_id ? (int) $item->list_link_id : null
+            $item->list_link_id ? (int) $item->list_link_id : null,
+            (int) $request->user()->id,
+            $listVersion
         );
 
         return response()->json([
             'item' => $this->itemSerializer->serialize($item->fresh()),
+            'list_version' => $listVersion,
         ]);
     }
 
@@ -345,11 +373,23 @@ class ListItemController extends Controller
             (array) $validated['order'],
             (int) $request->user()->id
         );
+        $listVersion = $this->listSyncVersionService->bumpVersion(
+            (int) $context->ownerId,
+            (string) $type,
+            $context->linkId
+        );
 
-        $this->realtimeNotifier->dispatchListItemsChangedSafely($context->ownerId, $type, $context->linkId);
+        $this->realtimeNotifier->dispatchListItemsChangedSafely(
+            $context->ownerId,
+            $type,
+            $context->linkId,
+            (int) $request->user()->id,
+            $listVersion
+        );
 
         return response()->json([
             'status' => 'ok',
+            'list_version' => $listVersion,
         ]);
     }
 
@@ -361,11 +401,23 @@ class ListItemController extends Controller
         $type = $item->type;
         $linkId = $item->list_link_id ? (int) $item->list_link_id : null;
         $item->delete();
+        $listVersion = $this->listSyncVersionService->bumpVersion(
+            (int) $ownerId,
+            (string) $type,
+            $linkId
+        );
 
-        $this->realtimeNotifier->dispatchListItemsChangedSafely($ownerId, $type, $linkId);
+        $this->realtimeNotifier->dispatchListItemsChangedSafely(
+            $ownerId,
+            $type,
+            $linkId,
+            (int) $request->user()->id,
+            $listVersion
+        );
 
         return response()->json([
             'status' => 'ok',
+            'list_version' => $listVersion,
         ]);
     }
 }

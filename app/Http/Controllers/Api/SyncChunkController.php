@@ -8,6 +8,7 @@ use App\Models\ListInvitation;
 use App\Models\ListItem;
 use App\Models\ListLink;
 use App\Models\SyncOperation;
+use App\Models\User;
 use App\Services\ListSyncService;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Database\QueryException;
@@ -173,6 +174,7 @@ class SyncChunkController extends Controller
         $storeResponse = $this->listItemController->store($storeRequest);
         $storeData = $this->decodeResponseData($storeResponse);
         $createdItem = is_array($storeData['item'] ?? null) ? $storeData['item'] : null;
+        $listVersion = (int) ($storeData['list_version'] ?? 0);
 
         if (! $createdItem) {
             return [];
@@ -188,6 +190,10 @@ class SyncChunkController extends Controller
 
                 $updatedData = $this->decodeResponseData($updatedResponse);
                 $updatedItem = is_array($updatedData['item'] ?? null) ? $updatedData['item'] : null;
+                $updatedListVersion = (int) ($updatedData['list_version'] ?? 0);
+                if ($updatedListVersion > 0) {
+                    $listVersion = $updatedListVersion;
+                }
                 if ($updatedItem) {
                     $createdItem = $updatedItem;
                 }
@@ -196,6 +202,7 @@ class SyncChunkController extends Controller
 
         return [
             'item' => $createdItem,
+            'list_version' => $listVersion > 0 ? $listVersion : null,
         ];
     }
 
@@ -390,7 +397,11 @@ class SyncChunkController extends Controller
         $user->xp_color_seed = $xpColorSeed;
         $user->gamification_updated_at = now();
         $user->save();
-        $this->dispatchUserSyncStateChangedSafely((int) $user->id, 'gamification_changed');
+        $this->dispatchUserSyncStateChangedSafely(
+            (int) $user->id,
+            'gamification_changed',
+            (int) $user->id
+        );
 
         return [
             'gamification' => $this->listSyncService->getGamificationState($user->fresh()),
@@ -431,7 +442,11 @@ class SyncChunkController extends Controller
         $user->mood_updated_at = now();
         $user->save();
 
-        $this->dispatchUserSyncStateChangedForLinkedUsers((int) $user->id, 'mood_changed');
+        $this->dispatchUserSyncStateChangedForLinkedUsers(
+            (int) $user->id,
+            'mood_changed',
+            (int) $user->id
+        );
 
         $freshUser = $user->fresh();
 
@@ -661,20 +676,34 @@ class SyncChunkController extends Controller
         return str_contains(strtolower($exception->getMessage()), 'duplicate');
     }
 
-    private function dispatchUserSyncStateChangedSafely(int $userId, string $reason): void
+    private function dispatchUserSyncStateChangedSafely(
+        int $userId,
+        string $reason,
+        ?int $actorUserId = null
+    ): void
     {
         try {
-            UserSyncStateChanged::dispatch($userId, $reason);
+            $targetUser = User::query()->find($userId);
+            $statePayload = $targetUser
+                ? $this->listSyncService->getState($targetUser)
+                : null;
+
+            broadcast(new UserSyncStateChanged($userId, $reason, $actorUserId, $statePayload))->toOthers();
         } catch (\Throwable $exception) {
             Log::warning('Realtime user sync dispatch failed.', [
                 'user_id' => $userId,
                 'reason' => $reason,
+                'actor_user_id' => $actorUserId,
                 'error' => $exception->getMessage(),
             ]);
         }
     }
 
-    private function dispatchUserSyncStateChangedForLinkedUsers(int $userId, string $reason): void
+    private function dispatchUserSyncStateChangedForLinkedUsers(
+        int $userId,
+        string $reason,
+        ?int $actorUserId = null
+    ): void
     {
         $targets = ListLink::query()
             ->where('is_active', true)
@@ -687,12 +716,11 @@ class SyncChunkController extends Controller
                 (int) $link->user_one_id,
                 (int) $link->user_two_id,
             ])
-            ->push($userId)
             ->unique()
             ->values();
 
         foreach ($targets as $targetUserId) {
-            $this->dispatchUserSyncStateChangedSafely((int) $targetUserId, $reason);
+            $this->dispatchUserSyncStateChangedSafely((int) $targetUserId, $reason, $actorUserId);
         }
     }
 }

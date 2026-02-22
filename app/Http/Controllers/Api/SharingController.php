@@ -45,7 +45,7 @@ class SharingController extends Controller
         $currentUser->preferred_owner_id = $ownerId;
         $currentUser->save();
 
-        $this->dispatchSyncUpdates([$currentUser->id], 'default_owner_changed');
+        $this->dispatchSyncUpdates([$currentUser->id], 'default_owner_changed', (int) $currentUser->id);
 
         return response()->json($this->listSyncService->getState($currentUser));
     }
@@ -128,7 +128,7 @@ class SharingController extends Controller
             'status' => ListInvitation::STATUS_PENDING,
         ]);
 
-        $this->dispatchSyncUpdates([$currentUser->id, $targetUserId], 'invitation_sent');
+        $this->dispatchSyncUpdates([$currentUser->id, $targetUserId], 'invitation_sent', (int) $currentUser->id);
 
         return response()->json([
             'status' => 'ok',
@@ -170,7 +170,11 @@ class SharingController extends Controller
                 ]);
         });
 
-        $this->dispatchSyncUpdates([$invitation->inviter_id, $invitation->invitee_id], 'invitation_accepted');
+        $this->dispatchSyncUpdates(
+            [$invitation->inviter_id, $invitation->invitee_id],
+            'invitation_accepted',
+            (int) $currentUser->id
+        );
 
         return response()->json($this->listSyncService->getState($currentUser));
     }
@@ -191,7 +195,11 @@ class SharingController extends Controller
         $invitation->responded_at = now();
         $invitation->save();
 
-        $this->dispatchSyncUpdates([$invitation->inviter_id, $invitation->invitee_id], 'invitation_declined');
+        $this->dispatchSyncUpdates(
+            [$invitation->inviter_id, $invitation->invitee_id],
+            'invitation_declined',
+            (int) $currentUser->id
+        );
 
         return response()->json($this->listSyncService->getState($currentUser));
     }
@@ -213,7 +221,7 @@ class SharingController extends Controller
         $currentUser->preferred_owner_id = $targetOwnerId;
         $currentUser->save();
 
-        $this->dispatchSyncUpdates([$currentUser->id], 'default_owner_changed');
+        $this->dispatchSyncUpdates([$currentUser->id], 'default_owner_changed', (int) $currentUser->id);
 
         return response()->json($this->listSyncService->getState($currentUser));
     }
@@ -227,7 +235,11 @@ class SharingController extends Controller
         $link->sync_owner_id = null;
         $link->save();
 
-        $this->dispatchSyncUpdates([$link->user_one_id, $link->user_two_id], 'link_removed');
+        $this->dispatchSyncUpdates(
+            [$link->user_one_id, $link->user_two_id],
+            'link_removed',
+            (int) $currentUser->id
+        );
 
         return response()->json($this->listSyncService->getState($currentUser));
     }
@@ -248,15 +260,21 @@ class SharingController extends Controller
         abort_unless($link->involvesUser($userId), 403);
     }
 
-    private function dispatchSyncUpdates(array $userIds, string $reason): void
+    private function dispatchSyncUpdates(array $userIds, string $reason, ?int $actorUserId = null): void
     {
         foreach (array_values(array_unique($userIds)) as $userId) {
             try {
-                UserSyncStateChanged::dispatch((int) $userId, $reason);
+                $targetUser = User::query()->find((int) $userId);
+                $statePayload = $targetUser
+                    ? $this->listSyncService->getState($targetUser)
+                    : null;
+
+                broadcast(new UserSyncStateChanged((int) $userId, $reason, $actorUserId, $statePayload))->toOthers();
             } catch (\Throwable $exception) {
                 Log::warning('Realtime sync state dispatch failed.', [
                     'user_id' => (int) $userId,
                     'reason' => $reason,
+                    'actor_user_id' => $actorUserId,
                     'error' => $exception->getMessage(),
                 ]);
             }

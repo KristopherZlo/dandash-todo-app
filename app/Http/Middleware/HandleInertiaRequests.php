@@ -34,6 +34,26 @@ class HandleInertiaRequests extends Middleware
             'auth' => [
                 'user' => $request->user(),
             ],
+            'meta' => [
+                'app_version' => (string) config('app.version', 'dev'),
+                'build_version' => $this->resolveBuildVersion(),
+            ],
         ];
+    }
+
+    private function resolveBuildVersion(): string
+    {
+        $manifestPath = public_path('build/manifest.json');
+
+        if (! is_file($manifestPath)) {
+            return 'dev';
+        }
+
+        $modifiedAt = @filemtime($manifestPath);
+        if ($modifiedAt === false || $modifiedAt <= 0) {
+            return 'unknown';
+        }
+
+        return gmdate('Ymd-His', (int) $modifiedAt);
     }
 }

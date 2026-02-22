@@ -232,26 +232,27 @@ function onTouchEnd(event) {
     flex: 1;
     display: flex;
     align-items: center;
-    color: rgb(255 255 255);
+    color: color-mix(in srgb, var(--ink) 94%, transparent);
 }
 
 .swipe-side-done {
     justify-content: flex-start;
     padding-left: 18px;
-    background: rgb(165 215 116 / 24%);
+    background: color-mix(in srgb, var(--ok) 24%, transparent);
 }
 
 .swipe-side-remove {
     justify-content: flex-end;
     padding-right: 18px;
-    background: rgb(238 92 129 / 24%);
+    background: color-mix(in srgb, var(--danger) 24%, transparent);
 }
 
 .swipe-item-card {
     position: relative;
     border-radius: 16px;
-    border: 1px solid rgb(64 62 65);
-    background: rgb(34 31 34);
+    border: 1px solid var(--border-surface);
+    background: var(--bg-surface);
+    box-shadow: 0 8px 18px -16px rgb(0 0 0 / 35%);
     padding: 14px;
     cursor: pointer;
     user-select: none;

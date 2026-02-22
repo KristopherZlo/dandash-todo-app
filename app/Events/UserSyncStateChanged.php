@@ -14,7 +14,9 @@ class UserSyncStateChanged implements ShouldBroadcastNow
 
     public function __construct(
         public int $userId,
-        public string $reason = 'updated'
+        public string $reason = 'updated',
+        public ?int $actorUserId = null,
+        public ?array $state = null
     ) {
     }
 
@@ -32,6 +34,8 @@ class UserSyncStateChanged implements ShouldBroadcastNow
     {
         return [
             'reason' => $this->reason,
+            'actor_user_id' => $this->actorUserId,
+            'state' => $this->state,
             'changed_at' => now()->toISOString(),
         ];
     }

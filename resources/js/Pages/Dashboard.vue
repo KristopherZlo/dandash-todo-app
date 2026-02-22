@@ -55,10 +55,15 @@ const localUser = reactive({
     tag: page.props.auth.user.tag ?? '',
     email: page.props.auth.user.email,
 });
+const appVersion = computed(() => String(page.props.meta?.app_version ?? 'dev'));
+const buildVersion = computed(() => String(page.props.meta?.build_version ?? 'dev'));
 
 const DASHBOARD_TAB_VALUES = ['products', 'todos', 'mood', 'profile'];
 const DASHBOARD_TAB_SET = new Set(DASHBOARD_TAB_VALUES);
 const ACTIVE_TAB_STORAGE_KEY = `dandash:active-tab:v1:user-${localUser.id}`;
+const THEME_MODE_VALUES = ['system', 'light', 'dark'];
+const THEME_MODE_SET = new Set(THEME_MODE_VALUES);
+const THEME_MODE_STORAGE_KEY = 'dandash:theme-mode:v1';
 const TOUCH_DRAG_HOLD_DELAY_MS = 500;
 
 function normalizeDashboardTab(value) {
@@ -79,7 +84,40 @@ function readPersistedDashboardTab() {
     }
 }
 
+function normalizeThemeMode(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    return THEME_MODE_SET.has(normalized) ? normalized : 'system';
+}
+
+function readPersistedThemeMode() {
+    if (typeof window === 'undefined') {
+        return 'system';
+    }
+
+    try {
+        const saved = window.localStorage.getItem(THEME_MODE_STORAGE_KEY);
+        return normalizeThemeMode(saved);
+    } catch (error) {
+        return 'system';
+    }
+}
+
+function resolveThemeByMode(mode) {
+    const normalized = normalizeThemeMode(mode);
+    if (normalized === 'light' || normalized === 'dark') {
+        return normalized;
+    }
+
+    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+
+    return 'dark';
+}
+
 const activeTab = ref(readPersistedDashboardTab());
+const themeMode = ref(readPersistedThemeMode());
+const resolvedTheme = ref(resolveThemeByMode(themeMode.value));
 const listDropdownOpen = ref(false);
 const selectedOwnerId = ref(props.initialState.default_owner_id ?? localUser.id);
 
@@ -230,10 +268,38 @@ function persistActiveTabToStorage(tab) {
     }
 }
 
-let itemsPollTimer = null;
-let statePollTimer = null;
-let suggestionsPollTimer = null;
-let queueSyncTimer = null;
+function applyThemeMode(mode, { persist = true } = {}) {
+    const normalizedMode = normalizeThemeMode(mode);
+    const resolved = resolveThemeByMode(normalizedMode);
+    resolvedTheme.value = resolved;
+
+    if (typeof document !== 'undefined') {
+        const root = document.documentElement;
+        root.dataset.theme = resolved;
+        root.style.colorScheme = resolved;
+
+        if (document.body) {
+            document.body.dataset.theme = resolved;
+            document.body.style.colorScheme = resolved;
+        }
+    }
+
+    if (!persist || typeof window === 'undefined') {
+        return;
+    }
+
+    try {
+        window.localStorage.setItem(THEME_MODE_STORAGE_KEY, normalizedMode);
+    } catch (error) {
+        // Ignore storage write errors (private mode / quota exceeded).
+    }
+}
+
+function setThemeMode(nextMode) {
+    themeMode.value = normalizeThemeMode(nextMode);
+}
+
+let queueSyncRetryTimer = null;
 let moodRelativeTimeTimer = null;
 let listChannelName = null;
 let userChannelName = null;
@@ -243,6 +309,8 @@ let queueSyncInProgress = false;
 let nextTempId = -1;
 let handleOnlineEvent = null;
 let handleOfflineEvent = null;
+let systemThemeMediaQuery = null;
+let handleSystemThemeChange = null;
 let nextDeleteFeedbackBurstId = 1;
 let nextXpStarId = 1;
 let nextXpGainSourceId = 1;
@@ -272,8 +340,10 @@ const effectTimeouts = new Set();
 const itemCardElements = new Map();
 const soundPools = new Map();
 const listSyncVersions = new Map();
+const listServerVersions = new Map();
 const deletedItemTombstones = new Map();
 const recentLocalMutationsByList = new Map();
+const latestRealtimeEventTokenByList = new Map();
 const blockedSuggestionRefreshTypes = new Set();
 const xpGainSources = new Map();
 const xpGainSourceCleanupTimeouts = new Map();
@@ -333,6 +403,7 @@ const activeListStats = computed(() => (
         ? productPurchasedStats.value
         : todoCompletedStats.value
 ));
+const resolvedThemeLabel = computed(() => (resolvedTheme.value === 'light' ? 'Светлая' : 'Тёмная'));
 const activeTabTitle = computed(() => {
     if (activeTab.value === 'products') {
         return 'Список продуктов';
@@ -500,7 +571,7 @@ const SOUND_POOL_LIMIT_PER_KEY = 6;
 const SOUND_SKIP_MUTE_MS = 3000;
 const ITEM_DELETE_TOMBSTONE_TTL_MS = 180000;
 const ITEM_DELETE_TOMBSTONE_SERVER_SKEW_MS = 1500;
-const LOCAL_LIST_MUTATION_HOLD_MS = 4500;
+const LOCAL_LIST_MUTATION_HOLD_MS = 8000;
 const DASHBOARD_SOUND_PATHS = Object.freeze({
     // Put your custom files into: public/sounds/dashboard/
     white_card_appear: 'sounds/dashboard/white-card-appear.mp3',
@@ -1301,6 +1372,26 @@ function bumpListSyncVersion(ownerId, type, linkId = undefined) {
     const nextVersion = getListSyncVersion(ownerId, type, linkId) + 1;
     listSyncVersions.set(versionKey, nextVersion);
     return nextVersion;
+}
+
+function getKnownServerListVersion(ownerId, type, linkId = undefined) {
+    return Number(listServerVersions.get(listSyncVersionKey(ownerId, type, linkId)) ?? 0);
+}
+
+function setKnownServerListVersion(ownerId, type, listVersion, linkId = undefined) {
+    const numericVersion = Number(listVersion);
+    if (!Number.isFinite(numericVersion) || numericVersion <= 0) {
+        return;
+    }
+
+    const versionKey = listSyncVersionKey(ownerId, type, linkId);
+    const normalizedVersion = Math.floor(numericVersion);
+    const previousVersion = Number(listServerVersions.get(versionKey) ?? 0);
+    if (previousVersion >= normalizedVersion) {
+        return;
+    }
+
+    listServerVersions.set(versionKey, normalizedVersion);
 }
 
 function listMutationGuardKey(ownerId, type, linkId = undefined) {
@@ -2418,9 +2509,7 @@ async function flushBlockedSuggestionRefreshes() {
         return;
     }
 
-    const typesToRefresh = Array.from(blockedSuggestionRefreshTypes);
     blockedSuggestionRefreshTypes.clear();
-    await Promise.all(typesToRefresh.map((type) => loadSuggestions(type)));
 }
 
 function hasPendingDeleteIntent(ownerId, type, itemId, linkId = undefined) {
@@ -2696,6 +2785,15 @@ async function requestApi(executor) {
         markRequestSuccess();
         return response;
     } catch (error) {
+        const statusCode = Number(error?.response?.status ?? 0);
+        if (statusCode === 401 || statusCode === 419) {
+            if (typeof window !== 'undefined') {
+                const loginUrl = typeof route === 'function' ? route('login') : '/login';
+                window.location.href = loginUrl;
+            }
+            throw error;
+        }
+
         if (isConnectivityError(error)) {
             markRequestFailure();
         } else if (error?.response) {
@@ -2839,6 +2937,27 @@ function scheduleQueuedUpdateSync(delayMs = UPDATE_SYNC_COALESCE_MS) {
     const safeDelay = Math.max(0, Number(delayMs) || 0);
     queuedUpdateSyncTimer = window.setTimeout(() => {
         queuedUpdateSyncTimer = null;
+        syncOfflineQueue().catch(() => {});
+    }, safeDelay);
+}
+
+function clearQueueSyncRetryTimer() {
+    if (queueSyncRetryTimer) {
+        clearTimeout(queueSyncRetryTimer);
+        queueSyncRetryTimer = null;
+    }
+}
+
+function scheduleQueueSyncRetry(delayMs = QUEUE_RETRY_DELAY_MS) {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    clearQueueSyncRetryTimer();
+
+    const safeDelay = Math.max(0, Number(delayMs) || 0);
+    queueSyncRetryTimer = window.setTimeout(() => {
+        queueSyncRetryTimer = null;
         syncOfflineQueue().catch(() => {});
     }, safeDelay);
 }
@@ -3522,20 +3641,16 @@ async function finalizeSwipeAction(state, options = {}) {
     const { background = false } = options;
 
     stageSwipeAction(state);
-    const syncAndReloadSuggestions = async () => {
+    const syncAction = async () => {
         await syncOfflineQueue();
-
-        if (!hasPendingOperations(state.ownerId, state.type, state.linkId)) {
-            await loadSuggestions(state.type);
-        }
     };
 
     if (background) {
-        syncAndReloadSuggestions().catch(() => {});
+        syncAction().catch(() => {});
         return;
     }
 
-    await syncAndReloadSuggestions();
+    await syncAction();
 }
 
 async function flushSwipeUndoState(options = {}) {
@@ -4379,16 +4494,6 @@ function shouldDropOperationOnClientError(operation, statusCode) {
     ].includes(action);
 }
 
-function shouldRefreshStateAfterDroppedOperation(action) {
-    return [
-        'set_default_owner',
-        'accept_invitation',
-        'decline_invitation',
-        'set_mine',
-        'break_link',
-    ].includes(String(action ?? ''));
-}
-
 function isTempItemMutationOperation(operation) {
     const action = String(operation?.action ?? '');
     if (action !== 'update' && action !== 'delete') {
@@ -4469,8 +4574,24 @@ function buildSyncChunkPayload(chunkOperations) {
 
 function applySuccessfulSyncedOperation(operation, resultData) {
     const action = String(operation?.action ?? '');
+    const operationOwnerId = Number(operation?.owner_id ?? 0);
+    const operationType = String(operation?.type ?? '');
+    const operationLinkId = normalizeLinkId(operation?.link_id);
+    const applyAckListVersion = () => {
+        if (operationOwnerId <= 0 || (operationType !== 'product' && operationType !== 'todo')) {
+            return;
+        }
+
+        setKnownServerListVersion(
+            operationOwnerId,
+            operationType,
+            resultData?.list_version,
+            operationLinkId
+        );
+    };
 
     if (action === 'create') {
+        applyAckListVersion();
         const syncedItemResponse = resultData?.item;
         if (!syncedItemResponse || typeof syncedItemResponse !== 'object') {
             return;
@@ -4513,19 +4634,40 @@ function applySuccessfulSyncedOperation(operation, resultData) {
         if (!hasQueuedDeleteIntent && !hasSwipeDeleteIntent) {
             applyLocalUpdate(operation.owner_id, operation.type, (items) => {
                 const next = cloneItems(items);
-                const index = next.findIndex((entry) => Number(entry.id) === previousTempId);
+                const tempIndex = next.findIndex((entry) => Number(entry.id) === previousTempId);
+                const syncedId = Number(syncedItem.id);
+                let authoritativeIndex = -1;
 
-                if (index === -1) {
-                    next.unshift({ ...syncedItem });
-                } else {
-                    const preservedLocalId = String(next[index]?.local_id ?? '').trim();
-                    next[index] = {
+                if (tempIndex !== -1) {
+                    const preservedLocalId = String(next[tempIndex]?.local_id ?? '').trim();
+                    next[tempIndex] = {
                         ...syncedItem,
                         local_id: preservedLocalId || syncedItem.local_id,
                     };
+                    authoritativeIndex = tempIndex;
+                } else {
+                    const syncedIndex = next.findIndex((entry) => Number(entry.id) === syncedId);
+
+                    if (syncedIndex !== -1) {
+                        const preservedLocalId = String(next[syncedIndex]?.local_id ?? '').trim();
+                        next[syncedIndex] = {
+                            ...next[syncedIndex],
+                            ...syncedItem,
+                            local_id: preservedLocalId || syncedItem.local_id,
+                        };
+                        authoritativeIndex = syncedIndex;
+                    } else {
+                        next.unshift({ ...syncedItem });
+                        authoritativeIndex = 0;
+                    }
                 }
 
-                return next;
+                // Idempotency guard: repeated processing of the same create result
+                // must not leave duplicate entries with one server id.
+                return next.filter((entry, index) => (
+                    index === authoritativeIndex
+                    || Number(entry.id) !== syncedId
+                ));
             }, operation.link_id);
         }
 
@@ -4541,19 +4683,12 @@ function applySuccessfulSyncedOperation(operation, resultData) {
     }
 
     if (action === 'update') {
+        applyAckListVersion();
         if (Number(operation.item_id) <= 0) {
             return;
         }
 
-        const updatedItemResponse = resultData?.item;
-        if (!updatedItemResponse || typeof updatedItemResponse !== 'object') {
-            return;
-        }
-
-        const updatedItem = normalizeItem(updatedItemResponse, `srv-${updatedItemResponse.id}`, {
-            ownerIdOverride: operation.owner_id,
-            linkIdOverride: operation.link_id,
-        });
+        const updatedAtFromServer = String(resultData?.item?.updated_at ?? '').trim();
         const hasNewerLocalIntent = hasPendingItemOperation(
             operation.owner_id,
             operation.type,
@@ -4568,15 +4703,29 @@ function applySuccessfulSyncedOperation(operation, resultData) {
             operation.link_id,
         );
 
-        if (!hasNewerLocalIntent) {
-            upsertLocalItem(operation.owner_id, operation.type, updatedItem, {
-                linkId: operation.link_id,
-            });
+        if (hasNewerLocalIntent) {
+            return;
         }
+
+        applyLocalUpdate(operation.owner_id, operation.type, (items) => {
+            const nextItems = cloneItems(items);
+            const index = nextItems.findIndex((entry) => Number(entry.id) === Number(operation.item_id));
+            if (index === -1) {
+                return nextItems;
+            }
+
+            nextItems[index] = {
+                ...nextItems[index],
+                pending_sync: false,
+                updated_at: updatedAtFromServer || nextItems[index]?.updated_at,
+            };
+            return nextItems;
+        }, operation.link_id);
         return;
     }
 
     if (action === 'delete') {
+        applyAckListVersion();
         if (Number(operation.item_id) > 0) {
             markItemsAsDeleted(
                 operation.owner_id,
@@ -4585,6 +4734,11 @@ function applySuccessfulSyncedOperation(operation, resultData) {
                 operation.link_id,
             );
         }
+        return;
+    }
+
+    if (action === 'reorder') {
+        applyAckListVersion();
         return;
     }
 
@@ -4630,15 +4784,26 @@ function applySuccessfulSyncedOperation(operation, resultData) {
 }
 
 async function syncOfflineQueue() {
+    if (offlineQueue.value.length === 0) {
+        queueRetryAt = 0;
+        clearQueueSyncRetryTimer();
+        return;
+    }
+
     if (
         queueSyncInProgress
-        || offlineQueue.value.length === 0
         || browserOffline.value
-        || Date.now() < queueRetryAt
     ) {
         return;
     }
 
+    const nowMs = Date.now();
+    if (nowMs < queueRetryAt) {
+        scheduleQueueSyncRetry(queueRetryAt - nowMs);
+        return;
+    }
+
+    clearQueueSyncRetryTimer();
     queueSyncInProgress = true;
 
     try {
@@ -4671,6 +4836,7 @@ async function syncOfflineQueue() {
 
                     if (!result) {
                         queueRetryAt = Date.now() + QUEUE_RETRY_DELAY_MS;
+                        scheduleQueueSyncRetry(queueRetryAt - Date.now());
                         shouldStopSync = true;
                         break;
                     }
@@ -4679,6 +4845,7 @@ async function syncOfflineQueue() {
                         applySuccessfulSyncedOperation(operation, result?.data ?? {});
                         dropQueueOperation(opId);
                         queueRetryAt = 0;
+                        clearQueueSyncRetryTimer();
                         continue;
                     }
 
@@ -4686,10 +4853,7 @@ async function syncOfflineQueue() {
                     if (shouldDropOperationOnClientError(operation, statusCode)) {
                         dropQueueOperation(opId);
                         queueRetryAt = 0;
-
-                        if (shouldRefreshStateAfterDroppedOperation(operation?.action)) {
-                            refreshState(false, true).catch(() => {});
-                        }
+                        clearQueueSyncRetryTimer();
 
                         if (
                             statusCode === 422
@@ -4710,6 +4874,7 @@ async function syncOfflineQueue() {
                     }
 
                     queueRetryAt = Date.now() + QUEUE_RETRY_DELAY_MS;
+                    scheduleQueueSyncRetry(queueRetryAt - Date.now());
                     shouldStopSync = true;
                     break;
                 }
@@ -4720,6 +4885,7 @@ async function syncOfflineQueue() {
             } catch (error) {
                 if (isRetriableRequestError(error)) {
                     queueRetryAt = Date.now() + QUEUE_RETRY_DELAY_MS;
+                    scheduleQueueSyncRetry(queueRetryAt - Date.now());
                     break;
                 }
 
@@ -4728,15 +4894,13 @@ async function syncOfflineQueue() {
                 if (firstOperation && shouldDropOperationOnClientError(firstOperation, statusCode)) {
                     dropQueueOperation(firstOperation.op_id);
                     queueRetryAt = 0;
-
-                    if (shouldRefreshStateAfterDroppedOperation(firstOperation?.action)) {
-                        refreshState(false, true).catch(() => {});
-                    }
+                    clearQueueSyncRetryTimer();
 
                     continue;
                 }
 
                 queueRetryAt = Date.now() + QUEUE_RETRY_DELAY_MS;
+                scheduleQueueSyncRetry(queueRetryAt - Date.now());
                 break;
             } finally {
                 syncInFlightOperationIds.clear();
@@ -4745,6 +4909,16 @@ async function syncOfflineQueue() {
     } finally {
         syncInFlightOperationIds.clear();
         queueSyncInProgress = false;
+
+        if (offlineQueue.value.length === 0) {
+            queueRetryAt = 0;
+            clearQueueSyncRetryTimer();
+            return;
+        }
+
+        if (!browserOffline.value && queueRetryAt > Date.now()) {
+            scheduleQueueSyncRetry(queueRetryAt - Date.now());
+        }
     }
 }
 
@@ -4785,10 +4959,6 @@ async function cycleTodoPriority(item) {
     }, linkId);
 
     await syncOfflineQueue();
-
-    if (!hasPendingOperations(ownerId, 'todo', linkId)) {
-        await loadSuggestions('todo');
-    }
 }
 
 async function applySuggestionToList(type, suggestion) {
@@ -4801,10 +4971,6 @@ async function applySuggestionToList(type, suggestion) {
 
     await createItemOptimistically(type, text);
     removeSuggestionFromView(type, suggestion);
-
-    if (!hasPendingOperations(selectedOwnerId.value, type, selectedListLinkId.value)) {
-        await loadSuggestions(type);
-    }
 }
 
 async function dismissSuggestion(type, suggestion) {
@@ -4926,10 +5092,6 @@ async function applyTodoDueValue(target, localDatetime) {
     }, linkId);
 
     await syncOfflineQueue();
-
-    if (!hasPendingOperations(ownerId, 'todo', linkId)) {
-        await loadSuggestions('todo');
-    }
 }
 
 async function applyTodoItemDuePickerValue() {
@@ -5100,7 +5262,14 @@ async function loadItems(type, showErrors = false, ownerIdOverride = null, linkI
     };
 
     try {
-        if (browserOffline.value || !serverReachable.value || hasListSyncConflict(ownerId, type, linkId)) {
+        if (
+            browserOffline.value
+            || !serverReachable.value
+            || hasListSyncConflict(ownerId, type, linkId)
+            || hasPendingSwipeAction(ownerId, type, linkId)
+            || isWhiteCardAnimationActive()
+            || batchRemovalAnimating.value
+        ) {
             assignCached();
             return;
         }
@@ -5130,6 +5299,7 @@ async function loadItems(type, showErrors = false, ownerIdOverride = null, linkI
         }
 
         writeListToCache(ownerId, type, filteredItems, linkId);
+        setKnownServerListVersion(ownerId, type, response.data?.list_version, linkId);
     } catch (error) {
         if (isConnectivityError(error)) {
             assignCached();
@@ -5452,10 +5622,6 @@ async function saveEdit(item) {
     cancelEdit();
 
     await syncOfflineQueue();
-
-    if (!hasPendingOperations(ownerId, item.type, linkId)) {
-        await loadSuggestions(item.type);
-    }
 }
 
 function saveProductEditOnBlur(item) {
@@ -5585,10 +5751,6 @@ async function addProduct() {
     newProductText.value = '';
 
     await createItemOptimistically('product', text);
-
-    if (!hasPendingOperations(selectedOwnerId.value, 'product', selectedListLinkId.value)) {
-        await loadSuggestions('product');
-    }
 }
 
 async function addTodo() {
@@ -5604,10 +5766,6 @@ async function addTodo() {
     newTodoDueAt.value = '';
 
     await createItemOptimistically('todo', text, dueAt);
-
-    if (!hasPendingOperations(selectedOwnerId.value, 'todo', selectedListLinkId.value)) {
-        await loadSuggestions('todo');
-    }
 }
 
 function applyMoodCardsFromServer(cards, options = {}) {
@@ -6008,9 +6166,119 @@ function subscribeUserChannel() {
     }
 
     userChannelName = `users.${localUser.id}`;
-    window.Echo.private(userChannelName).listen('.user.sync.changed', () => {
-        refreshState();
+    window.Echo.private(userChannelName).listen('.user.sync.changed', (eventPayload) => {
+        if (Number(eventPayload?.actor_user_id ?? 0) === Number(localUser.id)) {
+            return;
+        }
+
+        const nextState = eventPayload?.state;
+        if (nextState && typeof nextState === 'object') {
+            applyState(nextState);
+        }
     });
+}
+
+function resolveRealtimeListType(eventPayload) {
+    const changedType = String(eventPayload?.type ?? '').trim();
+    if (changedType === 'product' || changedType === 'todo') {
+        return changedType;
+    }
+
+    return activeTab.value === 'todos' ? 'todo' : 'product';
+}
+
+function mergeRealtimeItemsWithLocalPending(ownerId, type, incomingItems, linkId = undefined) {
+    const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    const previousItems = readListFromCache(ownerId, type, resolvedLinkId);
+    const normalizedIncoming = normalizeItems(incomingItems, previousItems, {
+        ownerIdOverride: ownerId,
+        linkIdOverride: resolvedLinkId,
+    });
+    const mergedById = new Map(
+        normalizedIncoming
+            .map((item) => [Number(item?.id), item])
+            .filter(([itemId]) => Number.isFinite(itemId)),
+    );
+
+    for (const localItem of previousItems) {
+        const itemId = Number(localItem?.id);
+        if (!Number.isFinite(itemId)) {
+            continue;
+        }
+
+        const hasLocalPendingIntent = hasPendingItemOperation(ownerId, type, itemId, resolvedLinkId)
+            || isSwipeStateForItem(
+                swipeUndoState.value,
+                ownerId,
+                type,
+                itemId,
+                resolvedLinkId,
+            );
+        if (!hasLocalPendingIntent) {
+            continue;
+        }
+
+        if (hasPendingDeleteIntent(ownerId, type, itemId, resolvedLinkId)) {
+            mergedById.delete(itemId);
+            continue;
+        }
+
+        const incomingItem = mergedById.get(itemId);
+        if (!incomingItem) {
+            mergedById.set(itemId, {
+                ...localItem,
+                owner_id: Number(ownerId),
+                list_link_id: resolvedLinkId,
+            });
+            continue;
+        }
+
+        mergedById.set(itemId, {
+            ...incomingItem,
+            ...localItem,
+            owner_id: Number(incomingItem.owner_id ?? ownerId),
+            list_link_id: normalizeLinkId(incomingItem.list_link_id ?? resolvedLinkId),
+            local_id: String(localItem?.local_id ?? '').trim()
+                || String(incomingItem?.local_id ?? '').trim(),
+        });
+    }
+
+    return sortItems(Array.from(mergedById.values()));
+}
+
+function readRealtimeChangedAtToken(eventPayload) {
+    const changedAtToken = String(eventPayload?.changed_at ?? '').trim();
+    return changedAtToken === '' ? null : changedAtToken;
+}
+
+function readRealtimeListVersion(eventPayload) {
+    const numericVersion = Number(eventPayload?.list_version ?? 0);
+    if (!Number.isFinite(numericVersion) || numericVersion <= 0) {
+        return null;
+    }
+
+    return Math.floor(numericVersion);
+}
+
+function shouldApplyRealtimeListSnapshot(ownerId, type, linkId, eventPayload) {
+    const eventListVersion = readRealtimeListVersion(eventPayload);
+    if (eventListVersion !== null) {
+        return eventListVersion > getKnownServerListVersion(ownerId, type, linkId);
+    }
+
+    const eventChangedAtToken = readRealtimeChangedAtToken(eventPayload);
+    if (eventChangedAtToken === null) {
+        return true;
+    }
+
+    const listKey = listMutationGuardKey(ownerId, type, linkId);
+    const previousChangedAtToken = String(latestRealtimeEventTokenByList.get(listKey) ?? '').trim();
+    if (previousChangedAtToken !== '' && previousChangedAtToken > eventChangedAtToken) {
+        return false;
+    }
+
+    latestRealtimeEventTokenByList.set(listKey, eventChangedAtToken);
+    return true;
 }
 
 function buildListChannelName(ownerId) {
@@ -6034,9 +6302,26 @@ function subscribeListChannel(ownerId) {
     }
 
     listChannelName = nextChannelName;
-    window.Echo.private(listChannelName).listen('.list.items.changed', () => {
-        loadActiveTabItems();
-        loadActiveTabSuggestions();
+    window.Echo.private(listChannelName).listen('.list.items.changed', (eventPayload) => {
+        if (Number(eventPayload?.actor_user_id ?? 0) === Number(localUser.id)) {
+            return;
+        }
+
+        const eventItems = Array.isArray(eventPayload?.items) ? eventPayload.items : null;
+        if (!eventItems) {
+            return;
+        }
+
+        const type = resolveRealtimeListType(eventPayload);
+        const eventOwnerId = Number(eventPayload?.owner_id ?? selectedOwnerId.value);
+        const eventLinkId = resolveLinkIdForOwner(eventOwnerId, eventPayload?.list_link_id);
+        if (!shouldApplyRealtimeListSnapshot(eventOwnerId, type, eventLinkId, eventPayload)) {
+            return;
+        }
+        const mergedItems = mergeRealtimeItemsWithLocalPending(eventOwnerId, type, eventItems, eventLinkId);
+        const filteredItems = readFilteredServerItems(eventOwnerId, type, mergedItems, eventLinkId);
+        writeListToCache(eventOwnerId, type, filteredItems, eventLinkId);
+        setKnownServerListVersion(eventOwnerId, type, readRealtimeListVersion(eventPayload), eventLinkId);
     });
 }
 
@@ -6066,6 +6351,10 @@ watch(activeTab, async (tab) => {
     }
 });
 
+watch(themeMode, (mode) => {
+    applyThemeMode(mode);
+});
+
 watch(
     () => isWhiteCardAnimationActive(),
     (isActive, wasActive) => {
@@ -6082,6 +6371,23 @@ watch(isSkippableAnimationPlaying, (isActive) => {
 }, { immediate: true });
 
 onMounted(async () => {
+    applyThemeMode(themeMode.value, { persist: false });
+
+    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+        systemThemeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+        handleSystemThemeChange = () => {
+            if (themeMode.value === 'system') {
+                applyThemeMode('system', { persist: false });
+            }
+        };
+
+        if (typeof systemThemeMediaQuery.addEventListener === 'function') {
+            systemThemeMediaQuery.addEventListener('change', handleSystemThemeChange);
+        } else if (typeof systemThemeMediaQuery.addListener === 'function') {
+            systemThemeMediaQuery.addListener(handleSystemThemeChange);
+        }
+    }
+
     persistActiveTabToStorage(activeTab.value);
     loadOfflineStateFromStorage();
     applyCachedSyncState(true);
@@ -6102,10 +6408,6 @@ onMounted(async () => {
 
     subscribeUserChannel();
     subscribeListChannel(selectedOwnerId.value);
-
-    queueSyncTimer = window.setInterval(() => {
-        syncOfflineQueue();
-    }, 1000);
     moodRelativeNowMs.value = Date.now();
     moodRelativeTimeTimer = window.setInterval(() => {
         if (document.hidden) {
@@ -6118,9 +6420,7 @@ onMounted(async () => {
     handleOnlineEvent = async () => {
         isBrowserOnline.value = true;
         serverReachable.value = true;
-
         await syncOfflineQueue();
-        await Promise.all([refreshState(false, true), loadAllItems(), loadAllSuggestions()]);
     };
 
     handleOfflineEvent = () => {
@@ -6158,25 +6458,16 @@ onBeforeUnmount(() => {
     clearSoundPools();
     applyScrollLockState(false);
     listSyncVersions.clear();
+    listServerVersions.clear();
     deletedItemTombstones.clear();
+    latestRealtimeEventTokenByList.clear();
     blockedSuggestionRefreshTypes.clear();
     itemCardElements.clear();
     disposeToasts();
 
-    if (itemsPollTimer) {
-        clearInterval(itemsPollTimer);
-    }
-
-    if (statePollTimer) {
-        clearInterval(statePollTimer);
-    }
-
-    if (suggestionsPollTimer) {
-        clearInterval(suggestionsPollTimer);
-    }
-
-    if (queueSyncTimer) {
-        clearInterval(queueSyncTimer);
+    if (queueSyncRetryTimer) {
+        clearTimeout(queueSyncRetryTimer);
+        queueSyncRetryTimer = null;
     }
 
     if (moodRelativeTimeTimer) {
@@ -6205,6 +6496,16 @@ onBeforeUnmount(() => {
         window.removeEventListener('offline', handleOfflineEvent);
         handleOfflineEvent = null;
     }
+
+    if (systemThemeMediaQuery && handleSystemThemeChange) {
+        if (typeof systemThemeMediaQuery.removeEventListener === 'function') {
+            systemThemeMediaQuery.removeEventListener('change', handleSystemThemeChange);
+        } else if (typeof systemThemeMediaQuery.removeListener === 'function') {
+            systemThemeMediaQuery.removeListener(handleSystemThemeChange);
+        }
+    }
+    systemThemeMediaQuery = null;
+    handleSystemThemeChange = null;
 
     if (window.Echo && userChannelName) {
         window.Echo.leave(userChannelName);
@@ -6791,6 +7092,53 @@ onBeforeUnmount(() => {
 
                 <div class="rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                     <h3 class="mb-3 text-sm font-semibold text-[#fcfcfa]">
+                        Тема интерфейса
+                    </h3>
+                    <div class="grid grid-cols-3 gap-2">
+                        <button
+                            type="button"
+                            class="rounded-xl border px-3 py-2 text-sm font-semibold transition"
+                            :class="
+                                themeMode === 'system'
+                                    ? 'border-[#5b7fff]/70 bg-[#5b7fff]/18 text-[#fcfcfa]'
+                                    : 'border-[#403e41] bg-[#221f22] text-[#bcb7ba] hover:border-[#fcfcfa]/40 hover:text-[#fcfcfa]'
+                            "
+                            @click="setThemeMode('system')"
+                        >
+                            Система
+                        </button>
+                        <button
+                            type="button"
+                            class="rounded-xl border px-3 py-2 text-sm font-semibold transition"
+                            :class="
+                                themeMode === 'light'
+                                    ? 'border-[#5b7fff]/70 bg-[#5b7fff]/18 text-[#fcfcfa]'
+                                    : 'border-[#403e41] bg-[#221f22] text-[#bcb7ba] hover:border-[#fcfcfa]/40 hover:text-[#fcfcfa]'
+                            "
+                            @click="setThemeMode('light')"
+                        >
+                            Светлая
+                        </button>
+                        <button
+                            type="button"
+                            class="rounded-xl border px-3 py-2 text-sm font-semibold transition"
+                            :class="
+                                themeMode === 'dark'
+                                    ? 'border-[#5b7fff]/70 bg-[#5b7fff]/18 text-[#fcfcfa]'
+                                    : 'border-[#403e41] bg-[#221f22] text-[#bcb7ba] hover:border-[#fcfcfa]/40 hover:text-[#fcfcfa]'
+                            "
+                            @click="setThemeMode('dark')"
+                        >
+                            Тёмная
+                        </button>
+                    </div>
+                    <p class="mt-2 text-xs text-[#9f9a9d]">
+                        Активно: {{ resolvedThemeLabel }}
+                    </p>
+                </div>
+
+                <div class="rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
+                    <h3 class="mb-3 text-sm font-semibold text-[#fcfcfa]">
                         Настройки аккаунта
                     </h3>
                     <div class="space-y-2">
@@ -6864,6 +7212,17 @@ onBeforeUnmount(() => {
                 >
                     {{ logoutLoading ? '\u0412\u044b\u0445\u043e\u0434...' : '\u0412\u044b\u0439\u0442\u0438 \u0438\u0437 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430' }}
                 </button>
+
+                <div class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-2 text-xs text-[#9f9a9d]">
+                    <div class="flex items-center justify-between gap-3">
+                        <span>Версия приложения</span>
+                        <span class="font-mono text-[#d7d2d5]">{{ appVersion }}</span>
+                    </div>
+                    <div class="mt-1 flex items-center justify-between gap-3">
+                        <span>Версия билда</span>
+                        <span class="font-mono text-[#d7d2d5]">{{ buildVersion }}</span>
+                    </div>
+                </div>
             </section>
         </div>
 
@@ -7491,7 +7850,7 @@ onBeforeUnmount(() => {
     height: 10px;
     appearance: none;
     -webkit-appearance: none;
-    border: 1px solid rgb(64 62 65 / 88%);
+    border: 1px solid color-mix(in srgb, var(--border-surface) 85%, transparent);
     border-radius: 9999px;
     background: linear-gradient(
         90deg,
@@ -7503,7 +7862,7 @@ onBeforeUnmount(() => {
 
 .mood-range-slider:focus {
     outline: none;
-    box-shadow: 0 0 0 2px rgb(91 127 255 / 22%);
+    box-shadow: 0 0 0 2px rgb(37 99 235 / 22%);
 }
 
 .mood-range-slider::-webkit-slider-thumb {
@@ -7511,24 +7870,24 @@ onBeforeUnmount(() => {
     height: 18px;
     appearance: none;
     -webkit-appearance: none;
-    border: 2px solid rgb(34 31 34 / 96%);
+    border: 2px solid var(--bg-surface);
     border-radius: 9999px;
-    background: rgb(252 252 250 / 98%);
+    background: color-mix(in srgb, var(--ink) 96%, transparent);
     box-shadow: 0 2px 6px rgb(0 0 0 / 30%);
 }
 
 .mood-range-slider::-moz-range-thumb {
     width: 18px;
     height: 18px;
-    border: 2px solid rgb(34 31 34 / 96%);
+    border: 2px solid var(--bg-surface);
     border-radius: 9999px;
-    background: rgb(252 252 250 / 98%);
+    background: color-mix(in srgb, var(--ink) 96%, transparent);
     box-shadow: 0 2px 6px rgb(0 0 0 / 30%);
 }
 
 .mood-range-slider::-moz-range-track {
     height: 10px;
-    border: 1px solid rgb(64 62 65 / 88%);
+    border: 1px solid color-mix(in srgb, var(--border-surface) 85%, transparent);
     border-radius: 9999px;
     background: linear-gradient(
         90deg,
@@ -7609,8 +7968,8 @@ onBeforeUnmount(() => {
 .batch-collapse-mega {
     position: absolute;
     border-radius: 16px;
-    border: 1px solid rgb(64 62 65 / 88%);
-    background: rgb(34 31 34 / 96%);
+    border: 1px solid color-mix(in srgb, var(--border-surface) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
 }
 
 .batch-collapse-incoming {
@@ -7735,8 +8094,8 @@ onBeforeUnmount(() => {
 
 .xp-progress-wrap {
     border-radius: 9999px;
-    border: 1px solid rgb(64 62 65 / 88%);
-    background: rgb(34 31 34 / 92%);
+    border: 1px solid color-mix(in srgb, var(--border-surface) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
     padding: 5px;
     box-shadow: 0 6px 20px rgb(0 0 0 / 24%);
 }
@@ -7750,7 +8109,11 @@ onBeforeUnmount(() => {
     width: 100%;
     overflow: hidden;
     border-radius: 9999px;
-    background: linear-gradient(180deg, rgb(44 41 44 / 92%), rgb(27 25 27 / 92%));
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--bg-surface-strong) 92%, transparent),
+        color-mix(in srgb, var(--bg-surface) 92%, transparent)
+    );
 }
 
 .xp-progress-fill {
@@ -7775,7 +8138,7 @@ onBeforeUnmount(() => {
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
-    color: rgb(231 242 255 / 98%);
+    color: color-mix(in srgb, var(--accent) 84%, var(--ink) 16%);
     text-shadow:
         0 0 16px rgb(94 159 255 / 66%),
         0 2px 8px rgb(0 0 0 / 45%);

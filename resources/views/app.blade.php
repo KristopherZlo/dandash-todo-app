@@ -2,11 +2,38 @@
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
     <head>
         <meta charset="utf-8">
+        <meta name="csrf-token" content="{{ csrf_token() }}">
         <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no">
         <meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
         <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
         <meta name="bingbot" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
         <meta name="app-base-url" content="{{ rtrim(request()->getSchemeAndHttpHost() . request()->getBaseUrl(), '/') }}">
+        <script>
+            (function () {
+                var storageKey = 'dandash:theme-mode:v1';
+                var mode = 'system';
+                var allowed = { system: true, light: true, dark: true };
+
+                try {
+                    var saved = window.localStorage.getItem(storageKey);
+                    if (saved && allowed[saved]) {
+                        mode = saved;
+                    }
+                } catch (error) {
+                    // Ignore storage read errors.
+                }
+
+                var resolved = mode;
+                if (mode === 'system') {
+                    resolved = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+                        ? 'dark'
+                        : 'light';
+                }
+
+                document.documentElement.dataset.theme = resolved;
+                document.documentElement.style.colorScheme = resolved;
+            })();
+        </script>
 
         <title inertia>{{ config('app.name', 'Laravel') }}</title>
         <link rel="icon" href="/favicon.ico" sizes="any">
