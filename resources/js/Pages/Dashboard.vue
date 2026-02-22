@@ -7551,7 +7551,7 @@ onBeforeUnmount(() => {
 
 .drag-item-shell {
     border-radius: 1rem;
-    transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.22s ease;
+    transition: box-shadow 0.22s ease;
 }
 
 .drag-ghost {
@@ -7568,14 +7568,12 @@ onBeforeUnmount(() => {
 
 @keyframes drag-ready-glow {
     from {
-        transform: scale(1);
         box-shadow:
             0 0 0 0 rgb(252 252 250 / 0%),
             0 0 0 0 rgb(252 252 250 / 0%);
     }
 
     to {
-        transform: scale(1.01);
         box-shadow:
             0 0 0 1px rgb(252 252 250 / 20%),
             0 0 16px rgb(252 252 250 / 16%);
