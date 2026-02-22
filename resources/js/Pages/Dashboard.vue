@@ -67,7 +67,7 @@ const THEME_MODE_SET = new Set(THEME_MODE_VALUES);
 const THEME_MODE_STORAGE_KEY = 'dandash:theme-mode:v1';
 const ADS_ENABLED_STORAGE_KEY = `dandash:ads-enabled:v1:user-${localUser.id}`;
 const TOUCH_DRAG_HOLD_DELAY_MS = 500;
-const AD_MODAL_SHOW_CHANCE = 1;
+const AD_MODAL_SHOW_CHANCE = 0.2;
 const AD_BANNER_PATHS = (Array.isArray(adBannersConfig?.banners) ? adBannersConfig.banners : [])
     .map((entry) => (typeof entry === 'string' ? entry : entry?.path))
     .map((entry) => String(entry ?? '').trim())
