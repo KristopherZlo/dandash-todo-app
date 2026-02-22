@@ -5,6 +5,8 @@ import PrimaryButton from '@/Components/PrimaryButton.vue';
 import TextInput from '@/Components/TextInput.vue';
 import { Link, useForm, usePage } from '@inertiajs/vue3';
 
+const emit = defineEmits(['notify']);
+
 defineProps({
     mustVerifyEmail: {
         type: Boolean,
@@ -20,6 +22,17 @@ const form = useForm({
     name: user.name,
     email: user.email,
 });
+
+const submitProfileUpdate = () => {
+    form.patch(route('profile.update'), {
+        onSuccess: () => {
+            emit('notify', {
+                type: 'success',
+                message: 'Изменения профиля сохранены.',
+            });
+        },
+    });
+};
 </script>
 
 <template>
@@ -34,7 +47,7 @@ const form = useForm({
         </header>
 
         <form
-            @submit.prevent="form.patch(route('profile.update'))"
+            @submit.prevent="submitProfileUpdate"
             class="mt-5 space-y-4"
         >
             <div>
@@ -80,7 +93,7 @@ const form = useForm({
                 </p>
 
                 <div
-                    v-show="status === 'verification-link-sent'"
+                    v-show="false && status === 'verification-link-sent'"
                     class="mt-2 text-sm font-medium text-[#a5d774]"
                 >
                     Новая ссылка подтверждения отправлена.
@@ -97,7 +110,7 @@ const form = useForm({
                     leave-to-class="opacity-0"
                 >
                     <p
-                        v-if="form.recentlySuccessful"
+                        v-if="false && form.recentlySuccessful"
                         class="text-sm font-medium text-[#a5d774]"
                     >
                         Изменения сохранены.

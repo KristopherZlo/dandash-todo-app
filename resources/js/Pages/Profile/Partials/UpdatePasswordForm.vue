@@ -6,6 +6,8 @@ import TextInput from '@/Components/TextInput.vue';
 import { useForm } from '@inertiajs/vue3';
 import { ref } from 'vue';
 
+const emit = defineEmits(['notify']);
+
 const passwordInput = ref(null);
 const currentPasswordInput = ref(null);
 
@@ -18,7 +20,13 @@ const form = useForm({
 const updatePassword = () => {
     form.put(route('password.update'), {
         preserveScroll: true,
-        onSuccess: () => form.reset(),
+        onSuccess: () => {
+            form.reset();
+            emit('notify', {
+                type: 'success',
+                message: 'Пароль обновлён.',
+            });
+        },
         onError: () => {
             if (form.errors.password) {
                 form.reset('password', 'password_confirmation');
@@ -96,7 +104,7 @@ const updatePassword = () => {
                     leave-to-class="opacity-0"
                 >
                     <p
-                        v-if="form.recentlySuccessful"
+                        v-if="false && form.recentlySuccessful"
                         class="text-sm font-medium text-[#a5d774]"
                     >
                         Пароль обновлён.

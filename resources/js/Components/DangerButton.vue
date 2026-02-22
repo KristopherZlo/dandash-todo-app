@@ -1,6 +1,16 @@
+<script setup>
+defineProps({
+    type: {
+        type: String,
+        default: 'button',
+    },
+});
+</script>
+
 <template>
     <button
-        class="app-button-danger"
+        :type="type"
+        class="app-button-danger app-pressable"
     >
         <slot />
     </button>

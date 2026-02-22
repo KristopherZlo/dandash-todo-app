@@ -1,5 +1,6 @@
 <script setup>
 import SwipeListItem from '@/Components/SwipeListItem.vue';
+import ToastStack from '@/Components/ToastStack.vue';
 import { useToasts } from '@/composables/useToasts';
 import {
     buildProductEditableText,
@@ -216,6 +217,20 @@ const inviteModalTab = ref('invitations');
 const adModalOpen = ref(false);
 const activeAdBannerPath = ref('');
 
+function openCollabHub(tab = 'share') {
+    const normalizedTab = String(tab ?? '').trim();
+    inviteModalTab.value = ['share', 'invitations', 'lists'].includes(normalizedTab)
+        ? normalizedTab
+        : 'share';
+    inviteModalOpen.value = true;
+    shareModalOpen.value = false;
+}
+
+function closeCollabHub() {
+    inviteModalOpen.value = false;
+    shareModalOpen.value = false;
+}
+
 function toggleAdsEnabled() {
     adsEnabled.value = !adsEnabled.value;
 
@@ -281,6 +296,8 @@ const productStatsSummary = ref({
 });
 const productSuggestionStatsLoading = ref(false);
 const resettingSuggestionKeys = ref([]);
+const recentlyResetSuggestionKeys = ref([]);
+const suggestionResetSuccessTimers = new Map();
 
 const {
     toasts,
@@ -5596,6 +5613,33 @@ function isResettingSuggestionKey(suggestionKey) {
     return resettingSuggestionKeys.value.includes(String(suggestionKey ?? ''));
 }
 
+function isSuggestionResetDone(suggestionKey) {
+    return recentlyResetSuggestionKeys.value.includes(String(suggestionKey ?? ''));
+}
+
+function markSuggestionResetDone(suggestionKey, resetAfterMs = 1800) {
+    const normalizedKey = String(suggestionKey ?? '').trim();
+    if (normalizedKey === '') {
+        return;
+    }
+
+    if (!recentlyResetSuggestionKeys.value.includes(normalizedKey)) {
+        recentlyResetSuggestionKeys.value = [...recentlyResetSuggestionKeys.value, normalizedKey];
+    }
+
+    const existingTimer = suggestionResetSuccessTimers.get(normalizedKey);
+    if (existingTimer) {
+        clearTimeout(existingTimer);
+    }
+
+    const timerId = window.setTimeout(() => {
+        suggestionResetSuccessTimers.delete(normalizedKey);
+        recentlyResetSuggestionKeys.value = recentlyResetSuggestionKeys.value.filter((key) => key !== normalizedKey);
+    }, Math.max(600, Number(resetAfterMs) || 1800));
+
+    suggestionResetSuccessTimers.set(normalizedKey, timerId);
+}
+
 function suggestionStatsCount(type) {
     const ownerId = Number(selectedOwnerId.value);
     const linkId = selectedListLinkId.value;
@@ -5637,6 +5681,7 @@ async function resetSuggestionStatsRow(entry) {
         syncOfflineQueue().catch(() => {});
 
         showStatus('\u0414\u0430\u043d\u043d\u044b\u0435 \u043f\u043e\u0434\u0441\u043a\u0430\u0437\u043e\u043a \u0441\u0431\u0440\u043e\u0448\u0435\u043d\u044b.');
+        markSuggestionResetDone(suggestionKey);
     } finally {
         resettingSuggestionKeys.value = resettingSuggestionKeys.value.filter((key) => key !== suggestionKey);
     }
@@ -6271,16 +6316,19 @@ function subscribeUserChannel() {
         return;
     }
 
+    if (userChannelName) {
+        window.Echo.leave(userChannelName);
+    }
+
     userChannelName = `users.${localUser.id}`;
     window.Echo.private(userChannelName).listen('.user.sync.changed', (eventPayload) => {
-        if (Number(eventPayload?.actor_user_id ?? 0) === Number(localUser.id)) {
-            return;
-        }
-
         const nextState = eventPayload?.state;
         if (nextState && typeof nextState === 'object') {
             applyState(nextState);
+            return;
         }
+
+        refreshState(false, false).catch(() => {});
     });
 }
 
@@ -6570,6 +6618,10 @@ onBeforeUnmount(() => {
     latestRealtimeEventTokenByList.clear();
     blockedSuggestionRefreshTypes.clear();
     itemCardElements.clear();
+    for (const timerId of suggestionResetSuccessTimers.values()) {
+        clearTimeout(timerId);
+    }
+    suggestionResetSuccessTimers.clear();
     disposeToasts();
 
     if (queueSyncRetryTimer) {
@@ -7145,6 +7197,80 @@ onBeforeUnmount(() => {
             </section>
 
             <section v-if="activeTab === 'profile'" class="flex-1 space-y-4">
+                <div class="relative overflow-hidden rounded-[28px] border border-[#403e41] bg-[#2d2a2c] p-4 shadow-[0_20px_42px_-32px_rgba(0,0,0,0.8)]">
+                    <div class="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-[#5b7fff]/14 to-transparent" />
+                    <div class="pointer-events-none absolute -right-10 -top-8 h-28 w-28 rounded-full bg-[#5b7fff]/12 blur-2xl" />
+                    <div class="pointer-events-none absolute -left-8 bottom-0 h-20 w-20 rounded-full bg-[#56b982]/10 blur-2xl" />
+
+                    <div class="relative space-y-3">
+                        <div class="flex items-start gap-3">
+                            <div class="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#5b7fff]/40 bg-[#5b7fff]/12 text-[#d8e7ff]">
+                                <UserRound class="h-5 w-5" />
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <p class="text-[10px] uppercase tracking-[0.18em] text-[#7f7b7e]">PROFILE</p>
+                                <h2 class="mt-1 truncate text-lg font-semibold text-[#fcfcfa]">{{ localUser.name }}</h2>
+                                <p class="mt-1 truncate text-xs text-[#9f9a9d]">
+                                    @{{ localUser.tag || 'tag' }} · {{ localUser.email || 'email@example.com' }}
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-3 gap-2">
+                            <div class="rounded-2xl border border-[#403e41] bg-[#221f22]/95 px-3 py-2">
+                                <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">Счёт</p>
+                                <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">{{ productivityScore }}</p>
+                            </div>
+                            <div class="rounded-2xl border border-[#403e41] bg-[#221f22]/95 px-3 py-2">
+                                <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">Инвайты</p>
+                                <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">{{ pendingInvitationsCount }}</p>
+                            </div>
+                            <div class="rounded-2xl border border-[#403e41] bg-[#221f22]/95 px-3 py-2">
+                                <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">Связи</p>
+                                <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">{{ links.length }}</p>
+                            </div>
+                        </div>
+
+                        <div class="rounded-3xl border border-[#403e41] bg-[#221f22]/85 p-3">
+                            <div class="mb-2 flex items-center justify-between gap-2">
+                                <div class="min-w-0">
+                                    <p class="truncate text-sm font-semibold text-[#fcfcfa]">Люди и списки</p>
+                                    <p class="mt-0.5 text-xs text-[#9f9a9d]">Единый центр поиска, приглашений и связей.</p>
+                                </div>
+                                <Share2 class="h-4 w-4 shrink-0 text-[#d8e7ff]" />
+                            </div>
+                            <div class="grid gap-2 sm:grid-cols-3">
+                                <button
+                                    type="button"
+                                    class="flex items-center justify-between rounded-2xl border border-[#5b7fff]/35 bg-[#5b7fff]/10 px-3 py-2.5 text-left text-sm font-semibold text-[#fcfcfa]"
+                                    @click="openCollabHub('share')"
+                                >
+                                    <span class="truncate">Поделиться</span>
+                                    <span class="text-[11px] text-[#d8e7ff]">Поиск</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    class="flex items-center justify-between rounded-2xl border border-[#403e41] bg-[#2d2a2c] px-3 py-2.5 text-left text-sm font-semibold text-[#fcfcfa]"
+                                    @click="openCollabHub('invitations')"
+                                >
+                                    <span class="truncate">Приглашения</span>
+                                    <span class="inline-flex min-w-6 items-center justify-center rounded-full border border-[#5b7fff]/40 bg-[#5b7fff]/12 px-2 py-0.5 text-[11px] font-semibold text-[#d8e7ff]">
+                                        {{ pendingInvitationsCount }}
+                                    </span>
+                                </button>
+                                <button
+                                    type="button"
+                                    class="flex items-center justify-between rounded-2xl border border-[#403e41] bg-[#2d2a2c] px-3 py-2.5 text-left text-sm font-semibold text-[#fcfcfa]"
+                                    @click="openCollabHub('lists')"
+                                >
+                                    <span class="truncate">Списки</span>
+                                    <span class="text-[11px] text-[#9f9a9d]">{{ links.length }}</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="hidden">
                 <div class="rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                     <div class="text-[11px] uppercase tracking-[0.18em] text-[#7f7b7e]">
                         Dandash
@@ -7180,6 +7306,7 @@ onBeforeUnmount(() => {
                     Мои приглашения ({{ pendingInvitationsCount }})
                 </button>
 
+                </div>
                 <div class="grid grid-cols-2 gap-2">
                     <button
                         type="button"
@@ -7543,28 +7670,13 @@ onBeforeUnmount(() => {
             </div>
         </Transition>
 
-        <TransitionGroup
-            name="toast"
-            tag="div"
-            class="pointer-events-none fixed top-3 left-1/2 z-[70] flex w-[calc(100%-20px)] max-w-md -translate-x-1/2 flex-col gap-2"
-        >
-            <div
-                v-for="toast in toasts"
-                :key="`toast-${toast.id}`"
-                class="toast-card pointer-events-auto select-none rounded-2xl border px-3 py-2 text-sm shadow-xl backdrop-blur"
-                :class="toast.type === 'error'
-                    ? 'border-[#ee5c81]/60 bg-[#221f22]/96 text-[#ee5c81]'
-                    : 'border-[#a5d774]/55 bg-[#221f22]/96 text-[#a5d774]'"
-                :style="{ transform: `translateX(${toast.deltaX || 0}px)` }"
-                @pointerdown="onToastPointerDown(toast.id, $event)"
-                @pointermove="onToastPointerMove(toast.id, $event)"
-                @pointerup="onToastPointerUp(toast.id)"
-                @pointercancel="onToastPointerCancel(toast.id)"
-                @pointerleave="onToastPointerUp(toast.id)"
-            >
-                <p class="truncate">{{ toast.message }}</p>
-            </div>
-        </TransitionGroup>
+        <ToastStack
+            :toasts="toasts"
+            :handle-pointer-down="onToastPointerDown"
+            :handle-pointer-move="onToastPointerMove"
+            :handle-pointer-up="onToastPointerUp"
+            :handle-pointer-cancel="onToastPointerCancel"
+        />
 
         <Transition name="xp-backdrop">
             <div
@@ -7730,22 +7842,34 @@ onBeforeUnmount(() => {
         </Transition>
 
         <Transition name="app-modal">
-            <div v-if="inviteModalOpen" class="fixed inset-0 z-[120] bg-[#19181a]/90 p-2.5" @click.self="inviteModalOpen = false">
+            <div v-if="inviteModalOpen" class="fixed inset-0 z-[120] bg-[#19181a]/90 p-2.5" @click.self="closeCollabHub">
             <div class="flex h-full flex-col rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                 <div class="mb-3 flex items-center justify-between">
                     <h2 class="text-base font-semibold">
-                        Мои приглашения
+                        Люди и списки
                     </h2>
                     <button
                         type="button"
                         class="rounded-xl border border-[#403e41] p-2 text-[#bcb7ba]"
-                        @click="inviteModalOpen = false"
+                        @click="closeCollabHub"
                     >
                         <X class="h-4 w-4" />
                     </button>
                 </div>
 
-                <div class="mb-3 grid grid-cols-2 gap-2 rounded-2xl bg-[#221f22] p-1">
+                <div class="mb-3 grid grid-cols-3 gap-2 rounded-2xl bg-[#221f22] p-1">
+                    <button
+                        type="button"
+                        class="rounded-xl py-2 text-sm font-semibold"
+                        :class="
+                            inviteModalTab === 'share'
+                                ? 'bg-[#fcfcfa] text-[#19181a]'
+                                : 'text-[#9f9a9d]'
+                        "
+                        @click="inviteModalTab = 'share'"
+                    >
+                        Поиск
+                    </button>
                     <button
                         type="button"
                         class="rounded-xl py-2 text-sm font-semibold"
@@ -7770,6 +7894,60 @@ onBeforeUnmount(() => {
                     >
                         {{ '\u0421\u043f\u0438\u0441\u043a\u0438' }}
                     </button>
+                </div>
+
+                <div v-if="inviteModalTab === 'share'" class="flex-1 overflow-y-auto">
+                    <div class="mb-3 rounded-2xl border border-[#403e41] bg-[#221f22] p-3">
+                        <p class="text-xs text-[#9f9a9d]">
+                            Найдите пользователя по тегу и отправьте приглашение на общий список.
+                        </p>
+                    </div>
+
+                    <div class="mb-3 flex gap-2">
+                        <input
+                            v-model="searchQuery"
+                            type="text"
+                            placeholder="Введите тег..."
+                            class="w-full rounded-xl border border-[#403e41] bg-[#221f22] px-3 py-2 text-sm text-[#fcfcfa] focus:border-[#fcfcfa]/45 focus:outline-none"
+                            @keyup.enter="findUsers"
+                        >
+                        <button
+                            type="button"
+                            class="inline-flex items-center gap-1 rounded-xl border border-[#403e41] px-3 py-2 text-sm text-[#fcfcfa] disabled:cursor-not-allowed disabled:opacity-60"
+                            :disabled="searchBusy"
+                            @click="findUsers"
+                        >
+                            <Search class="h-4 w-4" />
+                            Найти
+                        </button>
+                    </div>
+
+                    <div class="space-y-2">
+                        <div
+                            v-for="result in searchResults"
+                            :key="`hub-search-${result.id}`"
+                            class="flex items-center justify-between rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-3"
+                        >
+                            <div class="min-w-0">
+                                <div class="truncate text-sm font-medium text-[#fcfcfa]">
+                                    {{ result.name }}
+                                </div>
+                                <div class="truncate text-xs text-[#9f9a9d]">
+                                    @{{ result.tag }}
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                class="rounded-xl border border-[#403e41] px-3 py-1.5 text-xs font-semibold text-[#fcfcfa] hover:border-[#fcfcfa]/45"
+                                @click="sendInvite(result.id)"
+                            >
+                                Пригласить
+                            </button>
+                        </div>
+                        <p v-if="!searchBusy && searchResults.length === 0 && searchQuery.trim().length >= 2" class="px-1 text-xs text-[#9f9a9d]">
+                            Ничего не найдено.
+                        </p>
+                    </div>
                 </div>
 
                 <div v-if="inviteModalTab === 'invitations'" class="flex-1 space-y-2 overflow-y-auto">
@@ -7897,11 +8075,20 @@ onBeforeUnmount(() => {
 
                                 <button
                                     type="button"
-                                    class="shrink-0 rounded-xl border border-[#403e41] bg-[#2d2a2c] px-2.5 py-1.5 text-[11px] font-semibold text-[#fcfcfa] transition hover:border-[#fcfcfa]/45 disabled:cursor-not-allowed disabled:opacity-55"
+                                    class="shrink-0 rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-55"
+                                    :class="
+                                        isSuggestionResetDone(entry.suggestion_key)
+                                            ? 'border-[#56b982]/60 bg-[#56b982]/18 text-[#56b982]'
+                                            : 'border-[#ee5c81]/55 bg-[#ee5c81]/12 text-[#ee5c81] hover:border-[#ee5c81]'
+                                    "
                                     :disabled="isResettingSuggestionKey(entry.suggestion_key)"
                                     @click="resetSuggestionStatsRow(entry)"
                                 >
-                                    {{ isResettingSuggestionKey(entry.suggestion_key) ? '\u2026' : '\u0421\u0431\u0440\u043e\u0441\u0438\u0442\u044c' }}
+                                    {{
+                                        isResettingSuggestionKey(entry.suggestion_key)
+                                            ? '...'
+                                            : (isSuggestionResetDone(entry.suggestion_key) ? 'Сброшено' : '\u0421\u0431\u0440\u043e\u0441\u0438\u0442\u044c')
+                                    }}
                                 </button>
                             </div>
                         </div>
@@ -8435,7 +8622,3 @@ onBeforeUnmount(() => {
     }
 }
 </style>
-
-
-
-

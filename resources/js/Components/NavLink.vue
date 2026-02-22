@@ -14,8 +14,8 @@ const props = defineProps({
 
 const classes = computed(() =>
     props.active
-        ? 'inline-flex items-center rounded-full border border-teal-200/80 bg-teal-50 px-4 py-2 text-sm font-semibold text-teal-800 shadow-sm transition'
-        : 'inline-flex items-center rounded-full border border-transparent px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:bg-white/70 hover:text-slate-900',
+        ? 'app-pressable inline-flex items-center rounded-full border border-teal-200/80 bg-teal-50 px-4 py-2 text-sm font-semibold text-teal-800 shadow-sm transition'
+        : 'app-pressable inline-flex items-center rounded-full border border-transparent px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:bg-white/70 hover:text-slate-900',
 );
 </script>
 

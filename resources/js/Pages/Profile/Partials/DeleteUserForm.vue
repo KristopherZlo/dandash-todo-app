@@ -8,6 +8,7 @@ import TextInput from '@/Components/TextInput.vue';
 import { useForm } from '@inertiajs/vue3';
 import { nextTick, ref } from 'vue';
 
+const emit = defineEmits(['notify']);
 const confirmingUserDeletion = ref(false);
 const passwordInput = ref(null);
 
@@ -17,6 +18,10 @@ const form = useForm({
 
 const confirmUserDeletion = () => {
     confirmingUserDeletion.value = true;
+    emit('notify', {
+        type: 'info',
+        message: 'Подтвердите удаление аккаунта в открывшемся окне.',
+    });
 
     nextTick(() => passwordInput.value.focus());
 };
@@ -95,4 +100,3 @@ const closeModal = () => {
         </Modal>
     </section>
 </template>
-

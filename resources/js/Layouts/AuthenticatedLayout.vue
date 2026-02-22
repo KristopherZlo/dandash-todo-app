@@ -17,7 +17,7 @@ const showingNavigationDropdown = ref(false);
                     <div class="flex items-center gap-4">
                         <Link
                             :href="route('dashboard')"
-                            class="app-brand rounded-full border border-teal-200/70 bg-teal-50/90 px-4 py-2 text-xs text-teal-800"
+                            class="app-brand app-pressable rounded-full border border-teal-200/70 bg-teal-50/90 px-4 py-2 text-xs text-teal-800"
                         >
                             Dandash
                         </Link>
@@ -43,7 +43,7 @@ const showingNavigationDropdown = ref(false);
                             <template #trigger>
                                 <button
                                     type="button"
-                                    class="inline-flex items-center gap-2 rounded-full border border-slate-200/80 bg-white/80 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-white"
+                                    class="app-pressable inline-flex items-center gap-2 rounded-full border border-slate-200/80 bg-white/80 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-white"
                                 >
                                     <span class="max-w-32 truncate">
                                         {{ $page.props.auth.user.name }}
@@ -81,7 +81,7 @@ const showingNavigationDropdown = ref(false);
 
                     <button
                         type="button"
-                        class="inline-flex items-center justify-center rounded-xl border border-slate-200/80 bg-white/70 p-2 text-slate-500 transition hover:border-slate-300 hover:bg-white sm:hidden"
+                        class="app-pressable inline-flex items-center justify-center rounded-xl border border-slate-200/80 bg-white/70 p-2 text-slate-500 transition hover:border-slate-300 hover:bg-white sm:hidden"
                         @click="showingNavigationDropdown = !showingNavigationDropdown"
                     >
                         <svg

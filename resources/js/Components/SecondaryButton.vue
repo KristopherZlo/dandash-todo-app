@@ -10,7 +10,7 @@ defineProps({
 <template>
     <button
         :type="type"
-        class="app-button-secondary"
+        class="app-button-secondary app-pressable"
     >
         <slot />
     </button>

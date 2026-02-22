@@ -150,6 +150,10 @@ export function useToasts() {
         pushToast(message, 'success', TOAST_AUTO_CLOSE_MS);
     }
 
+    function showToast(message, type = 'info', duration = TOAST_AUTO_CLOSE_MS) {
+        pushToast(message, type, duration);
+    }
+
     function showError(error) {
         const fallback = '\u041f\u0440\u043e\u0438\u0437\u043e\u0448\u043b\u0430 \u043e\u0448\u0438\u0431\u043a\u0430. \u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u0435\u0449\u0451 \u0440\u0430\u0437.';
         const responseErrors = error?.response?.data?.errors;
@@ -168,6 +172,7 @@ export function useToasts() {
     return {
         toasts,
         resetMessages,
+        showToast,
         showStatus,
         showError,
         onToastPointerDown,

@@ -12,49 +12,65 @@ class ListSyncVersionService
     {
         $scopeKey = $this->scopeKey($ownerId, $type, $listLinkId);
 
-        return (int) (ListSyncVersion::query()
-            ->where('scope_key', $scopeKey)
-            ->value('version') ?? 0);
+        try {
+            return (int) (ListSyncVersion::query()
+                ->where('scope_key', $scopeKey)
+                ->value('version') ?? 0);
+        } catch (QueryException $exception) {
+            if ($this->isMissingTableException($exception)) {
+                return 0;
+            }
+
+            throw $exception;
+        }
     }
 
     public function bumpVersion(int $ownerId, string $type, ?int $listLinkId = null): int
     {
         $scopeKey = $this->scopeKey($ownerId, $type, $listLinkId);
 
-        return DB::transaction(function () use ($scopeKey, $ownerId, $type, $listLinkId): int {
-            $record = ListSyncVersion::query()
-                ->where('scope_key', $scopeKey)
-                ->lockForUpdate()
-                ->first();
+        try {
+            return DB::transaction(function () use ($scopeKey, $ownerId, $type, $listLinkId): int {
+                $record = ListSyncVersion::query()
+                    ->where('scope_key', $scopeKey)
+                    ->lockForUpdate()
+                    ->first();
 
-            if (! $record) {
-                try {
-                    $created = ListSyncVersion::query()->create([
-                        'scope_key' => $scopeKey,
-                        'owner_id' => $ownerId,
-                        'list_link_id' => $listLinkId,
-                        'type' => $type,
-                        'version' => 1,
-                    ]);
+                if (! $record) {
+                    try {
+                        $created = ListSyncVersion::query()->create([
+                            'scope_key' => $scopeKey,
+                            'owner_id' => $ownerId,
+                            'list_link_id' => $listLinkId,
+                            'type' => $type,
+                            'version' => 1,
+                        ]);
 
-                    return (int) $created->version;
-                } catch (QueryException $exception) {
-                    if (! $this->isDuplicateKeyException($exception)) {
-                        throw $exception;
+                        return (int) $created->version;
+                    } catch (QueryException $exception) {
+                        if (! $this->isDuplicateKeyException($exception)) {
+                            throw $exception;
+                        }
+
+                        $record = ListSyncVersion::query()
+                            ->where('scope_key', $scopeKey)
+                            ->lockForUpdate()
+                            ->firstOrFail();
                     }
-
-                    $record = ListSyncVersion::query()
-                        ->where('scope_key', $scopeKey)
-                        ->lockForUpdate()
-                        ->firstOrFail();
                 }
+
+                $record->version = (int) $record->version + 1;
+                $record->save();
+
+                return (int) $record->version;
+            }, 3);
+        } catch (QueryException $exception) {
+            if ($this->isMissingTableException($exception)) {
+                return 0;
             }
 
-            $record->version = (int) $record->version + 1;
-            $record->save();
-
-            return (int) $record->version;
-        }, 3);
+            throw $exception;
+        }
     }
 
     private function scopeKey(int $ownerId, string $type, ?int $listLinkId): string
@@ -81,5 +97,19 @@ class ListSyncVersionService
 
         return str_contains(strtolower($exception->getMessage()), 'duplicate');
     }
-}
 
+    private function isMissingTableException(QueryException $exception): bool
+    {
+        $sqlState = (string) ($exception->errorInfo[0] ?? $exception->getCode());
+        if ($sqlState === '42S02') {
+            return true;
+        }
+
+        $driverCode = (int) ($exception->errorInfo[1] ?? 0);
+        if ($driverCode === 1146) {
+            return true;
+        }
+
+        return str_contains(strtolower($exception->getMessage()), 'doesn\'t exist');
+    }
+}
