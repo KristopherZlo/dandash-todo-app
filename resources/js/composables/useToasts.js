@@ -75,6 +75,7 @@ export function useToasts() {
             deltaX: 0,
             startX: 0,
             dragging: false,
+            pointerId: null,
             timerId: null,
             duration: Math.max(900, Number(duration) || TOAST_AUTO_CLOSE_MS),
         };
@@ -103,12 +104,34 @@ export function useToasts() {
         toast.dragging = true;
         toast.startX = clientX;
         toast.deltaX = 0;
+        toast.pointerId = typeof event?.pointerId === 'number' ? Number(event.pointerId) : null;
         clearToastTimer(toast);
+
+        const pointerTarget = event?.currentTarget;
+        if (
+            pointerTarget
+            && typeof pointerTarget.setPointerCapture === 'function'
+            && toast.pointerId !== null
+        ) {
+            try {
+                pointerTarget.setPointerCapture(toast.pointerId);
+            } catch (error) {
+                // Ignore capture errors on unsupported platforms.
+            }
+        }
     }
 
     function onToastPointerMove(toastId, event) {
         const toast = findToastById(toastId);
         if (!toast || !toast.dragging) {
+            return;
+        }
+
+        if (
+            toast.pointerId !== null
+            && typeof event?.pointerId === 'number'
+            && Number(event.pointerId) !== toast.pointerId
+        ) {
             return;
         }
 
@@ -121,25 +144,44 @@ export function useToasts() {
         toast.deltaX = Math.max(-220, Math.min(220, delta));
     }
 
-    function onToastPointerUp(toastId) {
+    function onToastPointerUp(toastId, event = null) {
         const toast = findToastById(toastId);
         if (!toast) {
             return;
         }
 
+        const pointerTarget = event?.currentTarget;
+        if (
+            pointerTarget
+            && typeof pointerTarget.releasePointerCapture === 'function'
+            && toast.pointerId !== null
+        ) {
+            try {
+                if (
+                    typeof pointerTarget.hasPointerCapture !== 'function'
+                    || pointerTarget.hasPointerCapture(toast.pointerId)
+                ) {
+                    pointerTarget.releasePointerCapture(toast.pointerId);
+                }
+            } catch (error) {
+                // Ignore capture release errors on unsupported platforms.
+            }
+        }
+
         const dismiss = Math.abs(toast.deltaX) >= TOAST_SWIPE_DISMISS_THRESHOLD;
+        toast.dragging = false;
+        toast.pointerId = null;
         if (dismiss) {
             removeToast(toast.id);
             return;
         }
 
-        toast.dragging = false;
         toast.deltaX = 0;
         scheduleToastAutoclose(toast, toast.duration);
     }
 
-    function onToastPointerCancel(toastId) {
-        onToastPointerUp(toastId);
+    function onToastPointerCancel(toastId, event = null) {
+        onToastPointerUp(toastId, event);
     }
 
     function resetMessages() {

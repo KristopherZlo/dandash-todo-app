@@ -46,11 +46,13 @@ class ListSyncService
     public function getState(User $user): array
     {
         $invitations = $this->getPendingInvitations($user);
+        $outgoingInvitations = $this->getOutgoingPendingInvitations($user);
         $listOptions = $this->getListOptions($user)->values();
 
         return [
             'pending_invitations_count' => $invitations->count(),
             'invitations' => $invitations->values()->all(),
+            'outgoing_pending_invitations' => $outgoingInvitations->values()->all(),
             'links' => $this->getLinks($user)->values()->all(),
             'list_options' => $listOptions->all(),
             'default_owner_id' => $this->resolveDefaultOwnerId($user, $listOptions),
@@ -165,6 +167,29 @@ class ListSyncService
                         'id' => $invitation->inviter_id,
                         'name' => $invitation->inviter?->name,
                         'email' => $invitation->inviter?->email,
+                    ],
+                ];
+            });
+    }
+
+    public function getOutgoingPendingInvitations(User $user): Collection
+    {
+        return ListInvitation::query()
+            ->with('invitee:id,name,email,tag')
+            ->where('inviter_id', $user->id)
+            ->where('status', ListInvitation::STATUS_PENDING)
+            ->latest('id')
+            ->get()
+            ->map(function (ListInvitation $invitation): array {
+                return [
+                    'id' => $invitation->id,
+                    'status' => $invitation->status,
+                    'created_at' => optional($invitation->created_at)->toISOString(),
+                    'invitee' => [
+                        'id' => $invitation->invitee_id,
+                        'name' => $invitation->invitee?->name,
+                        'email' => $invitation->invitee?->email,
+                        'tag' => $invitation->invitee?->tag,
                     ],
                 ];
             });

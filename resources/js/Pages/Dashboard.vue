@@ -189,6 +189,7 @@ const selectedOwnerId = ref(props.initialState.default_owner_id ?? localUser.id)
 
 const listOptions = ref(props.initialState.list_options ?? []);
 const invitations = ref(props.initialState.invitations ?? []);
+const outgoingInvitations = ref(props.initialState.outgoing_pending_invitations ?? []);
 const links = ref(props.initialState.links ?? []);
 const pendingInvitationsCount = ref(props.initialState.pending_invitations_count ?? 0);
 const moodCards = ref(Array.isArray(props.initialState.mood_cards) ? props.initialState.mood_cards : []);
@@ -1417,6 +1418,7 @@ function applyGamificationStateFromServer(payload, options = {}) {
 function normalizeSyncStatePayload(state) {
     const source = asPlainObject(state);
     const invitations = cloneEntries(source.invitations);
+    const outgoingPendingInvitations = cloneEntries(source.outgoing_pending_invitations);
     const links = cloneEntries(source.links);
     const listOptions = cloneEntries(source.list_options);
     const moodCardsSource = cloneEntries(source.mood_cards);
@@ -1427,6 +1429,7 @@ function normalizeSyncStatePayload(state) {
     return {
         pending_invitations_count: Math.max(0, Number(source.pending_invitations_count) || 0),
         invitations,
+        outgoing_pending_invitations: outgoingPendingInvitations,
         links,
         list_options: listOptions,
         mood_cards: normalizeMoodCards(moodCardsSource, links),
@@ -1439,6 +1442,7 @@ function buildCurrentSyncStatePayload() {
     return normalizeSyncStatePayload({
         pending_invitations_count: pendingInvitationsCount.value,
         invitations: invitations.value,
+        outgoing_pending_invitations: outgoingInvitations.value,
         links: links.value,
         list_options: listOptions.value,
         mood_cards: moodCards.value,
@@ -3020,6 +3024,18 @@ function isOperationBeingSynced(opId) {
     return syncInFlightOperationIds.has(String(opId ?? ''));
 }
 
+function isQueueOperationPending(opId) {
+    const normalizedOpId = String(opId ?? '');
+    if (normalizedOpId === '') {
+        return false;
+    }
+
+    return (
+        offlineQueue.value.some((operation) => String(operation?.op_id ?? '') === normalizedOpId)
+        || isOperationBeingSynced(normalizedOpId)
+    );
+}
+
 
 function getQueuedUpdateQuietRemainingMs() {
     if (queuedUpdateTouchedAt <= 0) {
@@ -3094,11 +3110,15 @@ function markQueuedUpdateTouched(payload) {
 }
 
 function enqueueOperation(operation) {
-    offlineQueue.value.push({
+    const nextOperation = {
         op_id: `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         ...operation,
-    });
+    };
+
+    offlineQueue.value.push(nextOperation);
     persistQueue();
+
+    return String(nextOperation.op_id);
 }
 
 function rewriteQueuedItemId(previousId, nextId) {
@@ -3435,7 +3455,7 @@ function queueSendInvitation(userId) {
 function queueInvitationResponse(action, invitationId) {
     const numericInvitationId = Number(invitationId);
     if (!Number.isFinite(numericInvitationId) || numericInvitationId <= 0) {
-        return;
+        return null;
     }
 
     const oppositeAction = action === 'accept_invitation'
@@ -3448,7 +3468,7 @@ function queueInvitationResponse(action, invitationId) {
     ));
     persistQueue();
 
-    enqueueOperation({
+    return enqueueOperation({
         action,
         payload: {
             invitation_id: numericInvitationId,
@@ -5317,6 +5337,7 @@ function applyState(state, options = {}) {
 
     pendingInvitationsCount.value = normalizedState.pending_invitations_count;
     invitations.value = normalizedState.invitations;
+    outgoingInvitations.value = normalizedState.outgoing_pending_invitations;
     links.value = normalizedState.links;
     listOptions.value = normalizedState.list_options;
     applyMoodCardsFromServer(normalizedState.mood_cards);
@@ -6170,27 +6191,67 @@ async function findUsers() {
 async function sendInvite(userId) {
     resetMessages();
     queueSendInvitation(userId);
-    syncOfflineQueue().catch(() => {});
+    await syncOfflineQueue();
+    await refreshState(false, false);
     showStatus('\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0435\u043d\u0438\u0435 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e.');
 }
 
 async function acceptInvitation(invitationId) {
     resetMessages();
-    invitations.value = invitations.value.filter((entry) => Number(entry?.id) !== Number(invitationId));
-    pendingInvitationsCount.value = invitations.value.length;
-    persistCurrentSyncStateCache();
-    queueInvitationResponse('accept_invitation', invitationId);
-    syncOfflineQueue().catch(() => {});
+    const numericInvitationId = Number(invitationId);
+    const queuedOpId = queueInvitationResponse('accept_invitation', invitationId);
+    await syncOfflineQueue();
+    await refreshState(false, true);
+    if (browserOffline.value) {
+        return;
+    }
+
+    if (isQueueOperationPending(queuedOpId)) {
+        return;
+    }
+
+    if (invitations.value.some((entry) => Number(entry?.id) === numericInvitationId)) {
+        showError({
+            response: {
+                status: 422,
+                data: {
+                    message: 'Не удалось принять приглашение. Попробуйте ещё раз.',
+                },
+            },
+        });
+        return;
+    }
     showStatus('\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0435\u043d\u0438\u0435 \u043f\u0440\u0438\u043d\u044f\u0442\u043e.');
 }
 
 async function declineInvitation(invitationId) {
     resetMessages();
-    invitations.value = invitations.value.filter((entry) => Number(entry?.id) !== Number(invitationId));
-    pendingInvitationsCount.value = invitations.value.length;
-    persistCurrentSyncStateCache();
-    queueInvitationResponse('decline_invitation', invitationId);
-    syncOfflineQueue().catch(() => {});
+    const numericInvitationId = Number(invitationId);
+    const queuedOpId = queueInvitationResponse('decline_invitation', invitationId);
+    await syncOfflineQueue();
+    await refreshState(false, false);
+    if (browserOffline.value) {
+        return;
+    }
+
+    if (isQueueOperationPending(queuedOpId)) {
+        return;
+    }
+
+    if (
+        invitations.value.some((entry) => Number(entry?.id) === numericInvitationId)
+        || outgoingInvitations.value.some((entry) => Number(entry?.id) === numericInvitationId)
+    ) {
+        showError({
+            response: {
+                status: 422,
+                data: {
+                    message: 'Не удалось обновить приглашение. Попробуйте ещё раз.',
+                },
+            },
+        });
+        return;
+    }
     showStatus('\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0435\u043d\u0438\u0435 \u043e\u0442\u043c\u0435\u043d\u0435\u043d\u043e.');
 }
 
@@ -7974,6 +8035,39 @@ onBeforeUnmount(() => {
                             >
                                 Отменить
                             </button>
+                        </div>
+                    </div>
+
+                    <div class="mt-3 rounded-2xl border border-[#403e41] bg-[#221f22] p-3">
+                        <div class="mb-2 flex items-center justify-between gap-2">
+                            <p class="text-xs font-semibold uppercase tracking-[0.14em] text-[#9f9a9d]">Отправленные (ожидают)</p>
+                            <span class="text-xs text-[#9f9a9d]">{{ outgoingInvitations.length }}</span>
+                        </div>
+
+                        <div v-if="outgoingInvitations.length === 0" class="text-xs text-[#9f9a9d]">
+                            Нет исходящих приглашений в ожидании.
+                        </div>
+
+                        <div v-else class="space-y-2">
+                            <div
+                                v-for="invitation in outgoingInvitations"
+                                :key="`outgoing-inv-${invitation.id}`"
+                                class="rounded-2xl border border-[#403e41] bg-[#2d2a2c] px-3 py-3"
+                            >
+                                <div class="mb-1 text-sm font-medium text-[#fcfcfa]">
+                                    {{ invitation.invitee?.name || 'Пользователь' }}
+                                </div>
+                                <div class="mb-2 text-xs text-[#9f9a9d]">
+                                    @{{ invitation.invitee?.tag || 'tag' }}
+                                </div>
+                                <button
+                                    type="button"
+                                    class="rounded-xl bg-[#ee5c81]/20 px-3 py-1.5 text-xs font-semibold text-[#ee5c81]"
+                                    @click="declineInvitation(invitation.id)"
+                                >
+                                    Отменить
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>

@@ -44,16 +44,22 @@ function toastClassByType(type) {
         <div
             v-for="toast in toasts"
             :key="`toast-${toast.id}`"
-            class="toast-card pointer-events-auto select-none rounded-2xl border px-3 py-2 text-sm shadow-xl backdrop-blur"
-            :class="toastClassByType(toast.type)"
-            :style="{ transform: `translateX(${toast.deltaX || 0}px)` }"
-            @pointerdown="handlePointerDown?.(toast.id, $event)"
-            @pointermove="handlePointerMove?.(toast.id, $event)"
-            @pointerup="handlePointerUp?.(toast.id)"
-            @pointercancel="handlePointerCancel?.(toast.id)"
-            @pointerleave="handlePointerUp?.(toast.id)"
+            class="toast-shell pointer-events-auto"
         >
-            <p class="truncate">{{ toast.message }}</p>
+            <div
+                class="toast-card select-none rounded-2xl border px-3 py-2 text-sm shadow-xl backdrop-blur"
+                :class="[
+                    toastClassByType(toast.type),
+                    toast.dragging ? 'toast-card-dragging' : '',
+                ]"
+                :style="{ transform: `translateX(${toast.deltaX || 0}px)` }"
+                @pointerdown="handlePointerDown?.(toast.id, $event)"
+                @pointermove="handlePointerMove?.(toast.id, $event)"
+                @pointerup="handlePointerUp?.(toast.id, $event)"
+                @pointercancel="handlePointerCancel?.(toast.id, $event)"
+            >
+                <p class="truncate">{{ toast.message }}</p>
+            </div>
         </div>
     </TransitionGroup>
 </template>
@@ -76,12 +82,19 @@ function toastClassByType(type) {
 
 .toast-card {
     touch-action: pan-y;
+    will-change: transform;
+    transition: transform 0.16s ease;
+}
+
+.toast-card-dragging {
+    transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
     .toast-enter-active,
     .toast-leave-active,
-    .toast-move {
+    .toast-move,
+    .toast-card {
         transition-duration: 0.01ms;
     }
 }
