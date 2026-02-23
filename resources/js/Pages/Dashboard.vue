@@ -1,6 +1,7 @@
 <script setup>
 import SwipeListItem from '@/Components/SwipeListItem.vue';
 import ToastStack from '@/Components/ToastStack.vue';
+import { useDashboardChrome } from '@/composables/useDashboardChrome';
 import { useToasts } from '@/composables/useToasts';
 import {
     buildProductEditableText,
@@ -60,130 +61,28 @@ const localUser = reactive({
 const appVersion = computed(() => String(page.props.meta?.app_version ?? 'dev'));
 const buildVersion = computed(() => String(page.props.meta?.build_version ?? 'dev'));
 
-const DASHBOARD_TAB_VALUES = ['products', 'todos', 'mood', 'profile'];
-const DASHBOARD_TAB_SET = new Set(DASHBOARD_TAB_VALUES);
-const ACTIVE_TAB_STORAGE_KEY = `dandash:active-tab:v1:user-${localUser.id}`;
-const THEME_MODE_VALUES = ['system', 'light', 'dark'];
-const THEME_MODE_SET = new Set(THEME_MODE_VALUES);
-const THEME_MODE_STORAGE_KEY = 'dandash:theme-mode:v1';
-const ADS_ENABLED_STORAGE_KEY = `dandash:ads-enabled:v1:user-${localUser.id}`;
 const TOUCH_DRAG_HOLD_DELAY_MS = 500;
-const AD_MODAL_SHOW_CHANCE = 0.2;
-const AD_BANNER_PATHS = (Array.isArray(adBannersConfig?.banners) ? adBannersConfig.banners : [])
-    .map((entry) => (typeof entry === 'string' ? entry : entry?.path))
-    .map((entry) => String(entry ?? '').trim())
-    .filter((entry) => entry !== '');
+const {
+    activeTab,
+    themeMode,
+    adsEnabled,
+    resolvedTheme,
+    adModalOpen,
+    activeAdBannerPath,
+    persistActiveTabToStorage,
+    applyThemeMode,
+    setThemeMode,
+    closeAdModal,
+    maybeOpenRandomAdModal,
+    toggleAdsEnabled,
+    mountDashboardChrome,
+    unmountDashboardChrome,
+} = useDashboardChrome({
+    userId: localUser.id,
+    adBannersConfig,
+    resolvePublicAssetUrl,
+});
 
-function normalizeDashboardTab(value) {
-    const normalized = String(value ?? '').trim().toLowerCase();
-    return DASHBOARD_TAB_SET.has(normalized) ? normalized : 'products';
-}
-
-function readPersistedDashboardTab() {
-    if (typeof window === 'undefined') {
-        return 'products';
-    }
-
-    try {
-        const saved = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
-        return normalizeDashboardTab(saved);
-    } catch (error) {
-        return 'products';
-    }
-}
-
-function normalizeThemeMode(value) {
-    const normalized = String(value ?? '').trim().toLowerCase();
-    return THEME_MODE_SET.has(normalized) ? normalized : 'system';
-}
-
-function readPersistedThemeMode() {
-    if (typeof window === 'undefined') {
-        return 'system';
-    }
-
-    try {
-        const saved = window.localStorage.getItem(THEME_MODE_STORAGE_KEY);
-        return normalizeThemeMode(saved);
-    } catch (error) {
-        return 'system';
-    }
-}
-
-function readPersistedAdsEnabled() {
-    if (typeof window === 'undefined') {
-        return true;
-    }
-
-    try {
-        const saved = window.localStorage.getItem(ADS_ENABLED_STORAGE_KEY);
-        if (saved === null) {
-            return true;
-        }
-
-        return saved !== '0' && saved !== 'false';
-    } catch (error) {
-        return true;
-    }
-}
-
-function resolveThemeByMode(mode) {
-    const normalized = normalizeThemeMode(mode);
-    if (normalized === 'light' || normalized === 'dark') {
-        return normalized;
-    }
-
-    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    }
-
-    return 'dark';
-}
-
-function pickRandomAdBannerPath() {
-    if (AD_BANNER_PATHS.length === 0) {
-        return '';
-    }
-
-    const randomIndex = Math.floor(Math.random() * AD_BANNER_PATHS.length);
-    return AD_BANNER_PATHS[randomIndex] ?? '';
-}
-
-function resolveAdBannerPath(path) {
-    const rawPath = String(path ?? '').trim();
-    if (rawPath === '') {
-        return '';
-    }
-
-    if (/^https?:\/\//i.test(rawPath) || rawPath.startsWith('data:')) {
-        return rawPath;
-    }
-
-    return resolvePublicAssetUrl(rawPath.replace(/^\/+/, ''));
-}
-
-function maybeOpenRandomAdModal() {
-    if (!adsEnabled.value || AD_BANNER_PATHS.length === 0 || Math.random() >= AD_MODAL_SHOW_CHANCE) {
-        return;
-    }
-
-    const nextBannerPath = resolveAdBannerPath(pickRandomAdBannerPath());
-    if (!nextBannerPath) {
-        return;
-    }
-
-    activeAdBannerPath.value = nextBannerPath;
-    adModalOpen.value = true;
-}
-
-function closeAdModal() {
-    adModalOpen.value = false;
-}
-
-const activeTab = ref(readPersistedDashboardTab());
-const themeMode = ref(readPersistedThemeMode());
-const adsEnabled = ref(readPersistedAdsEnabled());
-const resolvedTheme = ref(resolveThemeByMode(themeMode.value));
 const listDropdownOpen = ref(false);
 const selectedOwnerId = ref(props.initialState.default_owner_id ?? localUser.id);
 
@@ -215,8 +114,6 @@ const editingDueAt = ref('');
 const shareModalOpen = ref(false);
 const inviteModalOpen = ref(false);
 const inviteModalTab = ref('invitations');
-const adModalOpen = ref(false);
-const activeAdBannerPath = ref('');
 
 function openCollabHub(tab = 'share') {
     const normalizedTab = String(tab ?? '').trim();
@@ -230,24 +127,6 @@ function openCollabHub(tab = 'share') {
 function closeCollabHub() {
     inviteModalOpen.value = false;
     shareModalOpen.value = false;
-}
-
-function toggleAdsEnabled() {
-    adsEnabled.value = !adsEnabled.value;
-
-    if (!adsEnabled.value) {
-        closeAdModal();
-    }
-
-    if (typeof window === 'undefined') {
-        return;
-    }
-
-    try {
-        window.localStorage.setItem(ADS_ENABLED_STORAGE_KEY, adsEnabled.value ? '1' : '0');
-    } catch (error) {
-        // Ignore storage write errors (private mode / quota exceeded).
-    }
 }
 
 const searchQuery = ref('');
@@ -271,9 +150,12 @@ const deleteFeedbackBursts = ref([]);
 const xpStars = ref([]);
 const progressBarRef = ref(null);
 const megaCardRef = ref(null);
+const productivityCardRef = ref(null);
+const productivityDustLayerRef = ref(null);
 const xpProgress = ref(0);
 const xpVisualProgress = ref(0);
 const productivityScore = ref(0);
+const productivityDustBurstVectors = ref({});
 const xpProgressInstant = ref(false);
 const xpProgressFillDurationMs = ref(240);
 const xpLevelUpBackdropVisible = ref(false);
@@ -299,6 +181,9 @@ const productSuggestionStatsLoading = ref(false);
 const resettingSuggestionKeys = ref([]);
 const recentlyResetSuggestionKeys = ref([]);
 const suggestionResetSuccessTimers = new Map();
+const suggestionResetRemovalTimers = new Map();
+const actionButtonSuccessState = ref({});
+const actionButtonSuccessTimers = new Map();
 
 const {
     toasts,
@@ -360,49 +245,6 @@ const XP_COLOR_SEED_STORAGE_KEY = `dandash:xp-color-seed:${CACHE_VERSION}:user-$
 const GAMIFICATION_UPDATED_AT_STORAGE_KEY = `dandash:gamification-updated-at:${CACHE_VERSION}:user-${localUser.id}`;
 const MOOD_UPDATED_AT_STORAGE_KEY = `dandash:mood-updated-at:${CACHE_VERSION}:user-${localUser.id}`;
 
-function persistActiveTabToStorage(tab) {
-    if (typeof window === 'undefined') {
-        return;
-    }
-
-    try {
-        window.localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, normalizeDashboardTab(tab));
-    } catch (error) {
-        // Ignore storage write errors (private mode / quota exceeded).
-    }
-}
-
-function applyThemeMode(mode, { persist = true } = {}) {
-    const normalizedMode = normalizeThemeMode(mode);
-    const resolved = resolveThemeByMode(normalizedMode);
-    resolvedTheme.value = resolved;
-
-    if (typeof document !== 'undefined') {
-        const root = document.documentElement;
-        root.dataset.theme = resolved;
-        root.style.colorScheme = resolved;
-
-        if (document.body) {
-            document.body.dataset.theme = resolved;
-            document.body.style.colorScheme = resolved;
-        }
-    }
-
-    if (!persist || typeof window === 'undefined') {
-        return;
-    }
-
-    try {
-        window.localStorage.setItem(THEME_MODE_STORAGE_KEY, normalizedMode);
-    } catch (error) {
-        // Ignore storage write errors (private mode / quota exceeded).
-    }
-}
-
-function setThemeMode(nextMode) {
-    themeMode.value = normalizeThemeMode(nextMode);
-}
-
 let queueSyncRetryTimer = null;
 let moodRelativeTimeTimer = null;
 let listChannelName = null;
@@ -410,11 +252,10 @@ let userChannelName = null;
 let swipeUndoTimer = null;
 let lastPersistedOwnerId = Number(props.initialState.default_owner_id ?? localUser.id);
 let queueSyncInProgress = false;
+let queueSyncPromise = null;
 let nextTempId = -1;
 let handleOnlineEvent = null;
 let handleOfflineEvent = null;
-let systemThemeMediaQuery = null;
-let handleSystemThemeChange = null;
 let nextDeleteFeedbackBurstId = 1;
 let nextXpStarId = 1;
 let nextXpGainSourceId = 1;
@@ -452,6 +293,108 @@ const blockedSuggestionRefreshTypes = new Set();
 const xpGainSources = new Map();
 const xpGainSourceCleanupTimeouts = new Map();
 let megaCardImpactAnimation = null;
+let suppressNextSelectedOwnerPersist = false;
+const sharingActionLocks = new Set();
+const sharingActionLockKeys = ref([]);
+
+function setSharingActionLockVisualState(key, locked) {
+    const normalizedKey = String(key ?? '').trim();
+    if (normalizedKey === '') {
+        return;
+    }
+
+    if (locked) {
+        if (!sharingActionLockKeys.value.includes(normalizedKey)) {
+            sharingActionLockKeys.value = [...sharingActionLockKeys.value, normalizedKey];
+        }
+        return;
+    }
+
+    sharingActionLockKeys.value = sharingActionLockKeys.value.filter((entry) => entry !== normalizedKey);
+}
+
+function acquireSharingActionLock(key) {
+    const normalizedKey = String(key ?? '').trim();
+    if (normalizedKey === '') {
+        return false;
+    }
+
+    if (sharingActionLocks.has(normalizedKey)) {
+        return false;
+    }
+
+    sharingActionLocks.add(normalizedKey);
+    setSharingActionLockVisualState(normalizedKey, true);
+    return true;
+}
+
+function releaseSharingActionLock(key) {
+    const normalizedKey = String(key ?? '').trim();
+    sharingActionLocks.delete(normalizedKey);
+    setSharingActionLockVisualState(normalizedKey, false);
+}
+
+function isSharingActionLocked(key) {
+    return sharingActionLockKeys.value.includes(String(key ?? '').trim());
+}
+
+function isActionButtonSuccess(key) {
+    return Boolean(actionButtonSuccessState.value[String(key ?? '').trim()]);
+}
+
+function markActionButtonSuccess(key, resetAfterMs = 1800) {
+    const normalizedKey = String(key ?? '').trim();
+    if (normalizedKey === '') {
+        return;
+    }
+
+    actionButtonSuccessState.value = {
+        ...actionButtonSuccessState.value,
+        [normalizedKey]: true,
+    };
+
+    const existingTimer = actionButtonSuccessTimers.get(normalizedKey);
+    if (existingTimer) {
+        clearTimeout(existingTimer);
+    }
+
+    const timerId = window.setTimeout(() => {
+        actionButtonSuccessTimers.delete(normalizedKey);
+        if (!actionButtonSuccessState.value[normalizedKey]) {
+            return;
+        }
+
+        const nextState = { ...actionButtonSuccessState.value };
+        delete nextState[normalizedKey];
+        actionButtonSuccessState.value = nextState;
+    }, Math.max(600, Number(resetAfterMs) || 1800));
+
+    actionButtonSuccessTimers.set(normalizedKey, timerId);
+}
+
+function inviteSendActionLockKey(userId) {
+    return `send-invite:${Number(userId) || 0}`;
+}
+
+function inviteSendSuccessKey(userId) {
+    return `invite-sent:${Number(userId) || 0}`;
+}
+
+function isInviteSentConfirmed(userId) {
+    return isActionButtonSuccess(inviteSendSuccessKey(userId));
+}
+
+function setMineActionLockKey(linkId) {
+    return `set-mine:${Number(linkId) || 0}`;
+}
+
+function setMineSuccessKey(linkId) {
+    return `set-mine-done:${Number(linkId) || 0}`;
+}
+
+function isSetMineConfirmed(linkId) {
+    return isActionButtonSuccess(setMineSuccessKey(linkId));
+}
 
 function normalizeLinkId(value) {
     const parsed = Number(value);
@@ -500,12 +443,216 @@ function buildCompletedStats(items) {
     };
 }
 
+function buildProductivityDustParticles(scoreValue, seedSalt = 1) {
+    const score = Math.max(0, Math.floor(Number(scoreValue) || 0));
+    const particleCount = Math.min(PRODUCTIVITY_DUST_MAX_PARTICLES, Math.floor(score / 10));
+    if (particleCount <= 0) {
+        return [];
+    }
+
+    const random = createSeededRandom(
+        (particleCount * 2654435761) ^ ((Number(seedSalt) >>> 0) || 1) ^ 0x9E3779B9,
+    );
+    const opacityRange = PRODUCTIVITY_DUST_MAX_OPACITY - PRODUCTIVITY_DUST_MIN_OPACITY;
+    const particles = [];
+
+    for (let index = 0; index < particleCount; index += 1) {
+        const leftPercent = 10 + (random() * 80);
+        const topPercent = 16 + (random() * 68);
+        const driftDistanceX = 10 + (random() * 18);
+        const driftDistanceY = 8 + (random() * 16);
+        const dx = (random() > 0.5 ? 1 : -1) * driftDistanceX;
+        const dy = (random() > 0.5 ? 1 : -1) * driftDistanceY;
+        const dxStart = dx * -0.4;
+        const dyStart = dy * -0.4;
+        const dxMid = dx * 0.28;
+        const dyMid = dy * 0.28;
+        const sizePx = 1.4 + (random() * 2.8);
+        const opacity = PRODUCTIVITY_DUST_MIN_OPACITY + (random() * opacityRange);
+        const durationMs = 6500 + Math.round(random() * 9000);
+        const twinkleDurationMs = 2600 + Math.round(random() * 4200);
+        const delayMs = -Math.round(random() * durationMs);
+        const twinkleDelayMs = Math.round(delayMs / 2);
+        particles.push({
+            id: `prod-dust-${particleCount}-${index}`,
+            leftPercent,
+            topPercent,
+            sizePx,
+            driftDx: dx,
+            driftDy: dy,
+            style: {
+                left: `${leftPercent.toFixed(2)}%`,
+                top: `${topPercent.toFixed(2)}%`,
+                '--dust-size': `${sizePx.toFixed(2)}px`,
+                '--dust-opacity': opacity.toFixed(3),
+                '--dust-dx': `${dx.toFixed(2)}px`,
+                '--dust-dy': `${dy.toFixed(2)}px`,
+                '--dust-dx-start': `${dxStart.toFixed(2)}px`,
+                '--dust-dy-start': `${dyStart.toFixed(2)}px`,
+                '--dust-dx-mid': `${dxMid.toFixed(2)}px`,
+                '--dust-dy-mid': `${dyMid.toFixed(2)}px`,
+                '--dust-duration': `${durationMs}ms`,
+                '--dust-delay': `${delayMs}ms`,
+                '--dust-twinkle-duration': `${twinkleDurationMs}ms`,
+                '--dust-twinkle-delay': `${twinkleDelayMs}ms`,
+            },
+        });
+    }
+
+    return particles;
+}
+
+function buildProductivityDustBurstVectors(particles, originX, originY, width, height, existingOffsets = {}) {
+    const safeParticles = Array.isArray(particles) ? particles : [];
+    const result = {};
+    const safeWidth = Math.max(1, Number(width) || 1);
+    const safeHeight = Math.max(1, Number(height) || 1);
+    const clampedOriginX = Math.max(0, Math.min(safeWidth, Number(originX) || 0));
+    const clampedOriginY = Math.max(0, Math.min(safeHeight, Number(originY) || 0));
+    const maxDistance = Math.max(1, Math.hypot(safeWidth, safeHeight));
+
+    for (const particle of safeParticles) {
+        const particleId = String(particle?.id ?? '').trim();
+        if (particleId === '') {
+            continue;
+        }
+
+        const currentOffsetX = Number(existingOffsets?.[particleId]?.dx ?? 0);
+        const currentOffsetY = Number(existingOffsets?.[particleId]?.dy ?? 0);
+        const particleSize = Math.max(1, Number(particle?.sizePx) || 2);
+        const edgeMargin = Math.max(4, particleSize * 0.9);
+        const driftDx = Number(particle?.driftDx) || 0;
+        const driftDy = Number(particle?.driftDy) || 0;
+        const driftXPoints = [driftDx * -0.4, driftDx * 0.28, driftDx];
+        const driftYPoints = [driftDy * -0.4, driftDy * 0.28, driftDy];
+        const minDriftX = Math.min(...driftXPoints);
+        const maxDriftX = Math.max(...driftXPoints);
+        const minDriftY = Math.min(...driftYPoints);
+        const maxDriftY = Math.max(...driftYPoints);
+        const minAllowedX = edgeMargin - minDriftX;
+        const maxAllowedX = Math.max(minAllowedX, (safeWidth - particleSize - edgeMargin) - maxDriftX);
+        const minAllowedY = edgeMargin - minDriftY;
+        const maxAllowedY = Math.max(minAllowedY, (safeHeight - particleSize - edgeMargin) - maxDriftY);
+        const rawParticleX = ((safeWidth * (Number(particle?.leftPercent) || 0)) / 100) + currentOffsetX;
+        const rawParticleY = ((safeHeight * (Number(particle?.topPercent) || 0)) / 100) + currentOffsetY;
+        const particleX = Math.min(maxAllowedX, Math.max(minAllowedX, rawParticleX));
+        const particleY = Math.min(maxAllowedY, Math.max(minAllowedY, rawParticleY));
+        const clampedOffsetX = currentOffsetX + (particleX - rawParticleX);
+        const clampedOffsetY = currentOffsetY + (particleY - rawParticleY);
+        let vectorX = particleX - clampedOriginX;
+        let vectorY = particleY - clampedOriginY;
+        let distance = Math.hypot(vectorX, vectorY);
+
+        if (distance < 0.001) {
+            const angle = Math.random() * Math.PI * 2;
+            vectorX = Math.cos(angle);
+            vectorY = Math.sin(angle);
+            distance = 1;
+        }
+
+        const unitX = vectorX / distance;
+        const unitY = vectorY / distance;
+        let nextUnitX = unitX;
+        let nextUnitY = unitY;
+        const edgeTurnThreshold = 8 + (particleSize * 1.2);
+
+        if (particleX <= (minAllowedX + edgeTurnThreshold) && nextUnitX < 0) {
+            nextUnitX = Math.abs(nextUnitX);
+        } else if (particleX >= (maxAllowedX - edgeTurnThreshold) && nextUnitX > 0) {
+            nextUnitX = -Math.abs(nextUnitX);
+        }
+
+        if (particleY <= (minAllowedY + edgeTurnThreshold) && nextUnitY < 0) {
+            nextUnitY = Math.abs(nextUnitY);
+        } else if (particleY >= (maxAllowedY - edgeTurnThreshold) && nextUnitY > 0) {
+            nextUnitY = -Math.abs(nextUnitY);
+        }
+
+        const reflectedMagnitude = Math.hypot(nextUnitX, nextUnitY);
+        const safeUnitX = reflectedMagnitude > 0 ? (nextUnitX / reflectedMagnitude) : unitX;
+        const safeUnitY = reflectedMagnitude > 0 ? (nextUnitY / reflectedMagnitude) : unitY;
+        const distanceRatio = Math.min(1, distance / maxDistance);
+        const desiredDistance = 14 + ((1 - distanceRatio) * 20) + (Math.random() * 8);
+
+        let maxTravel = Number.POSITIVE_INFINITY;
+        if (safeUnitX > 0) {
+            maxTravel = Math.min(maxTravel, (maxAllowedX - particleX) / safeUnitX);
+        } else if (safeUnitX < 0) {
+            maxTravel = Math.min(maxTravel, (minAllowedX - particleX) / safeUnitX);
+        }
+
+        if (safeUnitY > 0) {
+            maxTravel = Math.min(maxTravel, (maxAllowedY - particleY) / safeUnitY);
+        } else if (safeUnitY < 0) {
+            maxTravel = Math.min(maxTravel, (minAllowedY - particleY) / safeUnitY);
+        }
+
+        const safeMaxTravel = Number.isFinite(maxTravel) ? Math.max(0, maxTravel) : 0;
+        const travel = Math.min(desiredDistance, safeMaxTravel * 0.9);
+        const burstDx = safeUnitX * travel;
+        const burstDy = safeUnitY * travel;
+        result[particleId] = {
+            dx: clampedOffsetX + burstDx,
+            dy: clampedOffsetY + burstDy,
+        };
+    }
+
+    return result;
+}
+
+function triggerProductivityDustBurst(event) {
+    const cardElement = productivityCardRef.value;
+    const dustLayerElement = productivityDustLayerRef.value;
+    if (!cardElement || !dustLayerElement || productivityDustBaseParticles.value.length === 0) {
+        return;
+    }
+
+    const layerRect = dustLayerElement.getBoundingClientRect();
+    const innerWidth = Math.max(1, layerRect.width);
+    const innerHeight = Math.max(1, layerRect.height);
+    const clientX = Number(event?.clientX);
+    const clientY = Number(event?.clientY);
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+        return;
+    }
+
+    const originX = Math.max(0, Math.min(innerWidth, clientX - layerRect.left));
+    const originY = Math.max(0, Math.min(innerHeight, clientY - layerRect.top));
+
+    productivityDustBurstVectors.value = buildProductivityDustBurstVectors(
+        productivityDustBaseParticles.value,
+        originX,
+        originY,
+        innerWidth,
+        innerHeight,
+        productivityDustBurstVectors.value,
+    );
+}
+
 const productPurchasedStats = computed(() => buildCompletedStats(productItems.value));
 const todoCompletedStats = computed(() => buildCompletedStats(todoItems.value));
 const activeListStats = computed(() => (
     activeTab.value === 'products'
         ? productPurchasedStats.value
         : todoCompletedStats.value
+));
+const isLightTheme = computed(() => resolvedTheme.value === 'light');
+const productivityDustBaseParticles = computed(() => (
+    buildProductivityDustParticles(productivityScore.value, xpColorSeed.value)
+));
+const productivityDustParticles = computed(() => (
+    productivityDustBaseParticles.value.map((particle) => {
+        const offset = productivityDustBurstVectors.value[String(particle?.id ?? '')];
+
+        return {
+            ...particle,
+            style: {
+                ...particle.style,
+                left: `calc(${Number(particle?.leftPercent ?? 0).toFixed(2)}% + ${Number(offset?.dx ?? 0).toFixed(2)}px)`,
+                top: `calc(${Number(particle?.topPercent ?? 0).toFixed(2)}% + ${Number(offset?.dy ?? 0).toFixed(2)}px)`,
+            },
+        };
+    })
 ));
 const resolvedThemeLabel = computed(() => (resolvedTheme.value === 'light' ? 'Светлая' : 'Тёмная'));
 const activeTabTitle = computed(() => {
@@ -676,6 +823,10 @@ const SOUND_SKIP_MUTE_MS = 3000;
 const ITEM_DELETE_TOMBSTONE_TTL_MS = 180000;
 const ITEM_DELETE_TOMBSTONE_SERVER_SKEW_MS = 1500;
 const LOCAL_LIST_MUTATION_HOLD_MS = 8000;
+const PRODUCTIVITY_DUST_MAX_PARTICLES = 50;
+const PRODUCTIVITY_DUST_MIN_OPACITY = 0.1;
+const PRODUCTIVITY_DUST_MAX_OPACITY = 0.75;
+const PRODUCTIVITY_DUST_LAYER_INSET_PX = 10;
 const DASHBOARD_SOUND_PATHS = Object.freeze({
     // Put your custom files into: public/sounds/dashboard/
     white_card_appear: 'sounds/dashboard/white-card-appear.mp3',
@@ -3431,7 +3582,7 @@ function queueSuggestionReset(ownerId, type, suggestionKey, linkId = undefined) 
 function queueSendInvitation(userId) {
     const numericUserId = Number(userId);
     if (!Number.isFinite(numericUserId) || numericUserId <= 0) {
-        return;
+        return '';
     }
 
     const existingIndex = findQueueIndexFromEnd(
@@ -3441,10 +3592,10 @@ function queueSendInvitation(userId) {
     );
 
     if (existingIndex !== -1) {
-        return;
+        return String(offlineQueue.value[existingIndex]?.op_id ?? '');
     }
 
-    enqueueOperation({
+    return enqueueOperation({
         action: 'send_invitation',
         payload: {
             user_id: numericUserId,
@@ -3479,7 +3630,7 @@ function queueInvitationResponse(action, invitationId) {
 function queueSetMine(linkId) {
     const numericLinkId = Number(linkId);
     if (!Number.isFinite(numericLinkId) || numericLinkId <= 0) {
-        return;
+        return '';
     }
 
     offlineQueue.value = offlineQueue.value.filter((operation) => !(
@@ -3488,7 +3639,7 @@ function queueSetMine(linkId) {
     ));
     persistQueue();
 
-    enqueueOperation({
+    return enqueueOperation({
         action: 'set_mine',
         payload: {
             link_id: numericLinkId,
@@ -3499,7 +3650,7 @@ function queueSetMine(linkId) {
 function queueBreakLink(linkId) {
     const numericLinkId = Number(linkId);
     if (!Number.isFinite(numericLinkId) || numericLinkId <= 0) {
-        return;
+        return '';
     }
 
     offlineQueue.value = offlineQueue.value.filter((operation) => !(
@@ -3508,7 +3659,7 @@ function queueBreakLink(linkId) {
     ));
     persistQueue();
 
-    enqueueOperation({
+    return enqueueOperation({
         action: 'break_link',
         payload: {
             link_id: numericLinkId,
@@ -4573,8 +4724,28 @@ async function removeCompletedAfterSwipe(event = null) {
         return;
     }
 
+    const latestItemsByViewKey = new Map(
+        readListFromCache(ownerId, type, linkId)
+            .map((entry) => [itemViewKey(entry), entry])
+            .filter(([key]) => String(key ?? '') !== ''),
+    );
+    const reconciledCompletedEntries = completedEntries.map((entry) => {
+        const snapshotItem = entry?.item ?? null;
+        const latestItem = latestItemsByViewKey.get(itemViewKey(snapshotItem));
+        if (!latestItem) {
+            return entry;
+        }
+
+        return {
+            ...entry,
+            item: {
+                ...latestItem,
+            },
+        };
+    });
+
     const removedItemIds = new Set(
-        completedEntries
+        reconciledCompletedEntries
             .map((entry) => Number(entry.item?.id))
             .filter((itemId) => Number.isFinite(itemId)),
     );
@@ -4600,7 +4771,7 @@ async function removeCompletedAfterSwipe(event = null) {
             item: { ...activeState.item },
             previousIndex: Number(activeState.previousIndex ?? 0),
         },
-        removed: completedEntries,
+        removed: reconciledCompletedEntries,
         xpGainSourceId,
         xpGainTotal,
     });
@@ -4636,6 +4807,31 @@ function shouldDropOperationOnClientError(operation, statusCode) {
     ].includes(action);
 }
 
+function applyDroppedOperationOnClientError(operation, statusCode) {
+    const action = String(operation?.action ?? '');
+    if (action !== 'delete' || Number(statusCode) !== 404) {
+        return;
+    }
+
+    const itemId = Number(operation?.item_id);
+    if (!Number.isFinite(itemId) || itemId <= 0) {
+        return;
+    }
+
+    markItemsAsDeleted(
+        operation.owner_id,
+        operation.type,
+        [itemId],
+        operation.link_id,
+    );
+    applyLocalUpdate(
+        operation.owner_id,
+        operation.type,
+        (items) => items.filter((entry) => Number(entry.id) !== itemId),
+        operation.link_id,
+    );
+}
+
 function isTempItemMutationOperation(operation) {
     const action = String(operation?.action ?? '');
     if (action !== 'update' && action !== 'delete') {
@@ -4661,9 +4857,14 @@ function hasQueuedCreateForOperation(operation) {
     ));
 }
 
+function hasQueuedDeleteOperation() {
+    return offlineQueue.value.some((operation) => String(operation?.action ?? '') === 'delete');
+}
+
 function collectSyncChunkOperations() {
     const chunkOperations = [];
     const staleTempMutationOpIds = [];
+    const shouldPrioritizeDeleteFlush = hasQueuedDeleteOperation();
 
     for (const operation of offlineQueue.value) {
         if (chunkOperations.length >= SYNC_CHUNK_MAX_OPERATIONS) {
@@ -4679,6 +4880,8 @@ function collectSyncChunkOperations() {
         }
 
         if (
+            !shouldPrioritizeDeleteFlush
+            && 
             operation.action === 'update'
             && shouldCoalesceUpdatePayload(operation.payload)
         ) {
@@ -4762,6 +4965,37 @@ function applySuccessfulSyncedOperation(operation, resultData) {
                 operation.link_id,
             ),
         );
+        const hasQueuedFollowupIntent = hasPendingItemOperation(
+            operation.owner_id,
+            operation.type,
+            previousTempId,
+            operation.link_id,
+            operation.op_id,
+        ) || hasPendingItemOperation(
+            operation.owner_id,
+            operation.type,
+            syncedItem.id,
+            operation.link_id,
+            operation.op_id,
+        );
+        const hasSwipeFollowupIntent = isSwipeStateForItem(
+            swipeUndoState.value,
+            operation.owner_id,
+            operation.type,
+            previousTempId,
+            operation.link_id,
+        ) || isSwipeStateForItem(
+            swipeUndoState.value,
+            operation.owner_id,
+            operation.type,
+            syncedItem.id,
+            operation.link_id,
+        );
+        const shouldPreserveLocalPendingState = (
+            !hasQueuedDeleteIntent
+            && !hasSwipeDeleteIntent
+            && (hasQueuedFollowupIntent || hasSwipeFollowupIntent)
+        );
 
         if (hasQueuedDeleteIntent || hasSwipeDeleteIntent) {
             markItemsAsDeleted(
@@ -4781,22 +5015,42 @@ function applySuccessfulSyncedOperation(operation, resultData) {
                 let authoritativeIndex = -1;
 
                 if (tempIndex !== -1) {
-                    const preservedLocalId = String(next[tempIndex]?.local_id ?? '').trim();
-                    next[tempIndex] = {
-                        ...syncedItem,
-                        local_id: preservedLocalId || syncedItem.local_id,
-                    };
+                    const localTempItem = next[tempIndex] ?? {};
+                    const preservedLocalId = String(localTempItem?.local_id ?? '').trim();
+                    next[tempIndex] = shouldPreserveLocalPendingState
+                        ? {
+                            ...syncedItem,
+                            ...localTempItem,
+                            id: syncedId,
+                            owner_id: Number(syncedItem.owner_id ?? operation.owner_id),
+                            list_link_id: normalizeLinkId(syncedItem.list_link_id ?? operation.link_id),
+                            local_id: preservedLocalId || syncedItem.local_id,
+                        }
+                        : {
+                            ...syncedItem,
+                            local_id: preservedLocalId || syncedItem.local_id,
+                        };
                     authoritativeIndex = tempIndex;
                 } else {
                     const syncedIndex = next.findIndex((entry) => Number(entry.id) === syncedId);
 
                     if (syncedIndex !== -1) {
-                        const preservedLocalId = String(next[syncedIndex]?.local_id ?? '').trim();
-                        next[syncedIndex] = {
-                            ...next[syncedIndex],
-                            ...syncedItem,
-                            local_id: preservedLocalId || syncedItem.local_id,
-                        };
+                        const localSyncedItem = next[syncedIndex] ?? {};
+                        const preservedLocalId = String(localSyncedItem?.local_id ?? '').trim();
+                        next[syncedIndex] = shouldPreserveLocalPendingState
+                            ? {
+                                ...syncedItem,
+                                ...localSyncedItem,
+                                id: syncedId,
+                                owner_id: Number(syncedItem.owner_id ?? operation.owner_id),
+                                list_link_id: normalizeLinkId(syncedItem.list_link_id ?? operation.link_id),
+                                local_id: preservedLocalId || syncedItem.local_id,
+                            }
+                            : {
+                                ...localSyncedItem,
+                                ...syncedItem,
+                                local_id: preservedLocalId || syncedItem.local_id,
+                            };
                         authoritativeIndex = syncedIndex;
                     } else {
                         next.unshift({ ...syncedItem });
@@ -4875,6 +5129,12 @@ function applySuccessfulSyncedOperation(operation, resultData) {
                 [operation.item_id],
                 operation.link_id,
             );
+            applyLocalUpdate(
+                operation.owner_id,
+                operation.type,
+                (items) => items.filter((entry) => Number(entry.id) !== Number(operation.item_id)),
+                operation.link_id,
+            );
         }
         return;
     }
@@ -4926,16 +5186,20 @@ function applySuccessfulSyncedOperation(operation, resultData) {
 }
 
 async function syncOfflineQueue() {
+    if (queueSyncInProgress) {
+        if (queueSyncPromise) {
+            await queueSyncPromise;
+        }
+        return;
+    }
+
     if (offlineQueue.value.length === 0) {
         queueRetryAt = 0;
         clearQueueSyncRetryTimer();
         return;
     }
 
-    if (
-        queueSyncInProgress
-        || browserOffline.value
-    ) {
+    if (browserOffline.value) {
         return;
     }
 
@@ -4947,121 +5211,127 @@ async function syncOfflineQueue() {
 
     clearQueueSyncRetryTimer();
     queueSyncInProgress = true;
+    queueSyncPromise = (async () => {
+        try {
+            while (
+                offlineQueue.value.length > 0
+                && !browserOffline.value
+                && Date.now() >= queueRetryAt
+            ) {
+                const chunkOperations = collectSyncChunkOperations();
+                if (chunkOperations.length === 0) {
+                    break;
+                }
 
-    try {
-        while (
-            offlineQueue.value.length > 0
-            && !browserOffline.value
-            && Date.now() >= queueRetryAt
-        ) {
-            const chunkOperations = collectSyncChunkOperations();
-            if (chunkOperations.length === 0) {
-                break;
-            }
+                syncInFlightOperationIds = new Set(chunkOperations.map((operation) => String(operation.op_id)));
 
-            syncInFlightOperationIds = new Set(chunkOperations.map((operation) => String(operation.op_id)));
+                try {
+                    const response = await requestApi(() => window.axios.post('api/sync/chunk', {
+                        operations: buildSyncChunkPayload(chunkOperations),
+                    }));
+                    const chunkResults = Array.isArray(response.data?.results) ? response.data.results : [];
+                    const chunkResultByOpId = new Map(
+                        chunkResults.map((result) => [String(result?.op_id ?? ''), result]),
+                    );
 
-            try {
-                const response = await requestApi(() => window.axios.post('api/sync/chunk', {
-                    operations: buildSyncChunkPayload(chunkOperations),
-                }));
-                const chunkResults = Array.isArray(response.data?.results) ? response.data.results : [];
-                const chunkResultByOpId = new Map(
-                    chunkResults.map((result) => [String(result?.op_id ?? ''), result]),
-                );
+                    let shouldStopSync = false;
 
-                let shouldStopSync = false;
+                    for (const operation of chunkOperations) {
+                        const opId = String(operation?.op_id ?? '');
+                        const result = chunkResultByOpId.get(opId);
 
-                for (const operation of chunkOperations) {
-                    const opId = String(operation?.op_id ?? '');
-                    const result = chunkResultByOpId.get(opId);
+                        if (!result) {
+                            queueRetryAt = Date.now() + QUEUE_RETRY_DELAY_MS;
+                            scheduleQueueSyncRetry(queueRetryAt - Date.now());
+                            shouldStopSync = true;
+                            break;
+                        }
 
-                    if (!result) {
+                        if (String(result?.status ?? '') === 'ok') {
+                            applySuccessfulSyncedOperation(operation, result?.data ?? {});
+                            dropQueueOperation(opId);
+                            queueRetryAt = 0;
+                            clearQueueSyncRetryTimer();
+                            continue;
+                        }
+
+                        const statusCode = Number(result?.http_status ?? 0);
+                        if (shouldDropOperationOnClientError(operation, statusCode)) {
+                            applyDroppedOperationOnClientError(operation, statusCode);
+                            dropQueueOperation(opId);
+                            queueRetryAt = 0;
+                            clearQueueSyncRetryTimer();
+
+                            if (
+                                statusCode === 422
+                                && ['update_profile', 'update_password'].includes(String(operation?.action ?? ''))
+                            ) {
+                                showError({
+                                    response: {
+                                        status: statusCode,
+                                        data: {
+                                            message: String(result?.message ?? ''),
+                                            errors: result?.errors ?? {},
+                                        },
+                                    },
+                                });
+                            }
+
+                            continue;
+                        }
+
                         queueRetryAt = Date.now() + QUEUE_RETRY_DELAY_MS;
                         scheduleQueueSyncRetry(queueRetryAt - Date.now());
                         shouldStopSync = true;
                         break;
                     }
 
-                    if (String(result?.status ?? '') === 'ok') {
-                        applySuccessfulSyncedOperation(operation, result?.data ?? {});
-                        dropQueueOperation(opId);
-                        queueRetryAt = 0;
-                        clearQueueSyncRetryTimer();
-                        continue;
+                    if (shouldStopSync) {
+                        break;
+                    }
+                } catch (error) {
+                    if (isRetriableRequestError(error)) {
+                        queueRetryAt = Date.now() + QUEUE_RETRY_DELAY_MS;
+                        scheduleQueueSyncRetry(queueRetryAt - Date.now());
+                        break;
                     }
 
-                    const statusCode = Number(result?.http_status ?? 0);
-                    if (shouldDropOperationOnClientError(operation, statusCode)) {
-                        dropQueueOperation(opId);
+                    const statusCode = Number(error?.response?.status ?? 0);
+                    const firstOperation = chunkOperations[0];
+                    if (firstOperation && shouldDropOperationOnClientError(firstOperation, statusCode)) {
+                        applyDroppedOperationOnClientError(firstOperation, statusCode);
+                        dropQueueOperation(firstOperation.op_id);
                         queueRetryAt = 0;
                         clearQueueSyncRetryTimer();
-
-                        if (
-                            statusCode === 422
-                            && ['update_profile', 'update_password'].includes(String(operation?.action ?? ''))
-                        ) {
-                            showError({
-                                response: {
-                                    status: statusCode,
-                                    data: {
-                                        message: String(result?.message ?? ''),
-                                        errors: result?.errors ?? {},
-                                    },
-                                },
-                            });
-                        }
 
                         continue;
                     }
 
                     queueRetryAt = Date.now() + QUEUE_RETRY_DELAY_MS;
                     scheduleQueueSyncRetry(queueRetryAt - Date.now());
-                    shouldStopSync = true;
                     break;
+                } finally {
+                    syncInFlightOperationIds.clear();
                 }
+            }
+        } finally {
+            syncInFlightOperationIds.clear();
+            queueSyncInProgress = false;
+            queueSyncPromise = null;
 
-                if (shouldStopSync) {
-                    break;
-                }
-            } catch (error) {
-                if (isRetriableRequestError(error)) {
-                    queueRetryAt = Date.now() + QUEUE_RETRY_DELAY_MS;
-                    scheduleQueueSyncRetry(queueRetryAt - Date.now());
-                    break;
-                }
+            if (offlineQueue.value.length === 0) {
+                queueRetryAt = 0;
+                clearQueueSyncRetryTimer();
+                return;
+            }
 
-                const statusCode = Number(error?.response?.status ?? 0);
-                const firstOperation = chunkOperations[0];
-                if (firstOperation && shouldDropOperationOnClientError(firstOperation, statusCode)) {
-                    dropQueueOperation(firstOperation.op_id);
-                    queueRetryAt = 0;
-                    clearQueueSyncRetryTimer();
-
-                    continue;
-                }
-
-                queueRetryAt = Date.now() + QUEUE_RETRY_DELAY_MS;
+            if (!browserOffline.value && queueRetryAt > Date.now()) {
                 scheduleQueueSyncRetry(queueRetryAt - Date.now());
-                break;
-            } finally {
-                syncInFlightOperationIds.clear();
             }
         }
-    } finally {
-        syncInFlightOperationIds.clear();
-        queueSyncInProgress = false;
+    })();
 
-        if (offlineQueue.value.length === 0) {
-            queueRetryAt = 0;
-            clearQueueSyncRetryTimer();
-            return;
-        }
-
-        if (!browserOffline.value && queueRetryAt > Date.now()) {
-            scheduleQueueSyncRetry(queueRetryAt - Date.now());
-        }
-    }
+    await queueSyncPromise;
 }
 
 function formatDueAt(isoValue) {
@@ -5431,6 +5701,18 @@ async function loadItems(type, showErrors = false, ownerIdOverride = null, linkI
             return;
         }
 
+        const responseListVersion = readRealtimeListVersion(response.data);
+        const knownServerListVersion = getKnownServerListVersion(ownerId, type, linkId);
+        if (
+            (responseListVersion === null && knownServerListVersion > 0)
+            || (responseListVersion !== null && responseListVersion < knownServerListVersion)
+        ) {
+            // Late/stale GET responses can arrive after local delete sync acks and must not
+            // overwrite the cache with an older snapshot that reintroduces removed items.
+            assignCached();
+            return;
+        }
+
         const normalizedItems = normalizeItems(response.data.items ?? [], cachedBeforeRequest, {
             ownerIdOverride: ownerId,
             linkIdOverride: linkId,
@@ -5661,6 +5943,39 @@ function markSuggestionResetDone(suggestionKey, resetAfterMs = 1800) {
     suggestionResetSuccessTimers.set(normalizedKey, timerId);
 }
 
+function removeSuggestionStatsRowAfterReset(suggestionKey, ownerId, statsType, linkId, delayMs = 1000) {
+    const normalizedKey = String(suggestionKey ?? '').trim();
+    if (normalizedKey === '') {
+        return;
+    }
+
+    const normalizedType = normalizeSuggestionStatsType(statsType);
+    const normalizedOwnerId = Number(ownerId);
+    const normalizedLinkId = normalizeLinkId(linkId);
+    const timerKey = `${normalizedType}:${normalizedOwnerId}:${normalizedLinkId ?? 0}:${normalizedKey}`;
+
+    const existingTimer = suggestionResetRemovalTimers.get(timerKey);
+    if (existingTimer) {
+        clearTimeout(existingTimer);
+    }
+
+    const timerId = window.setTimeout(() => {
+        suggestionResetRemovalTimers.delete(timerKey);
+
+        productSuggestionStats.value = productSuggestionStats.value.filter(
+            (statsEntry) => String(statsEntry?.suggestion_key ?? '') !== normalizedKey,
+        );
+
+        const cachedPayload = readSuggestionStatsFromCache(normalizedOwnerId, normalizedType, normalizedLinkId);
+        cachedPayload.stats = cachedPayload.stats.filter(
+            (statsEntry) => String(statsEntry?.suggestion_key ?? '') !== normalizedKey,
+        );
+        writeSuggestionStatsToCache(normalizedOwnerId, normalizedType, cachedPayload, normalizedLinkId);
+    }, Math.max(300, Number(delayMs) || 1000));
+
+    suggestionResetRemovalTimers.set(timerKey, timerId);
+}
+
 function suggestionStatsCount(type) {
     const ownerId = Number(selectedOwnerId.value);
     const linkId = selectedListLinkId.value;
@@ -5702,7 +6017,8 @@ async function resetSuggestionStatsRow(entry) {
         syncOfflineQueue().catch(() => {});
 
         showStatus('\u0414\u0430\u043d\u043d\u044b\u0435 \u043f\u043e\u0434\u0441\u043a\u0430\u0437\u043e\u043a \u0441\u0431\u0440\u043e\u0448\u0435\u043d\u044b.');
-        markSuggestionResetDone(suggestionKey);
+        markSuggestionResetDone(suggestionKey, 1400);
+        removeSuggestionStatsRowAfterReset(suggestionKey, ownerId, statsType, linkId, 1000);
     } finally {
         resettingSuggestionKeys.value = resettingSuggestionKeys.value.filter((key) => key !== suggestionKey);
     }
@@ -6189,15 +6505,43 @@ async function findUsers() {
 }
 
 async function sendInvite(userId) {
+    const actionLockKey = inviteSendActionLockKey(userId);
+    if (!acquireSharingActionLock(actionLockKey)) {
+        return;
+    }
+
     resetMessages();
-    queueSendInvitation(userId);
-    await syncOfflineQueue();
-    await refreshState(false, false);
-    showStatus('\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0435\u043d\u0438\u0435 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e.');
+
+    try {
+        const queuedOpId = queueSendInvitation(userId);
+        if (!queuedOpId) {
+            return;
+        }
+
+        await syncOfflineQueue();
+
+        if (browserOffline.value || isQueueOperationPending(queuedOpId)) {
+            markActionButtonSuccess(inviteSendSuccessKey(userId), 2200);
+            showStatus('Приглашение в очереди и будет отправлено при синхронизации.');
+            return;
+        }
+
+        await refreshState(false, false);
+        markActionButtonSuccess(inviteSendSuccessKey(userId), 2200);
+        showStatus('Приглашение отправлено.');
+    } finally {
+        releaseSharingActionLock(actionLockKey);
+    }
 }
 
 async function acceptInvitation(invitationId) {
+    const actionLockKey = `accept-invitation:${Number(invitationId) || 0}`;
+    if (!acquireSharingActionLock(actionLockKey)) {
+        return;
+    }
+
     resetMessages();
+    try {
     const numericInvitationId = Number(invitationId);
     const queuedOpId = queueInvitationResponse('accept_invitation', invitationId);
     await syncOfflineQueue();
@@ -6222,10 +6566,19 @@ async function acceptInvitation(invitationId) {
         return;
     }
     showStatus('\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0435\u043d\u0438\u0435 \u043f\u0440\u0438\u043d\u044f\u0442\u043e.');
+    } finally {
+        releaseSharingActionLock(actionLockKey);
+    }
 }
 
 async function declineInvitation(invitationId) {
+    const actionLockKey = `decline-invitation:${Number(invitationId) || 0}`;
+    if (!acquireSharingActionLock(actionLockKey)) {
+        return;
+    }
+
     resetMessages();
+    try {
     const numericInvitationId = Number(invitationId);
     const queuedOpId = queueInvitationResponse('decline_invitation', invitationId);
     await syncOfflineQueue();
@@ -6253,26 +6606,51 @@ async function declineInvitation(invitationId) {
         return;
     }
     showStatus('\u041f\u0440\u0438\u0433\u043b\u0430\u0448\u0435\u043d\u0438\u0435 \u043e\u0442\u043c\u0435\u043d\u0435\u043d\u043e.');
+    } finally {
+        releaseSharingActionLock(actionLockKey);
+    }
 }
 
 async function setMine(linkId) {
+    const actionLockKey = setMineActionLockKey(linkId);
+    if (!acquireSharingActionLock(actionLockKey)) {
+        return;
+    }
+
     resetMessages();
+    try {
     const link = links.value.find((entry) => Number(entry?.id) === Number(linkId));
     const targetOwnerId = Number(link?.other_user?.id ?? 0);
     if (targetOwnerId > 0) {
+        suppressNextSelectedOwnerPersist = true;
         selectedOwnerId.value = targetOwnerId;
         persistLocalDefaultOwner(targetOwnerId);
         lastPersistedOwnerId = targetOwnerId;
     }
 
     persistCurrentSyncStateCache();
-    queueSetMine(linkId);
-    syncOfflineQueue().catch(() => {});
+    const queuedOpId = queueSetMine(linkId);
+    await syncOfflineQueue();
+    if (browserOffline.value || (queuedOpId && isQueueOperationPending(queuedOpId))) {
+        markActionButtonSuccess(setMineSuccessKey(linkId), 2200);
+        showStatus('Список в очереди на синхронизацию.');
+        return;
+    }
+    markActionButtonSuccess(setMineSuccessKey(linkId), 2200);
     showStatus('\u0421\u043f\u0438\u0441\u043e\u043a \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e.');
+    } finally {
+        releaseSharingActionLock(actionLockKey);
+    }
 }
 
 async function breakLink(linkId) {
+    const actionLockKey = `break-link:${Number(linkId) || 0}`;
+    if (!acquireSharingActionLock(actionLockKey)) {
+        return;
+    }
+
     resetMessages();
+    try {
     const numericLinkId = Number(linkId);
     links.value = links.value.filter((entry) => Number(entry?.id) !== numericLinkId);
     listOptions.value = listOptions.value.filter((option) => Number(option?.link_id) !== numericLinkId);
@@ -6285,9 +6663,16 @@ async function breakLink(linkId) {
     }
 
     persistCurrentSyncStateCache();
-    queueBreakLink(linkId);
-    syncOfflineQueue().catch(() => {});
+    const queuedOpId = queueBreakLink(linkId);
+    await syncOfflineQueue();
+    if (browserOffline.value || (queuedOpId && isQueueOperationPending(queuedOpId))) {
+        showStatus('Изменение в очереди на синхронизацию.');
+        return;
+    }
     showStatus('\u0421\u0432\u044f\u0437\u044c \u0441\u043f\u0438\u0441\u043a\u043e\u0432 \u0440\u0430\u0437\u043e\u0440\u0432\u0430\u043d\u0430.');
+    } finally {
+        releaseSharingActionLock(actionLockKey);
+    }
 }
 
 async function saveProfile() {
@@ -6541,12 +6926,17 @@ function subscribeListChannel(ownerId) {
 }
 
 watch(selectedOwnerId, async (ownerId) => {
+    const shouldPersistDefaultOwner = !suppressNextSelectedOwnerPersist;
+    suppressNextSelectedOwnerPersist = false;
+
     listDropdownOpen.value = false;
     await flushSwipeUndoState();
     persistLocalDefaultOwner(ownerId);
     hydrateSelectedListsFromCache();
 
-    persistDefaultOwner(ownerId);
+    if (shouldPersistDefaultOwner) {
+        persistDefaultOwner(ownerId);
+    }
 
     subscribeListChannel(ownerId);
     await Promise.all([loadAllItems(), loadAllSuggestions()]);
@@ -6586,23 +6976,7 @@ watch(isSkippableAnimationPlaying, (isActive) => {
 }, { immediate: true });
 
 onMounted(async () => {
-    applyThemeMode(themeMode.value, { persist: false });
-    maybeOpenRandomAdModal();
-
-    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-        systemThemeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-        handleSystemThemeChange = () => {
-            if (themeMode.value === 'system') {
-                applyThemeMode('system', { persist: false });
-            }
-        };
-
-        if (typeof systemThemeMediaQuery.addEventListener === 'function') {
-            systemThemeMediaQuery.addEventListener('change', handleSystemThemeChange);
-        } else if (typeof systemThemeMediaQuery.addListener === 'function') {
-            systemThemeMediaQuery.addListener(handleSystemThemeChange);
-        }
-    }
+    mountDashboardChrome();
 
     persistActiveTabToStorage(activeTab.value);
     loadOfflineStateFromStorage();
@@ -6683,6 +7057,14 @@ onBeforeUnmount(() => {
         clearTimeout(timerId);
     }
     suggestionResetSuccessTimers.clear();
+    for (const timerId of suggestionResetRemovalTimers.values()) {
+        clearTimeout(timerId);
+    }
+    suggestionResetRemovalTimers.clear();
+    for (const timerId of actionButtonSuccessTimers.values()) {
+        clearTimeout(timerId);
+    }
+    actionButtonSuccessTimers.clear();
     disposeToasts();
 
     if (queueSyncRetryTimer) {
@@ -6717,15 +7099,7 @@ onBeforeUnmount(() => {
         handleOfflineEvent = null;
     }
 
-    if (systemThemeMediaQuery && handleSystemThemeChange) {
-        if (typeof systemThemeMediaQuery.removeEventListener === 'function') {
-            systemThemeMediaQuery.removeEventListener('change', handleSystemThemeChange);
-        } else if (typeof systemThemeMediaQuery.removeListener === 'function') {
-            systemThemeMediaQuery.removeListener(handleSystemThemeChange);
-        }
-    }
-    systemThemeMediaQuery = null;
-    handleSystemThemeChange = null;
+    unmountDashboardChrome();
 
     if (window.Echo && userChannelName) {
         window.Echo.leave(userChannelName);
@@ -7258,74 +7632,123 @@ onBeforeUnmount(() => {
             </section>
 
             <section v-if="activeTab === 'profile'" class="flex-1 space-y-4">
-                <div class="relative overflow-hidden rounded-[28px] border border-[#403e41] bg-[#2d2a2c] p-4 shadow-[0_20px_42px_-32px_rgba(0,0,0,0.8)]">
-                    <div class="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-[#5b7fff]/14 to-transparent" />
-                    <div class="pointer-events-none absolute -right-10 -top-8 h-28 w-28 rounded-full bg-[#5b7fff]/12 blur-2xl" />
-                    <div class="pointer-events-none absolute -left-8 bottom-0 h-20 w-20 rounded-full bg-[#56b982]/10 blur-2xl" />
+                <div
+                    class="relative overflow-hidden rounded-[28px] border p-4"
+                    :class="
+                        isLightTheme
+                            ? 'border-[#dfe5f0] bg-[#ffffff] shadow-[0_20px_42px_-34px_rgba(17,24,39,0.16)]'
+                            : 'border-[#403e41] bg-[#2d2a2c] shadow-[0_20px_42px_-32px_rgba(0,0,0,0.8)]'
+                    "
+                >
+                    <div
+                        class="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b to-transparent"
+                        :class="isLightTheme ? 'from-[#5b7fff]/8' : 'from-[#5b7fff]/14'"
+                    />
+                    <div
+                        class="pointer-events-none absolute -right-10 -top-8 h-28 w-28 rounded-full blur-2xl"
+                        :class="isLightTheme ? 'bg-[#5b7fff]/8' : 'bg-[#5b7fff]/12'"
+                    />
+                    <div
+                        class="pointer-events-none absolute -left-8 bottom-0 h-20 w-20 rounded-full blur-2xl"
+                        :class="isLightTheme ? 'bg-[#56b982]/6' : 'bg-[#56b982]/10'"
+                    />
 
                     <div class="relative space-y-3">
-                        <div class="flex items-start gap-3">
-                            <div class="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#5b7fff]/40 bg-[#5b7fff]/12 text-[#d8e7ff]">
-                                <UserRound class="h-5 w-5" />
-                            </div>
+                        <div class="min-w-0">
                             <div class="min-w-0 flex-1">
-                                <p class="text-[10px] uppercase tracking-[0.18em] text-[#7f7b7e]">PROFILE</p>
-                                <h2 class="mt-1 truncate text-lg font-semibold text-[#fcfcfa]">{{ localUser.name }}</h2>
-                                <p class="mt-1 truncate text-xs text-[#9f9a9d]">
+                                <p class="text-[10px] uppercase tracking-[0.18em]" :class="isLightTheme ? 'text-[#7a8193]' : 'text-[#7f7b7e]'">PROFILE</p>
+                                <h2 class="mt-1 truncate text-lg font-semibold" :class="isLightTheme ? 'text-[#181b22]' : 'text-[#fcfcfa]'">{{ localUser.name }}</h2>
+                                <p class="mt-1 truncate text-xs" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">
                                     @{{ localUser.tag || 'tag' }} · {{ localUser.email || 'email@example.com' }}
                                 </p>
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-3 gap-2">
-                            <div class="rounded-2xl border border-[#403e41] bg-[#221f22]/95 px-3 py-2">
-                                <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">Счёт</p>
-                                <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">{{ productivityScore }}</p>
+                        <div
+                            class="relative overflow-hidden rounded-3xl border bg-gradient-to-br p-4"
+                            ref="productivityCardRef"
+                            @pointerdown="triggerProductivityDustBurst"
+                            :class="
+                                isLightTheme
+                                    ? 'border-[#cfd8ff] from-[#eef2ff] via-[#f7f9ff] to-[#ffffff]'
+                                    : 'border-[#5b7fff]/35 from-[#1f2433] via-[#26262d] to-[#221f22]'
+                            "
+                        >
+                            <div ref="productivityDustLayerRef" class="productivity-dust-layer" aria-hidden="true">
+                                <span
+                                    v-for="particle in productivityDustParticles"
+                                    :key="particle.id"
+                                    class="productivity-dust-particle"
+                                    :style="particle.style"
+                                />
                             </div>
-                            <div class="rounded-2xl border border-[#403e41] bg-[#221f22]/95 px-3 py-2">
-                                <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">Инвайты</p>
-                                <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">{{ pendingInvitationsCount }}</p>
-                            </div>
-                            <div class="rounded-2xl border border-[#403e41] bg-[#221f22]/95 px-3 py-2">
-                                <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">Связи</p>
-                                <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">{{ links.length }}</p>
+                            <div class="relative z-[1] min-w-0">
+                                <div class="min-w-0">
+                                    <p class="text-[10px] uppercase tracking-[0.18em]" :class="isLightTheme ? 'text-[#4f66d8]' : 'text-[#b7c8ff]'">Продуктивность</p>
+                                    <p class="mt-2 text-5xl font-black leading-none tracking-tight" :class="isLightTheme ? 'text-[#151922]' : 'text-[#fcfcfa]'">{{ productivityScore }}</p>
+                                </div>
                             </div>
                         </div>
 
-                        <div class="rounded-3xl border border-[#403e41] bg-[#221f22]/85 p-3">
+                        <div
+                            class="rounded-3xl border p-3"
+                            :class="isLightTheme ? 'border-[#e2e7f0] bg-[#f7f9fc]' : 'border-[#403e41] bg-[#221f22]/85'"
+                        >
                             <div class="mb-2 flex items-center justify-between gap-2">
                                 <div class="min-w-0">
-                                    <p class="truncate text-sm font-semibold text-[#fcfcfa]">Люди и списки</p>
-                                    <p class="mt-0.5 text-xs text-[#9f9a9d]">Единый центр поиска, приглашений и связей.</p>
+                                    <p class="truncate text-sm font-semibold" :class="isLightTheme ? 'text-[#1a1d24]' : 'text-[#fcfcfa]'">Люди и списки</p>
+                                    <p class="mt-0.5 text-xs" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">Единый центр поиска, приглашений и связей.</p>
                                 </div>
-                                <Share2 class="h-4 w-4 shrink-0 text-[#d8e7ff]" />
+                                <Share2 class="h-4 w-4 shrink-0" :class="isLightTheme ? 'text-[#5b7fff]' : 'text-[#d8e7ff]'" />
                             </div>
                             <div class="grid gap-2 sm:grid-cols-3">
                                 <button
                                     type="button"
-                                    class="flex items-center justify-between rounded-2xl border border-[#5b7fff]/35 bg-[#5b7fff]/10 px-3 py-2.5 text-left text-sm font-semibold text-[#fcfcfa]"
+                                    class="flex items-center justify-between rounded-2xl border px-3 py-2.5 text-left text-sm font-semibold"
+                                    :class="
+                                        isLightTheme
+                                            ? 'border-[#e2e7f0] bg-[#ffffff] text-[#1a1d24]'
+                                            : 'border-[#403e41] bg-[#2d2a2c] text-[#fcfcfa]'
+                                    "
                                     @click="openCollabHub('share')"
                                 >
                                     <span class="truncate">Поделиться</span>
-                                    <span class="text-[11px] text-[#d8e7ff]">Поиск</span>
+                                    <span class="text-[11px]" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">Поиск</span>
                                 </button>
                                 <button
                                     type="button"
-                                    class="flex items-center justify-between rounded-2xl border border-[#403e41] bg-[#2d2a2c] px-3 py-2.5 text-left text-sm font-semibold text-[#fcfcfa]"
+                                    class="flex items-center justify-between rounded-2xl border px-3 py-2.5 text-left text-sm font-semibold"
+                                    :class="
+                                        isLightTheme
+                                            ? 'border-[#e2e7f0] bg-[#ffffff] text-[#1a1d24]'
+                                            : 'border-[#403e41] bg-[#2d2a2c] text-[#fcfcfa]'
+                                    "
                                     @click="openCollabHub('invitations')"
                                 >
                                     <span class="truncate">Приглашения</span>
-                                    <span class="inline-flex min-w-6 items-center justify-center rounded-full border border-[#5b7fff]/40 bg-[#5b7fff]/12 px-2 py-0.5 text-[11px] font-semibold text-[#d8e7ff]">
+                                    <span
+                                        class="inline-flex min-w-6 items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-semibold"
+                                        :class="
+                                            isLightTheme
+                                                ? 'border-[#cfd8ff] bg-[#eef2ff] text-[#4f66d8]'
+                                                : 'border-[#5b7fff]/40 bg-[#5b7fff]/12 text-[#d8e7ff]'
+                                        "
+                                    >
                                         {{ pendingInvitationsCount }}
                                     </span>
                                 </button>
                                 <button
                                     type="button"
-                                    class="flex items-center justify-between rounded-2xl border border-[#403e41] bg-[#2d2a2c] px-3 py-2.5 text-left text-sm font-semibold text-[#fcfcfa]"
+                                    class="flex items-center justify-between rounded-2xl border px-3 py-2.5 text-left text-sm font-semibold"
+                                    :class="
+                                        isLightTheme
+                                            ? 'border-[#e2e7f0] bg-[#ffffff] text-[#1a1d24]'
+                                            : 'border-[#403e41] bg-[#2d2a2c] text-[#fcfcfa]'
+                                    "
                                     @click="openCollabHub('lists')"
                                 >
                                     <span class="truncate">Списки</span>
-                                    <span class="text-[11px] text-[#9f9a9d]">{{ links.length }}</span>
+                                    <span class="text-[11px]" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">{{ links.length }}</span>
                                 </button>
                             </div>
                         </div>
@@ -7891,10 +8314,20 @@ onBeforeUnmount(() => {
                         </div>
                         <button
                             type="button"
-                            class="rounded-xl border border-[#403e41] px-3 py-1.5 text-xs font-semibold text-[#fcfcfa] hover:border-[#fcfcfa]/45"
+                            class="rounded-xl border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
+                            :class="
+                                isInviteSentConfirmed(result.id)
+                                    ? 'border-[#56b982]/60 bg-[#56b982]/18 text-[#56b982]'
+                                    : 'border-[#403e41] text-[#fcfcfa] hover:border-[#fcfcfa]/45'
+                            "
+                            :disabled="isInviteSentConfirmed(result.id) || isSharingActionLocked(inviteSendActionLockKey(result.id))"
                             @click="sendInvite(result.id)"
                         >
-                            Пригласить
+                            {{
+                                isInviteSentConfirmed(result.id)
+                                    ? 'Отправлено'
+                                    : (isSharingActionLocked(inviteSendActionLockKey(result.id)) ? '...' : 'Пригласить')
+                            }}
                         </button>
                     </div>
                 </div>
@@ -7999,10 +8432,20 @@ onBeforeUnmount(() => {
                             </div>
                             <button
                                 type="button"
-                                class="rounded-xl border border-[#403e41] px-3 py-1.5 text-xs font-semibold text-[#fcfcfa] hover:border-[#fcfcfa]/45"
+                                class="rounded-xl border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
+                                :class="
+                                    isInviteSentConfirmed(result.id)
+                                        ? 'border-[#56b982]/60 bg-[#56b982]/18 text-[#56b982]'
+                                        : 'border-[#403e41] text-[#fcfcfa] hover:border-[#fcfcfa]/45'
+                                "
+                                :disabled="isInviteSentConfirmed(result.id) || isSharingActionLocked(inviteSendActionLockKey(result.id))"
                                 @click="sendInvite(result.id)"
                             >
-                                Пригласить
+                                {{
+                                    isInviteSentConfirmed(result.id)
+                                        ? 'Отправлено'
+                                        : (isSharingActionLocked(inviteSendActionLockKey(result.id)) ? '...' : 'Пригласить')
+                                }}
                             </button>
                         </div>
                         <p v-if="!searchBusy && searchResults.length === 0 && searchQuery.trim().length >= 2" class="px-1 text-xs text-[#9f9a9d]">
@@ -8087,11 +8530,20 @@ onBeforeUnmount(() => {
                         <div class="flex gap-2">
                             <button
                                 type="button"
-                                class="rounded-xl bg-[#fcfcfa] px-3 py-1.5 text-xs font-semibold text-[#19181a] disabled:cursor-not-allowed disabled:opacity-50"
-                                :disabled="!link.can_set_default"
+                                class="rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50"
+                                :class="
+                                    isSetMineConfirmed(link.id)
+                                        ? 'bg-[#56b982]/20 text-[#56b982]'
+                                        : 'bg-[#fcfcfa] text-[#19181a]'
+                                "
+                                :disabled="!link.can_set_default || isSetMineConfirmed(link.id) || isSharingActionLocked(setMineActionLockKey(link.id))"
                                 @click="setMine(link.id)"
                             >
-                                Установить моим
+                                {{
+                                    isSetMineConfirmed(link.id)
+                                        ? 'Установлено'
+                                        : (isSharingActionLocked(setMineActionLockKey(link.id)) ? '...' : 'Установить моим')
+                                }}
                             </button>
                             <button
                                 type="button"
@@ -8152,7 +8604,12 @@ onBeforeUnmount(() => {
                         {{ suggestionStatsType === 'todo' ? '\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445 \u043f\u043e \u0434\u0435\u043b\u0430\u043c.' : '\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445 \u043f\u043e \u043f\u043e\u043a\u0443\u043f\u043a\u0430\u043c.' }}
                     </p>
 
-                    <div v-if="!productSuggestionStatsLoading && productSuggestionStats.length > 0" class="flex-1 space-y-2 overflow-y-auto">
+                    <TransitionGroup
+                        v-if="!productSuggestionStatsLoading && productSuggestionStats.length > 0"
+                        name="item"
+                        tag="div"
+                        class="flex-1 space-y-2 overflow-y-auto"
+                    >
                         <div
                             v-for="entry in productSuggestionStats"
                             :key="`stats-modal-${entry.suggestion_key}`"
@@ -8186,7 +8643,7 @@ onBeforeUnmount(() => {
                                 </button>
                             </div>
                         </div>
-                    </div>
+                    </TransitionGroup>
                 </div>
             </div>
         </Transition>
@@ -8311,6 +8768,35 @@ onBeforeUnmount(() => {
 
 .toast-card {
     touch-action: pan-y;
+}
+
+.productivity-dust-layer {
+    position: absolute;
+    inset: 10px;
+    pointer-events: none;
+    overflow: hidden;
+}
+
+.productivity-dust-particle {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: block;
+    width: var(--dust-size, 2px);
+    height: var(--dust-size, 2px);
+    border-radius: 9999px;
+    background: rgb(252 252 250 / var(--dust-opacity, 0.3));
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    filter: brightness(0.88);
+    animation:
+        productivity-dust-drift var(--dust-duration, 12000ms) linear infinite alternate,
+        productivity-dust-twinkle var(--dust-twinkle-duration, 4200ms) ease-in-out infinite;
+    animation-delay: var(--dust-delay, 0ms), var(--dust-twinkle-delay, 0ms);
+    transition:
+        left 420ms cubic-bezier(0.12, 0.76, 0.18, 1),
+        top 420ms cubic-bezier(0.12, 0.76, 0.18, 1);
+    will-change: transform, filter;
 }
 
 .dashboard-tab-btn--active {
@@ -8715,4 +9201,30 @@ onBeforeUnmount(() => {
         transform: translate3d(var(--particle-x), var(--particle-y), 0) scale(0.35);
     }
 }
+
+@keyframes productivity-dust-drift {
+    0% {
+        transform: translate3d(var(--dust-dx-start, 0px), var(--dust-dy-start, 0px), 0);
+    }
+
+    50% {
+        transform: translate3d(var(--dust-dx-mid, 0px), var(--dust-dy-mid, 0px), 0);
+    }
+
+    100% {
+        transform: translate3d(var(--dust-dx, 0px), var(--dust-dy, 0px), 0);
+    }
+}
+
+@keyframes productivity-dust-twinkle {
+    0%,
+    100% {
+        filter: brightness(0.82);
+    }
+
+    50% {
+        filter: brightness(1.15);
+    }
+}
+
 </style>

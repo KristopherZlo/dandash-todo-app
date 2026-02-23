@@ -58,7 +58,7 @@ export function todoPriorityClass(item) {
         return 'border-[#d4b06e]/55 bg-[#d4b06e]/14 text-[#d4b06e]';
     }
 
-    return 'border-[#a5d774]/50 bg-[#a5d774]/12 text-[#a5d774]';
+    return 'border-current bg-[#a5d774]/12 text-[#a5d774]';
 }
 
 export function nextTodoPriority(priority) {

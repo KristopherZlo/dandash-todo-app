@@ -5,16 +5,18 @@ namespace App\Services;
 use App\Models\ListInvitation;
 use App\Models\ListLink;
 use App\Models\User;
+use App\Services\UserState\UserGamificationStateService;
+use App\Services\UserState\UserMoodStateService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
 class ListSyncService
 {
-    private const MOOD_COLOR_VALUES = ['red', 'yellow', 'green'];
-    private const MOOD_FIRE_EMOJIS = ['🥰', '😝', '😈'];
-    private const MOOD_BATTERY_EMOJIS = ['😴', '😡', '😄', '😊'];
-    private const MOOD_UNKNOWN_EMOJI = '❔';
-    private const MOOD_STALE_RESET_AFTER_SECONDS = 86400;
+    public function __construct(
+        private readonly UserGamificationStateService $gamificationStateService,
+        private readonly UserMoodStateService $moodStateService
+    ) {
+    }
 
     public function canonicalUserPair(int $firstUserId, int $secondUserId): array
     {
@@ -63,55 +65,12 @@ class ListSyncService
 
     public function getGamificationState(User $user): array
     {
-        $xpProgress = (float) ($user->xp_progress ?? 0.0);
-        $rewardHistory = array_values(array_filter(
-            array_map(
-                static fn (mixed $entry): int => max(0, (int) $entry),
-                is_array($user->productivity_reward_history) ? $user->productivity_reward_history : []
-            ),
-            static fn (int $entry): bool => $entry > 0
-        ));
-
-        return [
-            'xp_progress' => max(0.0, min(0.999999, $xpProgress)),
-            'productivity_score' => max(0, (int) ($user->productivity_score ?? 0)),
-            'productivity_reward_history' => $rewardHistory,
-            'xp_color_seed' => max(1, (int) ($user->xp_color_seed ?? 1)),
-            'updated_at_ms' => $user->gamification_updated_at?->valueOf(),
-        ];
+        return $this->gamificationStateService->buildPayload($user);
     }
 
     public function getMoodState(User $user): array
     {
-        $updatedAt = $user->mood_updated_at;
-        $updatedAtMs = $updatedAt?->valueOf();
-        $isStale = $this->isMoodStale($updatedAt);
-
-        return [
-            'color' => $this->normalizeMoodColor($user->mood_color),
-            'fire_level' => $isStale
-                ? 50
-                : $this->normalizeMoodLevel($user->mood_fire_level),
-            'fire_emoji' => $isStale
-                ? self::MOOD_UNKNOWN_EMOJI
-                : $this->normalizeMoodEmoji(
-                    $user->mood_fire_emoji,
-                    self::MOOD_FIRE_EMOJIS,
-                    self::MOOD_FIRE_EMOJIS[0]
-                ),
-            'battery_level' => $isStale
-                ? 50
-                : $this->normalizeMoodLevel($user->mood_battery_level),
-            'battery_emoji' => $isStale
-                ? self::MOOD_UNKNOWN_EMOJI
-                : $this->normalizeMoodEmoji(
-                    $user->mood_battery_emoji,
-                    self::MOOD_BATTERY_EMOJIS,
-                    self::MOOD_BATTERY_EMOJIS[3]
-                ),
-            'updated_at' => optional($updatedAt)->toISOString(),
-            'updated_at_ms' => $updatedAtMs,
-        ];
+        return $this->moodStateService->buildPayload($user);
     }
 
     public function getMoodCards(User $user): Collection
@@ -272,41 +231,6 @@ class ListSyncService
             'is_self' => $isSelf,
             'mood' => $this->getMoodState($user),
         ];
-    }
-
-    private function normalizeMoodColor(mixed $value): string
-    {
-        $candidate = strtolower(trim((string) $value));
-
-        return in_array($candidate, self::MOOD_COLOR_VALUES, true)
-            ? $candidate
-            : self::MOOD_COLOR_VALUES[1];
-    }
-
-    private function normalizeMoodLevel(mixed $value): int
-    {
-        return max(0, min(100, (int) $value));
-    }
-
-    private function normalizeMoodEmoji(mixed $value, array $allowed, string $fallback): string
-    {
-        $candidate = trim((string) ($value ?? ''));
-        if ($candidate === self::MOOD_UNKNOWN_EMOJI) {
-            return $candidate;
-        }
-
-        return in_array($candidate, $allowed, true)
-            ? $candidate
-            : $fallback;
-    }
-
-    private function isMoodStale(mixed $updatedAt): bool
-    {
-        if (! $updatedAt || ! method_exists($updatedAt, 'lt')) {
-            return false;
-        }
-
-        return $updatedAt->lt(now()->subSeconds(self::MOOD_STALE_RESET_AFTER_SECONDS));
     }
 
     private function resolveDefaultOwnerId(User $user, Collection $listOptions): int
