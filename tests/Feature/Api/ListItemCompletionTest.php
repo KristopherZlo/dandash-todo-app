@@ -91,4 +91,49 @@ class ListItemCompletionTest extends TestCase
 
         Carbon::setTestNow();
     }
+
+    public function test_items_index_places_completed_items_after_incomplete_items_after_toggle(): void
+    {
+        $user = User::factory()->create();
+
+        $activeItem = ListItem::query()->create([
+            'owner_id' => $user->id,
+            'type' => ListItem::TYPE_PRODUCT,
+            'text' => 'Bread',
+            'sort_order' => 1000,
+            'is_completed' => false,
+            'created_by_id' => $user->id,
+            'updated_by_id' => $user->id,
+        ]);
+
+        $itemToComplete = ListItem::query()->create([
+            'owner_id' => $user->id,
+            'type' => ListItem::TYPE_PRODUCT,
+            'text' => 'Milk',
+            'sort_order' => 2000,
+            'is_completed' => false,
+            'created_by_id' => $user->id,
+            'updated_by_id' => $user->id,
+        ]);
+
+        $this->actingAs($user)
+            ->patchJson('/api/items/'.$itemToComplete->id, [
+                'is_completed' => true,
+            ])
+            ->assertOk()
+            ->assertJsonPath('item.is_completed', true);
+
+        $response = $this->actingAs($user)
+            ->getJson('/api/items?owner_id='.$user->id.'&type=product')
+            ->assertOk();
+
+        $items = $response->json('items');
+
+        $this->assertIsArray($items);
+        $this->assertCount(2, $items);
+        $this->assertSame($activeItem->id, (int) ($items[0]['id'] ?? 0));
+        $this->assertFalse((bool) ($items[0]['is_completed'] ?? true));
+        $this->assertSame($itemToComplete->id, (int) ($items[1]['id'] ?? 0));
+        $this->assertTrue((bool) ($items[1]['is_completed'] ?? false));
+    }
 }

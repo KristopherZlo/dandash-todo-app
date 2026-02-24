@@ -143,6 +143,51 @@ class SyncChunkTest extends TestCase
             ->count());
     }
 
+    public function test_chunk_sync_create_with_completed_flag_returns_completed_item_state(): void
+    {
+        $user = User::factory()->create();
+
+        $response = $this->actingAs($user)->postJson('/api/sync/chunk', [
+            'operations' => [
+                [
+                    'op_id' => 'op-create-completed-1',
+                    'action' => 'create',
+                    'owner_id' => $user->id,
+                    'type' => ListItem::TYPE_PRODUCT,
+                    'item_id' => -200,
+                    'payload' => [
+                        'text' => 'Mayonnaise',
+                        'is_completed' => true,
+                    ],
+                ],
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('results.0.op_id', 'op-create-completed-1')
+            ->assertJsonPath('results.0.status', 'ok')
+            ->assertJsonPath('results.0.data.item.text', 'Mayonnaise')
+            ->assertJsonPath('results.0.data.item.is_completed', true);
+
+        $resultData = $response->json('results.0.data');
+        $createdItemId = (int) ($resultData['item']['id'] ?? 0);
+
+        $this->assertGreaterThan(0, $createdItemId);
+        $this->assertNotNull($resultData['item']['completed_at'] ?? null);
+        $this->assertGreaterThan(0, (int) ($resultData['list_version'] ?? 0));
+
+        $this->assertDatabaseHas('list_items', [
+            'id' => $createdItemId,
+            'owner_id' => $user->id,
+            'type' => ListItem::TYPE_PRODUCT,
+            'text' => 'Mayonnaise',
+            'is_completed' => true,
+        ]);
+
+        $createdItem = ListItem::query()->findOrFail($createdItemId);
+        $this->assertNotNull($createdItem->completed_at);
+    }
+
     public function test_chunk_sync_updates_user_gamification_state(): void
     {
         $user = User::factory()->create([
