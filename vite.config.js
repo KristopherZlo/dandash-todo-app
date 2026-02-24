@@ -72,6 +72,10 @@ export default defineConfig(({ mode }) => {
                 },
             }),
         ],
+        test: {
+            include: ['resources/js/**/*.test.js'],
+            exclude: ['tests/e2e/**', 'node_modules/**'],
+        },
         server: {
             host: devHost,
             port: devPort,

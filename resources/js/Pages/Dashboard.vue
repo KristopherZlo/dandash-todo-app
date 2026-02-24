@@ -14,6 +14,10 @@ import {
 } from '@/modules/dashboard/productText';
 import { formatIntervalSeconds, suggestionStatusText } from '@/modules/dashboard/suggestionFormat';
 import {
+    deduplicateItemsById,
+    findRealtimeMatchForPendingCreate,
+} from '@/modules/dashboard/realtimeListMerge';
+import {
     getTodoPriority,
     inferTodoPriorityFromDueAt,
     nextTodoPriority,
@@ -823,7 +827,6 @@ const SOUND_SKIP_MUTE_MS = 3000;
 const ITEM_DELETE_TOMBSTONE_TTL_MS = 180000;
 const ITEM_DELETE_TOMBSTONE_SERVER_SKEW_MS = 1500;
 const LOCAL_LIST_MUTATION_HOLD_MS = 8000;
-const PENDING_CREATE_REALTIME_MATCH_WINDOW_MS = 10 * 60 * 1000;
 const PRODUCTIVITY_DUST_MAX_PARTICLES = 50;
 const PRODUCTIVITY_DUST_MIN_OPACITY = 0.1;
 const PRODUCTIVITY_DUST_MAX_OPACITY = 0.75;
@@ -2597,29 +2600,6 @@ function normalizeComparableValue(value) {
 function parseComparableTimestampMs(value) {
     const parsed = Date.parse(normalizeComparableValue(value));
     return Number.isFinite(parsed) ? parsed : null;
-}
-
-function deduplicateItemsById(items) {
-    const normalizedItems = Array.isArray(items) ? items : [];
-    const deduplicated = [];
-    const seenIds = new Set();
-
-    for (const item of normalizedItems) {
-        const itemId = Number(item?.id);
-        if (!Number.isFinite(itemId)) {
-            deduplicated.push(item);
-            continue;
-        }
-
-        if (seenIds.has(itemId)) {
-            continue;
-        }
-
-        seenIds.add(itemId);
-        deduplicated.push(item);
-    }
-
-    return deduplicated;
 }
 
 function areItemsEquivalent(leftItems, rightItems) {
@@ -4820,90 +4800,6 @@ function hasPendingCreateOperation(ownerId, type, itemId, linkId = undefined, ex
     });
 }
 
-function canMatchPendingCreateToRealtimeServerItem(localPendingItem, incomingItem, ownerId, type, linkId = undefined) {
-    if (!localPendingItem || !incomingItem) {
-        return false;
-    }
-
-    const localId = Number(localPendingItem.id);
-    const incomingId = Number(incomingItem.id);
-    if (!Number.isFinite(localId) || localId >= 0 || !Number.isFinite(incomingId) || incomingId <= 0) {
-        return false;
-    }
-
-    if (String(localPendingItem.type ?? '') !== String(type) || String(incomingItem.type ?? '') !== String(type)) {
-        return false;
-    }
-
-    if (Number(incomingItem.owner_id ?? 0) !== Number(ownerId)) {
-        return false;
-    }
-
-    if (normalizeLinkId(incomingItem.list_link_id) !== resolveLinkIdForOwner(ownerId, linkId)) {
-        return false;
-    }
-
-    if (String(localPendingItem.text ?? '').trim() !== String(incomingItem.text ?? '').trim()) {
-        return false;
-    }
-
-    // Sync chunk create may emit an intermediate server snapshot before a follow-up completion update.
-    if (normalizeComparableValue(localPendingItem.quantity) !== normalizeComparableValue(incomingItem.quantity)) {
-        return false;
-    }
-
-    if (normalizeComparableValue(localPendingItem.unit) !== normalizeComparableValue(incomingItem.unit)) {
-        return false;
-    }
-
-    if (normalizeComparableValue(localPendingItem.due_at) !== normalizeComparableValue(incomingItem.due_at)) {
-        return false;
-    }
-
-    if (normalizeComparableValue(localPendingItem.priority) !== normalizeComparableValue(incomingItem.priority)) {
-        return false;
-    }
-
-    const localCreatedAtMs = parseComparableTimestampMs(localPendingItem.created_at);
-    const incomingCreatedAtMs = parseComparableTimestampMs(incomingItem.created_at);
-    if (localCreatedAtMs !== null && incomingCreatedAtMs !== null) {
-        return Math.abs(localCreatedAtMs - incomingCreatedAtMs) <= PENDING_CREATE_REALTIME_MATCH_WINDOW_MS;
-    }
-
-    return false;
-}
-
-function findRealtimeMatchForPendingCreate(localPendingItem, incomingItems, ownerId, type, linkId = undefined, usedIncomingIds = new Set()) {
-    const candidates = Array.isArray(incomingItems) ? incomingItems : [];
-    let matchedItem = null;
-    let bestDistanceMs = Number.POSITIVE_INFINITY;
-    const localCreatedAtMs = parseComparableTimestampMs(localPendingItem?.created_at);
-
-    for (const incomingItem of candidates) {
-        const incomingId = Number(incomingItem?.id);
-        if (!Number.isFinite(incomingId) || incomingId <= 0 || usedIncomingIds.has(incomingId)) {
-            continue;
-        }
-
-        if (!canMatchPendingCreateToRealtimeServerItem(localPendingItem, incomingItem, ownerId, type, linkId)) {
-            continue;
-        }
-
-        const incomingCreatedAtMs = parseComparableTimestampMs(incomingItem?.created_at);
-        const distanceMs = (
-            localCreatedAtMs !== null && incomingCreatedAtMs !== null
-                ? Math.abs(localCreatedAtMs - incomingCreatedAtMs)
-                : 0
-        );
-        if (distanceMs < bestDistanceMs) {
-            bestDistanceMs = distanceMs;
-            matchedItem = incomingItem;
-        }
-    }
-
-    return matchedItem;
-}
-
 function shouldDropOperationOnClientError(operation, statusCode) {
     const action = String(operation?.action ?? '');
     if (statusCode < 400 || statusCode >= 500 || statusCode === 429) {
@@ -6951,10 +6847,13 @@ function mergeRealtimeItemsWithLocalPending(ownerId, type, incomingItems, linkId
             ? findRealtimeMatchForPendingCreate(
                 localItem,
                 normalizedIncoming,
-                ownerId,
-                type,
-                resolvedLinkId,
-                matchedIncomingServerIds,
+                {
+                    ownerId,
+                    type,
+                    resolvedLinkId,
+                    usedIncomingIds: matchedIncomingServerIds,
+                    normalizeLinkId,
+                },
             )
             : null;
         const matchedIncomingCreateItemId = Number(matchedIncomingCreateItem?.id);
