@@ -823,6 +823,7 @@ const SOUND_SKIP_MUTE_MS = 3000;
 const ITEM_DELETE_TOMBSTONE_TTL_MS = 180000;
 const ITEM_DELETE_TOMBSTONE_SERVER_SKEW_MS = 1500;
 const LOCAL_LIST_MUTATION_HOLD_MS = 8000;
+const PENDING_CREATE_REALTIME_MATCH_WINDOW_MS = 10 * 60 * 1000;
 const PRODUCTIVITY_DUST_MAX_PARTICLES = 50;
 const PRODUCTIVITY_DUST_MIN_OPACITY = 0.1;
 const PRODUCTIVITY_DUST_MAX_OPACITY = 0.75;
@@ -2598,6 +2599,29 @@ function parseComparableTimestampMs(value) {
     return Number.isFinite(parsed) ? parsed : null;
 }
 
+function deduplicateItemsById(items) {
+    const normalizedItems = Array.isArray(items) ? items : [];
+    const deduplicated = [];
+    const seenIds = new Set();
+
+    for (const item of normalizedItems) {
+        const itemId = Number(item?.id);
+        if (!Number.isFinite(itemId)) {
+            deduplicated.push(item);
+            continue;
+        }
+
+        if (seenIds.has(itemId)) {
+            continue;
+        }
+
+        seenIds.add(itemId);
+        deduplicated.push(item);
+    }
+
+    return deduplicated;
+}
+
 function areItemsEquivalent(leftItems, rightItems) {
     const left = Array.isArray(leftItems) ? leftItems : [];
     const right = Array.isArray(rightItems) ? rightItems : [];
@@ -2725,7 +2749,7 @@ function normalizeItems(items, previousItems = [], context = {}) {
             .filter(([id]) => Number.isFinite(id)),
     );
 
-    return sortItems((items ?? []).map((item) => {
+    const normalizedItems = (items ?? []).map((item) => {
         const normalized = normalizeItem(item, null, context);
         const itemId = Number(normalized.id);
         const preservedLocalId = previousLocalIdById.get(itemId);
@@ -2755,7 +2779,9 @@ function normalizeItems(items, previousItems = [], context = {}) {
             list_link_id: normalized.list_link_id,
             local_id: preservedLocalId || String(previousItem?.local_id ?? '').trim() || normalized.local_id,
         };
-    }));
+    });
+
+    return sortItems(deduplicateItemsById(normalizedItems));
 }
 
 function hasListSyncConflict(ownerId, type, linkId = undefined, expectedVersion = null) {
@@ -4775,6 +4801,107 @@ async function removeCompletedAfterSwipe(event = null) {
         xpGainSourceId,
         xpGainTotal,
     });
+}
+
+function hasPendingCreateOperation(ownerId, type, itemId, linkId = undefined, excludeOpId = null) {
+    const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    const numericItemId = Number(itemId);
+
+    return offlineQueue.value.some((operation) => {
+        if (excludeOpId && String(operation.op_id) === String(excludeOpId)) {
+            return false;
+        }
+
+        return Number(operation.owner_id) === Number(ownerId)
+            && String(operation.type) === String(type)
+            && normalizeLinkId(operation.link_id) === normalizedLinkId
+            && Number(operation.item_id) === numericItemId
+            && operation.action === 'create';
+    });
+}
+
+function canMatchPendingCreateToRealtimeServerItem(localPendingItem, incomingItem, ownerId, type, linkId = undefined) {
+    if (!localPendingItem || !incomingItem) {
+        return false;
+    }
+
+    const localId = Number(localPendingItem.id);
+    const incomingId = Number(incomingItem.id);
+    if (!Number.isFinite(localId) || localId >= 0 || !Number.isFinite(incomingId) || incomingId <= 0) {
+        return false;
+    }
+
+    if (String(localPendingItem.type ?? '') !== String(type) || String(incomingItem.type ?? '') !== String(type)) {
+        return false;
+    }
+
+    if (Number(incomingItem.owner_id ?? 0) !== Number(ownerId)) {
+        return false;
+    }
+
+    if (normalizeLinkId(incomingItem.list_link_id) !== resolveLinkIdForOwner(ownerId, linkId)) {
+        return false;
+    }
+
+    if (String(localPendingItem.text ?? '').trim() !== String(incomingItem.text ?? '').trim()) {
+        return false;
+    }
+
+    // Sync chunk create may emit an intermediate server snapshot before a follow-up completion update.
+    if (normalizeComparableValue(localPendingItem.quantity) !== normalizeComparableValue(incomingItem.quantity)) {
+        return false;
+    }
+
+    if (normalizeComparableValue(localPendingItem.unit) !== normalizeComparableValue(incomingItem.unit)) {
+        return false;
+    }
+
+    if (normalizeComparableValue(localPendingItem.due_at) !== normalizeComparableValue(incomingItem.due_at)) {
+        return false;
+    }
+
+    if (normalizeComparableValue(localPendingItem.priority) !== normalizeComparableValue(incomingItem.priority)) {
+        return false;
+    }
+
+    const localCreatedAtMs = parseComparableTimestampMs(localPendingItem.created_at);
+    const incomingCreatedAtMs = parseComparableTimestampMs(incomingItem.created_at);
+    if (localCreatedAtMs !== null && incomingCreatedAtMs !== null) {
+        return Math.abs(localCreatedAtMs - incomingCreatedAtMs) <= PENDING_CREATE_REALTIME_MATCH_WINDOW_MS;
+    }
+
+    return false;
+}
+
+function findRealtimeMatchForPendingCreate(localPendingItem, incomingItems, ownerId, type, linkId = undefined, usedIncomingIds = new Set()) {
+    const candidates = Array.isArray(incomingItems) ? incomingItems : [];
+    let matchedItem = null;
+    let bestDistanceMs = Number.POSITIVE_INFINITY;
+    const localCreatedAtMs = parseComparableTimestampMs(localPendingItem?.created_at);
+
+    for (const incomingItem of candidates) {
+        const incomingId = Number(incomingItem?.id);
+        if (!Number.isFinite(incomingId) || incomingId <= 0 || usedIncomingIds.has(incomingId)) {
+            continue;
+        }
+
+        if (!canMatchPendingCreateToRealtimeServerItem(localPendingItem, incomingItem, ownerId, type, linkId)) {
+            continue;
+        }
+
+        const incomingCreatedAtMs = parseComparableTimestampMs(incomingItem?.created_at);
+        const distanceMs = (
+            localCreatedAtMs !== null && incomingCreatedAtMs !== null
+                ? Math.abs(localCreatedAtMs - incomingCreatedAtMs)
+                : 0
+        );
+        if (distanceMs < bestDistanceMs) {
+            bestDistanceMs = distanceMs;
+            matchedItem = incomingItem;
+        }
+    }
+
+    return matchedItem;
 }
 
 function shouldDropOperationOnClientError(operation, statusCode) {
@@ -6799,6 +6926,7 @@ function mergeRealtimeItemsWithLocalPending(ownerId, type, incomingItems, linkId
             .map((item) => [Number(item?.id), item])
             .filter(([itemId]) => Number.isFinite(itemId)),
     );
+    const matchedIncomingServerIds = new Set();
 
     for (const localItem of previousItems) {
         const itemId = Number(localItem?.id);
@@ -6818,8 +6946,41 @@ function mergeRealtimeItemsWithLocalPending(ownerId, type, incomingItems, linkId
             continue;
         }
 
+        const isPendingCreateTempItem = itemId < 0 && hasPendingCreateOperation(ownerId, type, itemId, resolvedLinkId);
+        const matchedIncomingCreateItem = isPendingCreateTempItem
+            ? findRealtimeMatchForPendingCreate(
+                localItem,
+                normalizedIncoming,
+                ownerId,
+                type,
+                resolvedLinkId,
+                matchedIncomingServerIds,
+            )
+            : null;
+        const matchedIncomingCreateItemId = Number(matchedIncomingCreateItem?.id);
+
         if (hasPendingDeleteIntent(ownerId, type, itemId, resolvedLinkId)) {
+            if (Number.isFinite(matchedIncomingCreateItemId) && matchedIncomingCreateItemId > 0) {
+                matchedIncomingServerIds.add(matchedIncomingCreateItemId);
+                mergedById.delete(matchedIncomingCreateItemId);
+            }
             mergedById.delete(itemId);
+            continue;
+        }
+
+        if (matchedIncomingCreateItem && Number.isFinite(matchedIncomingCreateItemId) && matchedIncomingCreateItemId > 0) {
+            matchedIncomingServerIds.add(matchedIncomingCreateItemId);
+            mergedById.delete(matchedIncomingCreateItemId);
+            mergedById.set(itemId, {
+                ...matchedIncomingCreateItem,
+                ...localItem,
+                id: itemId,
+                owner_id: Number(matchedIncomingCreateItem.owner_id ?? ownerId),
+                list_link_id: normalizeLinkId(matchedIncomingCreateItem.list_link_id ?? resolvedLinkId),
+                local_id: String(localItem?.local_id ?? '').trim()
+                    || String(matchedIncomingCreateItem?.local_id ?? '').trim()
+                    || `tmp-${Math.abs(itemId)}`,
+            });
             continue;
         }
 
@@ -6843,7 +7004,7 @@ function mergeRealtimeItemsWithLocalPending(ownerId, type, incomingItems, linkId
         });
     }
 
-    return sortItems(Array.from(mergedById.values()));
+    return sortItems(deduplicateItemsById(Array.from(mergedById.values())));
 }
 
 function readRealtimeChangedAtToken(eventPayload) {
