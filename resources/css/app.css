@@ -443,6 +443,40 @@
         box-shadow: none;
     }
 
+    .auth-flat-page {
+        background: var(--bg-base);
+    }
+
+    .auth-flat-page::before {
+        display: none;
+        background: none;
+    }
+
+    .auth-flat-page .auth-flat-card {
+        background: var(--bg-surface);
+        border-color: var(--border-surface);
+        box-shadow: none;
+        color: var(--ink);
+    }
+
+    .auth-flat-page .auth-flat-card .app-brand {
+        color: var(--ink);
+    }
+
+    .auth-flat-page .auth-flat-card .auth-flat-card-meta {
+        color: var(--ink-muted);
+    }
+
+    .auth-flat-page .app-button-primary {
+        background: var(--accent);
+        box-shadow: none;
+    }
+
+    .auth-flat-page .app-button-primary:hover,
+    .auth-flat-page .app-button-primary:active {
+        filter: none;
+    }
+
     @media (prefers-reduced-motion: reduce) {
         .app-button-primary,
         .app-button-secondary,

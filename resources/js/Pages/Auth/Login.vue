@@ -1,4 +1,5 @@
 <script setup>
+import Checkbox from '@/Components/Checkbox.vue';
 import GuestLayout from '@/Layouts/GuestLayout.vue';
 import { Head, Link, useForm } from '@inertiajs/vue3';
 
@@ -12,6 +13,7 @@ defineProps({
 const form = useForm({
     email: '',
     password: '',
+    remember: true,
 });
 
 const submit = () => {
@@ -73,6 +75,11 @@ const submit = () => {
                         {{ form.errors.password }}
                     </p>
                 </div>
+
+                <label class="inline-flex items-center gap-2 text-sm text-[#bcb7ba]">
+                    <Checkbox v-model:checked="form.remember" />
+                    <span>Remember me</span>
+                </label>
 
                 <button
                     type="submit"
