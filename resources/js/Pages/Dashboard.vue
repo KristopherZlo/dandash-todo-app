@@ -87,33 +87,6 @@ const appVersion = computed(() => String(page.props.meta?.app_version ?? 'dev'))
 const buildVersion = computed(() => String(page.props.meta?.build_version ?? 'dev'));
 
 const TOUCH_DRAG_HOLD_DELAY_MS = 500;
-const SAFARI_DRAG_FALLBACK_TOLERANCE_PX = 8;
-const SAFARI_DRAG_ANIMATION_MS = 0;
-const DEFAULT_DRAG_ANIMATION_MS = 220;
-
-function detectSafariBrowser() {
-    if (typeof navigator === 'undefined') {
-        return false;
-    }
-
-    const userAgent = String(navigator.userAgent ?? '');
-    const vendor = String(navigator.vendor ?? '');
-
-    if (!/Safari/i.test(userAgent) || !/Apple/i.test(vendor)) {
-        return false;
-    }
-
-    return !/(CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser|SamsungBrowser|UCBrowser|Chrome|Chromium|Android)/i.test(userAgent);
-}
-
-const isSafariBrowser = detectSafariBrowser();
-const dragAnimationMs = isSafariBrowser
-    ? SAFARI_DRAG_ANIMATION_MS
-    : DEFAULT_DRAG_ANIMATION_MS;
-const dragFallbackTolerancePx = isSafariBrowser
-    ? SAFARI_DRAG_FALLBACK_TOLERANCE_PX
-    : 0;
-
 const {
     activeTab,
     themeMode,
@@ -888,7 +861,7 @@ const SOUND_POOL_LIMIT_PER_KEY = 6;
 const SOUND_SKIP_MUTE_MS = 3000;
 const ITEM_DELETE_TOMBSTONE_TTL_MS = 180000;
 const ITEM_DELETE_TOMBSTONE_SERVER_SKEW_MS = 1500;
-const LOCAL_LIST_MUTATION_HOLD_MS = 8000;
+const LOCAL_LIST_MUTATION_HOLD_MS = 2000;
 const PRODUCTIVITY_DUST_MAX_PARTICLES = 50;
 const PRODUCTIVITY_DUST_MIN_OPACITY = 0.1;
 const PRODUCTIVITY_DUST_MAX_OPACITY = 0.75;
@@ -1769,6 +1742,7 @@ function setKnownServerListVersion(ownerId, type, listVersion, linkId = undefine
     }
 
     listServerVersions.set(versionKey, normalizedVersion);
+    recentLocalMutationsByList.delete(listMutationGuardKey(ownerId, type, linkId));
 }
 
 function listMutationGuardKey(ownerId, type, linkId = undefined) {
@@ -1782,7 +1756,16 @@ function markListMutated(ownerId, type, linkId = undefined, atMs = Date.now()) {
         return;
     }
 
+    if (mutationAtMs <= 0) {
+        recentLocalMutationsByList.delete(listMutationGuardKey(ownerId, type, linkId));
+        return;
+    }
+
     recentLocalMutationsByList.set(listMutationGuardKey(ownerId, type, linkId), mutationAtMs);
+}
+
+function clearRecentListMutation(ownerId, type, linkId = undefined) {
+    recentLocalMutationsByList.delete(listMutationGuardKey(ownerId, type, linkId));
 }
 
 function hasRecentListMutation(ownerId, type, linkId = undefined, nowMs = Date.now()) {
@@ -2681,7 +2664,7 @@ function setVisibleItems(type, items) {
     const nextItems = cloneItems(items);
 
     if (type === 'product') {
-        if (areItemsEquivalent(productItems.value, nextItems, { normalizeLinkId })) {
+        if (areItemsEquivalent(productItems.value, nextItems)) {
             return;
         }
 
@@ -2689,7 +2672,7 @@ function setVisibleItems(type, items) {
         return;
     }
 
-    if (areItemsEquivalent(todoItems.value, nextItems, { normalizeLinkId })) {
+    if (areItemsEquivalent(todoItems.value, nextItems)) {
         return;
     }
 
@@ -2787,9 +2770,9 @@ function readFilteredServerItems(ownerId, type, items, linkId = undefined) {
 function writeListToCache(ownerId, type, items, linkId = undefined) {
     const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
     const key = listCacheKey(ownerId, type, resolvedLinkId);
-    const normalized = sortItems(deduplicateItemsById(items));
+    const normalized = sortItems(items);
     const previous = Array.isArray(cachedItemsByList.value[key]) ? cachedItemsByList.value[key] : [];
-    const cacheChanged = !areItemsEquivalent(previous, normalized, { normalizeLinkId });
+    const cacheChanged = !areItemsEquivalent(previous, normalized);
 
     clearDeletedTombstonesForItems(ownerId, type, normalized, resolvedLinkId);
 
@@ -5766,6 +5749,7 @@ async function loadItems(type, showErrors = false, ownerIdOverride = null, linkI
 
         writeListToCache(ownerId, type, filteredItems, linkId);
         setKnownServerListVersion(ownerId, type, response.data?.list_version, linkId);
+        clearRecentListMutation(ownerId, type, linkId);
     } catch (error) {
         if (isConnectivityError(error)) {
             assignCached();
@@ -7199,6 +7183,7 @@ function subscribeListChannel(ownerId) {
         const filteredItems = readFilteredServerItems(eventOwnerId, type, mergedItems, eventLinkId);
         writeListToCache(eventOwnerId, type, filteredItems, eventLinkId);
         setKnownServerListVersion(eventOwnerId, type, readRealtimeListVersion(eventPayload), eventLinkId);
+        clearRecentListMutation(eventOwnerId, type, eventLinkId);
     });
 }
 
@@ -7402,7 +7387,7 @@ onBeforeUnmount(() => {
 <template>
     <Head title="Dandash" />
 
-    <div class="min-h-screen bg-[#19181a] text-[#fcfcfa]" :class="{ 'safari-stability-mode': isSafariBrowser }">
+    <div class="min-h-screen bg-[#19181a] text-[#fcfcfa]">
         <div class="mx-auto flex min-h-screen w-full max-w-md flex-col px-4 pb-36 pt-4">
 
             <div
@@ -7559,11 +7544,7 @@ onBeforeUnmount(() => {
                     ghost-class="drag-ghost"
                     chosen-class="drag-chosen"
                     drag-class="drag-dragging"
-                    :animation="dragAnimationMs"
-                    :force-fallback="isSafariBrowser"
-                    :fallback-on-body="isSafariBrowser"
-                    :fallback-tolerance="dragFallbackTolerancePx"
-                    :remove-clone-on-hide="true"
+                    :animation="220"
                     class="space-y-3"
                     @end="onItemsReorder('product', $event)"
                 >
@@ -7713,11 +7694,7 @@ onBeforeUnmount(() => {
                     ghost-class="drag-ghost"
                     chosen-class="drag-chosen"
                     drag-class="drag-dragging"
-                    :animation="dragAnimationMs"
-                    :force-fallback="isSafariBrowser"
-                    :fallback-on-body="isSafariBrowser"
-                    :fallback-tolerance="dragFallbackTolerancePx"
-                    :remove-clone-on-hide="true"
+                    :animation="220"
                     class="space-y-3"
                     @end="onItemsReorder('todo', $event)"
                 >
@@ -9302,7 +9279,6 @@ onBeforeUnmount(() => {
     cursor: grab;
     user-select: none;
     -webkit-user-select: none;
-    -webkit-user-drag: none;
     touch-action: none;
 }
 
@@ -9329,20 +9305,6 @@ onBeforeUnmount(() => {
 
 .drag-dragging {
     opacity: 0.92;
-}
-
-.safari-stability-mode .drag-item-shell {
-    transition: none;
-}
-
-.safari-stability-mode .item-added-pop,
-.safari-stability-mode .drag-chosen,
-.safari-stability-mode .batch-remove-fly {
-    animation: none;
-}
-
-.safari-stability-mode :deep(.swipe-item-card) {
-    transition-duration: 0.01ms;
 }
 
 @keyframes drag-ready-glow {
