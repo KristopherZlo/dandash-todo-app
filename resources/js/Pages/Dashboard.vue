@@ -18,6 +18,13 @@ import {
     findRealtimeMatchForPendingCreate,
 } from '@/modules/dashboard/realtimeListMerge';
 import {
+    filterSuggestionStatsEntries,
+    paginateSuggestionStatsEntries,
+    parseSuggestionIntervalPresetValue,
+    SUGGESTION_INTERVAL_PRESETS,
+    suggestionIntervalPresetValueForEntry,
+} from '@/modules/dashboard/suggestionStats';
+import {
     getTodoPriority,
     inferTodoPriorityFromDueAt,
     nextTodoPriority,
@@ -184,10 +191,24 @@ const productStatsSummary = ref({
 const productSuggestionStatsLoading = ref(false);
 const resettingSuggestionKeys = ref([]);
 const recentlyResetSuggestionKeys = ref([]);
+const savingSuggestionSettingsKeys = ref([]);
+const suggestionStatsSearchQuery = ref('');
+const suggestionStatsView = ref('active');
+const suggestionStatsPage = ref(1);
 const suggestionResetSuccessTimers = new Map();
 const suggestionResetRemovalTimers = new Map();
 const actionButtonSuccessState = ref({});
 const actionButtonSuccessTimers = new Map();
+
+const filteredSuggestionStats = computed(() => (
+    filterSuggestionStatsEntries(productSuggestionStats.value, {
+        view: suggestionStatsView.value,
+        query: suggestionStatsSearchQuery.value,
+    })
+));
+const pagedSuggestionStats = computed(() => (
+    paginateSuggestionStatsEntries(filteredSuggestionStats.value, suggestionStatsPage.value)
+));
 
 const {
     toasts,
@@ -3560,6 +3581,13 @@ function queueSuggestionReset(ownerId, type, suggestionKey, linkId = undefined) 
     }
 
     const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    offlineQueue.value = offlineQueue.value.filter((operation) => !(
+        operation.action === 'update_suggestion_settings'
+        && matchesScopedOperation(operation, ownerId, type, resolvedLinkId)
+        && String(operation?.payload?.suggestion_key ?? '') === normalizedKey
+    ));
+    persistQueue();
+
     const existingIndex = findQueueIndexFromEnd(
         (operation) =>
             operation.action === 'reset_suggestion'
@@ -3579,6 +3607,53 @@ function queueSuggestionReset(ownerId, type, suggestionKey, linkId = undefined) 
         payload: {
             suggestion_key: normalizedKey,
         },
+    });
+}
+
+function queueSuggestionSettingsUpdate(ownerId, type, suggestionKey, payload, linkId = undefined) {
+    const normalizedKey = String(suggestionKey ?? '').trim();
+    if (normalizedKey === '') {
+        return;
+    }
+
+    const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
+    const normalizedPayload = {
+        suggestion_key: normalizedKey,
+    };
+
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'custom_interval_seconds')) {
+        normalizedPayload.custom_interval_seconds = payload.custom_interval_seconds ?? null;
+    }
+
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'ignored')) {
+        normalizedPayload.ignored = Boolean(payload.ignored);
+    }
+
+    const existingIndex = findQueueIndexFromEnd(
+        (operation) =>
+            operation.action === 'update_suggestion_settings'
+            && matchesScopedOperation(operation, ownerId, type, resolvedLinkId)
+            && String(operation?.payload?.suggestion_key ?? '') === normalizedKey,
+    );
+
+    if (existingIndex !== -1 && !isOperationBeingSynced(offlineQueue.value[existingIndex]?.op_id)) {
+        offlineQueue.value[existingIndex] = {
+            ...offlineQueue.value[existingIndex],
+            payload: {
+                ...offlineQueue.value[existingIndex]?.payload,
+                ...normalizedPayload,
+            },
+        };
+        persistQueue();
+        return;
+    }
+
+    enqueueOperation({
+        action: 'update_suggestion_settings',
+        owner_id: Number(ownerId),
+        link_id: resolvedLinkId,
+        type: String(type),
+        payload: normalizedPayload,
     });
 }
 
@@ -4776,6 +4851,7 @@ function shouldDropOperationOnClientError(operation, statusCode) {
     return [
         'dismiss_suggestion',
         'reset_suggestion',
+        'update_suggestion_settings',
         'set_default_owner',
         'send_invitation',
         'accept_invitation',
@@ -5157,6 +5233,20 @@ function applySuccessfulSyncedOperation(operation, resultData) {
 
     if (action === 'reorder') {
         applyAckListVersion();
+        return;
+    }
+
+    if (action === 'update_suggestion_settings') {
+        if (resultData?.state && typeof resultData.state === 'object') {
+            applySuggestionStateToStatsCache(
+                operation.owner_id,
+                operation.type,
+                resultData.state.suggestion_key ?? operation?.payload?.suggestion_key ?? '',
+                resultData.state,
+                operation.link_id,
+            );
+            loadSuggestions(operation.type).catch(() => {});
+        }
         return;
     }
 
@@ -5880,7 +5970,7 @@ async function loadSuggestionStats(type = suggestionStatsType.value, showErrors 
                 owner_id: ownerId,
                 link_id: linkId,
                 type: normalizedType,
-                limit: 50,
+                limit: 200,
             },
         }));
         writeSuggestionStatsToCache(ownerId, normalizedType, response.data ?? {}, linkId);
@@ -5933,6 +6023,108 @@ function formatProductStatsSummaryNumber(value) {
     }
 
     return new Intl.NumberFormat('ru-RU').format(Math.round(numeric));
+}
+
+function suggestionSettingsSuccessKey(suggestionKey, mode = 'settings') {
+    return `suggestion-settings:${String(mode ?? 'settings').trim()}:${String(suggestionKey ?? '').trim()}`;
+}
+
+function isSavingSuggestionSettings(suggestionKey) {
+    return savingSuggestionSettingsKeys.value.includes(String(suggestionKey ?? '').trim());
+}
+
+function setSuggestionSettingsSaving(suggestionKey, active) {
+    const normalizedKey = String(suggestionKey ?? '').trim();
+    if (normalizedKey === '') {
+        return;
+    }
+
+    if (active) {
+        if (!savingSuggestionSettingsKeys.value.includes(normalizedKey)) {
+            savingSuggestionSettingsKeys.value = [...savingSuggestionSettingsKeys.value, normalizedKey];
+        }
+        return;
+    }
+
+    savingSuggestionSettingsKeys.value = savingSuggestionSettingsKeys.value.filter((key) => key !== normalizedKey);
+}
+
+function suggestionStatsViewCount(view) {
+    return filterSuggestionStatsEntries(productSuggestionStats.value, {
+        view,
+        query: '',
+    }).length;
+}
+
+function changeSuggestionStatsView(view) {
+    suggestionStatsView.value = view;
+    suggestionStatsPage.value = 1;
+}
+
+function goToSuggestionStatsPage(page) {
+    const totalPages = Math.max(1, Number(pagedSuggestionStats.value?.totalPages) || 1);
+    suggestionStatsPage.value = Math.min(
+        totalPages,
+        Math.max(1, Math.floor(Number(page) || 1)),
+    );
+}
+
+function formatSuggestionStatsEffectiveInterval(entry) {
+    return formatProductStatsInterval(
+        entry?.custom_interval_seconds
+            ?? entry?.effective_interval_seconds
+            ?? entry?.average_interval_seconds
+            ?? null,
+    );
+}
+
+function applySuggestionStateToStatsCache(ownerId, statsType, suggestionKey, nextState, linkId) {
+    const normalizedKey = String(suggestionKey ?? '').trim();
+    if (normalizedKey === '') {
+        return;
+    }
+
+    const normalizedType = normalizeSuggestionStatsType(statsType);
+    const cachedPayload = readSuggestionStatsFromCache(ownerId, normalizedType, linkId);
+    cachedPayload.stats = cachedPayload.stats.map((statsEntry) => {
+        if (String(statsEntry?.suggestion_key ?? '') !== normalizedKey) {
+            return statsEntry;
+        }
+
+        const averageIntervalSeconds = Number(statsEntry?.average_interval_seconds);
+        const customIntervalSeconds = nextState?.custom_interval_seconds !== undefined
+            ? nextState.custom_interval_seconds
+            : statsEntry?.custom_interval_seconds;
+        const effectiveIntervalSeconds = customIntervalSeconds ?? (
+            Number.isFinite(averageIntervalSeconds) && averageIntervalSeconds > 0
+                ? averageIntervalSeconds
+                : null
+        );
+
+        return {
+            ...statsEntry,
+            dismissed_count: nextState?.dismissed_count ?? statsEntry?.dismissed_count ?? 0,
+            hidden_until: nextState?.hidden_until ?? statsEntry?.hidden_until ?? null,
+            retired_at: nextState?.retired_at ?? null,
+            reset_at: nextState?.reset_at ?? statsEntry?.reset_at ?? null,
+            custom_interval_seconds: customIntervalSeconds ?? null,
+            effective_interval_seconds: effectiveIntervalSeconds,
+        };
+    });
+
+    writeSuggestionStatsToCache(ownerId, normalizedType, cachedPayload, linkId);
+}
+
+function removeSuggestionFromSuggestionsCache(ownerId, type, suggestionKey, linkId) {
+    const normalizedKey = String(suggestionKey ?? '').trim();
+    if (normalizedKey === '') {
+        return;
+    }
+
+    const filteredSuggestions = readSuggestionsFromCache(ownerId, type, linkId).filter(
+        (suggestion) => String(suggestion?.suggestion_key ?? '') !== normalizedKey,
+    );
+    writeSuggestionsToCache(ownerId, type, filteredSuggestions, linkId);
 }
 
 function isResettingSuggestionKey(suggestionKey) {
@@ -6006,8 +6198,98 @@ function suggestionStatsCount(type) {
 }
 
 async function openSuggestionStatsModal(type = 'product') {
+    suggestionStatsSearchQuery.value = '';
+    suggestionStatsView.value = 'active';
+    suggestionStatsPage.value = 1;
     productStatsModalOpen.value = true;
     await loadSuggestionStats(type, false);
+}
+
+async function updateSuggestionStatsRowSettings(entry, payload, options = {}) {
+    const suggestionKey = String(entry?.suggestion_key ?? '').trim();
+    if (!suggestionKey || isSavingSuggestionSettings(suggestionKey)) {
+        return;
+    }
+
+    const {
+        successMessage = '',
+        successMode = 'settings',
+        removeFromSuggestions = false,
+    } = options;
+
+    const ownerId = Number(selectedOwnerId.value);
+    const linkId = selectedListLinkId.value;
+    const statsType = normalizeSuggestionStatsType(suggestionStatsType.value);
+    const currentCustomIntervalSeconds = entry?.custom_interval_seconds ?? null;
+    const currentIgnored = String(entry?.retired_at ?? '').trim() !== '';
+    const hasCustomIntervalOverride = Object.prototype.hasOwnProperty.call(payload ?? {}, 'custom_interval_seconds');
+    const hasIgnoredOverride = Object.prototype.hasOwnProperty.call(payload ?? {}, 'ignored');
+    const nextCustomIntervalSeconds = hasCustomIntervalOverride
+        ? payload.custom_interval_seconds ?? null
+        : currentCustomIntervalSeconds;
+    const nextIgnored = hasIgnoredOverride
+        ? Boolean(payload.ignored)
+        : currentIgnored;
+    const statePatch = {
+        dismissed_count: hasIgnoredOverride ? 0 : (entry?.dismissed_count ?? 0),
+        hidden_until: hasIgnoredOverride ? null : (entry?.hidden_until ?? null),
+        retired_at: hasIgnoredOverride
+            ? (nextIgnored ? new Date().toISOString() : null)
+            : (entry?.retired_at ?? null),
+        custom_interval_seconds: nextCustomIntervalSeconds ?? null,
+    };
+
+    setSuggestionSettingsSaving(suggestionKey, true);
+    try {
+        applySuggestionStateToStatsCache(ownerId, statsType, suggestionKey, statePatch, linkId);
+
+        if (removeFromSuggestions || (hasIgnoredOverride && nextIgnored)) {
+            removeSuggestionFromSuggestionsCache(ownerId, statsType, suggestionKey, linkId);
+        }
+
+        const queuedPayload = { ...payload };
+        if (hasCustomIntervalOverride) {
+            queuedPayload.custom_interval_seconds = nextCustomIntervalSeconds;
+        }
+        if (hasIgnoredOverride) {
+            queuedPayload.ignored = nextIgnored;
+        }
+
+        queueSuggestionSettingsUpdate(ownerId, statsType, suggestionKey, queuedPayload, linkId);
+        await syncOfflineQueue();
+
+        if (successMessage) {
+            showStatus(successMessage);
+        }
+        markActionButtonSuccess(suggestionSettingsSuccessKey(suggestionKey, successMode), 1400);
+    } finally {
+        setSuggestionSettingsSaving(suggestionKey, false);
+    }
+}
+
+async function updateSuggestionStatsInterval(entry, rawValue) {
+    const nextCustomIntervalSeconds = parseSuggestionIntervalPresetValue(rawValue);
+
+    await updateSuggestionStatsRowSettings(entry, {
+        custom_interval_seconds: nextCustomIntervalSeconds,
+    }, {
+        successMessage: nextCustomIntervalSeconds === null
+            ? '\u0418\u043d\u0442\u0435\u0440\u0432\u0430\u043b \u043f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0438 \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0451\u043d \u0432 \u0430\u0432\u0442\u043e-\u0440\u0435\u0436\u0438\u043c.'
+            : '\u0418\u043d\u0442\u0435\u0440\u0432\u0430\u043b \u043f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0438 \u043e\u0431\u043d\u043e\u0432\u043b\u0451\u043d.',
+        successMode: 'interval',
+    });
+}
+
+async function toggleSuggestionStatsIgnored(entry, ignored) {
+    await updateSuggestionStatsRowSettings(entry, {
+        ignored,
+    }, {
+        successMessage: ignored
+            ? '\u0410\u0439\u0442\u0435\u043c \u043f\u0435\u0440\u0435\u043d\u0435\u0441\u0451\u043d \u0432 \u0438\u0433\u043d\u043e\u0440.'
+            : '\u0410\u0439\u0442\u0435\u043c \u0432\u0435\u0440\u043d\u0443\u0442 \u0432 \u0430\u043a\u0442\u0438\u0432\u043d\u044b\u0435.',
+        successMode: ignored ? 'ignore' : 'restore',
+        removeFromSuggestions: ignored,
+    });
 }
 
 async function resetSuggestionStatsRow(entry) {
@@ -7013,6 +7295,17 @@ watch(activeTab, async (tab) => {
 
     if (tab === 'profile') {
         await loadSuggestionStats(suggestionStatsType.value);
+    }
+});
+
+watch([suggestionStatsSearchQuery, suggestionStatsView, suggestionStatsType], () => {
+    suggestionStatsPage.value = 1;
+});
+
+watch(filteredSuggestionStats, (entries) => {
+    const totalPages = Math.max(1, Math.ceil(entries.length / SUGGESTION_STATS_PAGE_SIZE));
+    if (suggestionStatsPage.value > totalPages) {
+        suggestionStatsPage.value = totalPages;
     }
 });
 
@@ -8660,26 +8953,93 @@ onBeforeUnmount(() => {
                             {{ '\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u044f\u044f \u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u044c:' }} {{ formatProductStatsDate(productStatsSummary.last_activity_at) }}
                         </p>
                     </div>
-                    <p v-if="!productSuggestionStatsLoading && productSuggestionStats.length === 0" class="text-xs text-[#9f9a9d]">
-                        {{ suggestionStatsType === 'todo' ? '\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445 \u043f\u043e \u0434\u0435\u043b\u0430\u043c.' : '\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445 \u043f\u043e \u043f\u043e\u043a\u0443\u043f\u043a\u0430\u043c.' }}
+                    <div class="mb-3 space-y-2">
+                        <div class="relative">
+                            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7f7b7e]" />
+                            <input
+                                v-model="suggestionStatsSearchQuery"
+                                type="text"
+                                class="h-11 w-full rounded-xl border border-[#403e41] bg-[#221f22] pl-10 pr-3 text-sm text-[#fcfcfa] outline-none transition focus:border-[#fcfcfa]/45"
+                                :placeholder="suggestionStatsType === 'todo' ? '\u041f\u043e\u0438\u0441\u043a \u043f\u043e \u0434\u0435\u043b\u0430\u043c' : '\u041f\u043e\u0438\u0441\u043a \u043f\u043e \u043f\u043e\u043a\u0443\u043f\u043a\u0430\u043c'"
+                            >
+                        </div>
+
+                        <div class="flex items-center gap-2">
+                            <button
+                                type="button"
+                                class="inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition"
+                                :class="
+                                    suggestionStatsView === 'active'
+                                        ? 'border-[#fcfcfa]/40 bg-[#fcfcfa]/8 text-[#fcfcfa]'
+                                        : 'border-[#403e41] bg-[#221f22] text-[#bcb7ba]'
+                                "
+                                @click="changeSuggestionStatsView('active')"
+                            >
+                                <span>{{ '\u0410\u043a\u0442\u0438\u0432\u043d\u044b\u0435' }}</span>
+                                <span class="text-[11px] text-[#9f9a9d]">{{ suggestionStatsViewCount('active') }}</span>
+                            </button>
+                            <button
+                                type="button"
+                                class="inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition"
+                                :class="
+                                    suggestionStatsView === 'ignored'
+                                        ? 'border-[#fcfcfa]/40 bg-[#fcfcfa]/8 text-[#fcfcfa]'
+                                        : 'border-[#403e41] bg-[#221f22] text-[#bcb7ba]'
+                                "
+                                @click="changeSuggestionStatsView('ignored')"
+                            >
+                                <span>{{ '\u0418\u0433\u043d\u043e\u0440' }}</span>
+                                <span class="text-[11px] text-[#9f9a9d]">{{ suggestionStatsViewCount('ignored') }}</span>
+                            </button>
+                        </div>
+
+                        <div class="flex items-center justify-between text-[11px] text-[#9f9a9d]">
+                            <span>
+                                {{ suggestionStatsSearchQuery.trim() ? '\u041d\u0430\u0439\u0434\u0435\u043d\u043e' : '\u0412 \u0441\u043f\u0438\u0441\u043a\u0435' }}:
+                                {{ filteredSuggestionStats.length }}
+                            </span>
+                            <span>
+                                {{ '\u0421\u0442\u0440\u0430\u043d\u0438\u0446\u0430' }} {{ pagedSuggestionStats.page }} / {{ pagedSuggestionStats.totalPages }}
+                            </span>
+                        </div>
+                    </div>
+
+                    <p v-if="!productSuggestionStatsLoading && filteredSuggestionStats.length === 0" class="text-xs text-[#9f9a9d]">
+                        {{
+                            suggestionStatsSearchQuery.trim()
+                                ? '\u041d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e.'
+                                : (
+                                    suggestionStatsView === 'ignored'
+                                        ? '\u041f\u043e\u043a\u0430 \u0432 \u0438\u0433\u043d\u043e\u0440\u0435 \u043d\u0438\u0447\u0435\u0433\u043e \u043d\u0435\u0442.'
+                                        : (
+                                            suggestionStatsType === 'todo'
+                                                ? '\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445 \u043f\u043e \u0434\u0435\u043b\u0430\u043c.'
+                                                : '\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445 \u043f\u043e \u043f\u043e\u043a\u0443\u043f\u043a\u0430\u043c.'
+                                        )
+                                )
+                        }}
                     </p>
 
                     <TransitionGroup
-                        v-if="!productSuggestionStatsLoading && productSuggestionStats.length > 0"
+                        v-if="!productSuggestionStatsLoading && filteredSuggestionStats.length > 0"
                         name="item"
                         tag="div"
                         class="flex-1 space-y-2 overflow-y-auto"
                     >
                         <div
-                            v-for="entry in productSuggestionStats"
+                            v-for="entry in pagedSuggestionStats.items"
                             :key="`stats-modal-${entry.suggestion_key}`"
                             class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-3"
                         >
                             <div class="flex items-start justify-between gap-3">
                                 <div class="min-w-0">
                                     <p class="truncate text-sm font-semibold text-[#fcfcfa]">{{ entry.text }}</p>
-                                    <p class="mt-1 text-[11px] text-[#9f9a9d]">{{ entry.occurrences }} {{ '\u0440\u0430\u0437' }} / {{ '\u0441\u0440.' }} {{ formatProductStatsInterval(entry.average_interval_seconds) }}</p>
-                                    <p class="text-[11px] text-[#9f9a9d]">
+                                    <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[#9f9a9d]">
+                                        <span>{{ entry.occurrences }} {{ '\u0440\u0430\u0437' }}</span>
+                                        <span>{{ '\u0410\u0432\u0442\u043e:' }} {{ formatProductStatsInterval(entry.average_interval_seconds) }}</span>
+                                        <span>{{ '\u0421\u0435\u0439\u0447\u0430\u0441:' }} {{ formatSuggestionStatsEffectiveInterval(entry) }}</span>
+                                    </div>
+                                    <p class="mt-1 text-[11px] text-[#9f9a9d]">
                                         {{ suggestionStatsType === 'todo' ? '\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0435\u0435 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435:' : '\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u044f\u044f \u043f\u043e\u043a\u0443\u043f\u043a\u0430:' }} {{ formatProductStatsDate(entry.last_completed_at) }}
                                     </p>
                                 </div>
@@ -8692,18 +9052,83 @@ onBeforeUnmount(() => {
                                             ? 'border-[#56b982]/60 bg-[#56b982]/18 text-[#56b982]'
                                             : 'border-[#ee5c81]/55 bg-[#ee5c81]/12 text-[#ee5c81] hover:border-[#ee5c81]'
                                     "
-                                    :disabled="isResettingSuggestionKey(entry.suggestion_key)"
+                                    :disabled="isResettingSuggestionKey(entry.suggestion_key) || isSavingSuggestionSettings(entry.suggestion_key)"
                                     @click="resetSuggestionStatsRow(entry)"
                                 >
                                     {{
                                         isResettingSuggestionKey(entry.suggestion_key)
                                             ? '...'
-                                            : (isSuggestionResetDone(entry.suggestion_key) ? 'Сброшено' : '\u0421\u0431\u0440\u043e\u0441\u0438\u0442\u044c')
+                                            : (isSuggestionResetDone(entry.suggestion_key) ? 'Сброшено' : '\u0421\u0431\u0440\u043e\u0441')
                                     }}
                                 </button>
                             </div>
+
+                            <div class="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                                <label class="min-w-0">
+                                    <span class="mb-1 block text-[11px] text-[#9f9a9d]">{{ '\u041a\u043e\u0433\u0434\u0430 \u043f\u0440\u0435\u0434\u043b\u0430\u0433\u0430\u0442\u044c' }}</span>
+                                    <select
+                                        class="h-10 w-full rounded-xl border border-[#403e41] bg-[#2d2a2c] px-3 text-sm text-[#fcfcfa] outline-none transition focus:border-[#fcfcfa]/45 disabled:cursor-not-allowed disabled:opacity-60"
+                                        :disabled="isSavingSuggestionSettings(entry.suggestion_key) || isResettingSuggestionKey(entry.suggestion_key)"
+                                        :value="suggestionIntervalPresetValueForEntry(entry)"
+                                        @change="updateSuggestionStatsInterval(entry, $event.target.value)"
+                                    >
+                                        <option
+                                            v-for="preset in SUGGESTION_INTERVAL_PRESETS"
+                                            :key="`suggestion-interval-${preset.value}`"
+                                            :value="preset.value"
+                                        >
+                                            {{ preset.label }}
+                                        </option>
+                                    </select>
+                                </label>
+
+                                <div class="flex items-end">
+                                    <button
+                                        type="button"
+                                        class="h-10 rounded-xl border px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
+                                        :class="
+                                            suggestionStatsView === 'ignored'
+                                                ? 'border-[#56b982]/50 bg-[#56b982]/12 text-[#56b982]'
+                                                : 'border-[#5b7fff]/45 bg-[#5b7fff]/12 text-[#d8e7ff]'
+                                        "
+                                        :disabled="isSavingSuggestionSettings(entry.suggestion_key) || isResettingSuggestionKey(entry.suggestion_key)"
+                                        @click="toggleSuggestionStatsIgnored(entry, suggestionStatsView !== 'ignored')"
+                                    >
+                                        {{
+                                            isSavingSuggestionSettings(entry.suggestion_key)
+                                                ? '...'
+                                                : (suggestionStatsView === 'ignored' ? '\u0412\u0435\u0440\u043d\u0443\u0442\u044c' : '\u0418\u0433\u043d\u043e\u0440')
+                                        }}
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     </TransitionGroup>
+
+                    <div
+                        v-if="!productSuggestionStatsLoading && filteredSuggestionStats.length > SUGGESTION_STATS_PAGE_SIZE"
+                        class="mt-3 flex items-center justify-between border-t border-[#403e41] pt-3"
+                    >
+                        <button
+                            type="button"
+                            class="rounded-xl border border-[#403e41] bg-[#221f22] px-3 py-2 text-sm font-semibold text-[#fcfcfa] transition disabled:cursor-not-allowed disabled:opacity-45"
+                            :disabled="pagedSuggestionStats.page <= 1"
+                            @click="goToSuggestionStatsPage(pagedSuggestionStats.page - 1)"
+                        >
+                            {{ '\u041d\u0430\u0437\u0430\u0434' }}
+                        </button>
+                        <span class="text-[11px] text-[#9f9a9d]">
+                            {{ '\u041f\u043e\u043a\u0430\u0437\u0430\u043d\u043e' }} {{ pagedSuggestionStats.items.length }} / {{ filteredSuggestionStats.length }}
+                        </span>
+                        <button
+                            type="button"
+                            class="rounded-xl border border-[#403e41] bg-[#221f22] px-3 py-2 text-sm font-semibold text-[#fcfcfa] transition disabled:cursor-not-allowed disabled:opacity-45"
+                            :disabled="pagedSuggestionStats.page >= pagedSuggestionStats.totalPages"
+                            @click="goToSuggestionStatsPage(pagedSuggestionStats.page + 1)"
+                        >
+                            {{ '\u0412\u043f\u0435\u0440\u0451\u0434' }}
+                        </button>
+                    </div>
                 </div>
             </div>
         </Transition>
