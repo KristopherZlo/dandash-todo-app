@@ -2814,7 +2814,12 @@ async function flushBlockedSuggestionRefreshes() {
         return;
     }
 
+    const blockedTypes = Array.from(blockedSuggestionRefreshTypes);
     blockedSuggestionRefreshTypes.clear();
+
+    await Promise.all(
+        blockedTypes.map((type) => loadSuggestions(type).catch(() => {})),
+    );
 }
 
 function hasPendingDeleteIntent(ownerId, type, itemId, linkId = undefined) {
@@ -7062,7 +7067,7 @@ watch(themeMode, (mode) => {
 watch(
     () => isWhiteCardAnimationActive(),
     (isActive, wasActive) => {
-        if (!isActive || !wasActive) {
+        if (isActive || !wasActive) {
             return;
         }
 
