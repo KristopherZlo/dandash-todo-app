@@ -3325,7 +3325,6 @@ function queueCreate(ownerId, type, item, linkId = undefined) {
         item_id: Number(item.id),
         payload: {
             text: item.text,
-            sort_order: normalizeSortOrderValue(item.sort_order, 1000),
             quantity: item.quantity ?? null,
             unit: item.unit ?? null,
             due_at: item.due_at ?? null,

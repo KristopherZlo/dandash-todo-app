@@ -53,42 +53,14 @@ class ListItemSyncChunkActionHandler implements SyncChunkActionHandler
             'link_id' => $this->normalizeNullablePositiveInteger($operation['link_id'] ?? null),
             'type' => $type,
             'text' => (string) ($payload['text'] ?? ''),
+            'is_completed' => (bool) ($payload['is_completed'] ?? false),
             'quantity' => $type === ListItem::TYPE_PRODUCT ? ($payload['quantity'] ?? null) : null,
             'unit' => $type === ListItem::TYPE_PRODUCT ? ($payload['unit'] ?? null) : null,
             'due_at' => $type === ListItem::TYPE_TODO ? ($payload['due_at'] ?? null) : null,
             'priority' => $type === ListItem::TYPE_TODO ? ($payload['priority'] ?? null) : null,
         ]);
 
-        $storeData = $this->listItemApiService->store($storeRequest);
-        $createdItem = is_array($storeData['item'] ?? null) ? $storeData['item'] : null;
-        $listVersion = (int) ($storeData['list_version'] ?? 0);
-
-        if (! $createdItem) {
-            return [];
-        }
-
-        if ((bool) ($payload['is_completed'] ?? false)) {
-            $createdItemId = (int) ($createdItem['id'] ?? 0);
-            if ($createdItemId > 0) {
-                $updatedData = $this->listItemApiService->update(
-                    $this->requestFactory->make($request, ['is_completed' => true]),
-                    ListItem::query()->findOrFail($createdItemId),
-                );
-                $updatedItem = is_array($updatedData['item'] ?? null) ? $updatedData['item'] : null;
-                $updatedListVersion = (int) ($updatedData['list_version'] ?? 0);
-                if ($updatedListVersion > 0) {
-                    $listVersion = $updatedListVersion;
-                }
-                if ($updatedItem) {
-                    $createdItem = $updatedItem;
-                }
-            }
-        }
-
-        return [
-            'item' => $createdItem,
-            'list_version' => $listVersion > 0 ? $listVersion : null,
-        ];
+        return $this->listItemApiService->store($storeRequest);
     }
 
     private function handleUpdateOperation(Request $request, array $operation): array

@@ -68,6 +68,7 @@ class ListItemApiService
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
             'link_id' => ['nullable', 'integer', 'exists:list_links,id'],
             'text' => ['required', 'string', 'max:255'],
+            'is_completed' => ['sometimes', 'boolean'],
             'quantity' => ['nullable', 'numeric', 'min:0.01', 'max:99999999.99'],
             'unit' => ['nullable', 'string', 'max:24'],
             'due_at' => ['nullable', 'date'],
@@ -79,6 +80,7 @@ class ListItemApiService
         $linkId = isset($validated['link_id']) ? (int) $validated['link_id'] : null;
 
         $context = $this->accessService->resolveCreateContext($request, $ownerId, $linkId);
+        $isCompleted = (bool) ($validated['is_completed'] ?? false);
         $quantity = $type === ListItem::TYPE_PRODUCT
             ? $this->inputNormalizer->normalizeQuantity($validated['quantity'] ?? null)
             : null;
@@ -88,7 +90,9 @@ class ListItemApiService
             'list_link_id' => $context->linkId,
             'type' => $type,
             'text' => trim($validated['text']),
-            'sort_order' => $this->orderingService->nextSortOrder($context->ownerId, $type, false, $context->linkId),
+            'sort_order' => $this->orderingService->nextSortOrder($context->ownerId, $type, $isCompleted, $context->linkId),
+            'is_completed' => $isCompleted,
+            'completed_at' => $isCompleted ? now() : null,
             'quantity' => $quantity,
             'unit' => $type === ListItem::TYPE_PRODUCT
                 ? $this->inputNormalizer->normalizeUnit($quantity !== null ? ($validated['unit'] ?? null) : null)
@@ -101,6 +105,9 @@ class ListItemApiService
             'updated_by_id' => $request->user()->id,
         ]);
         $this->listItemSuggestionService->recordAddedEvent($item);
+        if ($isCompleted) {
+            $this->listItemSuggestionService->recordCompletedEvent($item);
+        }
         $listVersion = $this->listSyncVersionService->bumpVersion(
             (int) $item->owner_id,
             (string) $item->type,

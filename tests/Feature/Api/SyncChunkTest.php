@@ -174,7 +174,7 @@ class SyncChunkTest extends TestCase
 
         $this->assertGreaterThan(0, $createdItemId);
         $this->assertNotNull($resultData['item']['completed_at'] ?? null);
-        $this->assertGreaterThan(0, (int) ($resultData['list_version'] ?? 0));
+        $this->assertSame(1, (int) ($resultData['list_version'] ?? 0));
 
         $this->assertDatabaseHas('list_items', [
             'id' => $createdItemId,
