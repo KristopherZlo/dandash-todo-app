@@ -113,6 +113,7 @@ class SyncChunkTest extends TestCase
                     'item_id' => -10,
                     'payload' => [
                         'text' => 'Eggs',
+                        'client_request_id' => 'req-eggs-1',
                     ],
                 ],
             ],
@@ -126,6 +127,7 @@ class SyncChunkTest extends TestCase
 
         $firstCreatedId = (int) ($firstResponse['results'][0]['data']['item']['id'] ?? 0);
         $this->assertGreaterThan(0, $firstCreatedId);
+        $this->assertSame('req-eggs-1', $firstResponse['results'][0]['data']['item']['client_request_id'] ?? null);
 
         $secondResponse = $this->actingAs($user)
             ->postJson('/api/sync/chunk', $payload)
@@ -135,6 +137,7 @@ class SyncChunkTest extends TestCase
 
         $secondCreatedId = (int) ($secondResponse['results'][0]['data']['item']['id'] ?? 0);
         $this->assertSame($firstCreatedId, $secondCreatedId);
+        $this->assertSame('req-eggs-1', $secondResponse['results'][0]['data']['item']['client_request_id'] ?? null);
 
         $this->assertSame(1, ListItem::query()
             ->where('owner_id', $user->id)
@@ -157,6 +160,7 @@ class SyncChunkTest extends TestCase
                     'item_id' => -200,
                     'payload' => [
                         'text' => 'Mayonnaise',
+                        'client_request_id' => 'req-create-completed-1',
                         'is_completed' => true,
                     ],
                 ],
@@ -167,6 +171,7 @@ class SyncChunkTest extends TestCase
             ->assertJsonPath('results.0.op_id', 'op-create-completed-1')
             ->assertJsonPath('results.0.status', 'ok')
             ->assertJsonPath('results.0.data.item.text', 'Mayonnaise')
+            ->assertJsonPath('results.0.data.item.client_request_id', 'req-create-completed-1')
             ->assertJsonPath('results.0.data.item.is_completed', true);
 
         $resultData = $response->json('results.0.data');

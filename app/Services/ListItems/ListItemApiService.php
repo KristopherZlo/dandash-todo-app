@@ -68,6 +68,7 @@ class ListItemApiService
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
             'link_id' => ['nullable', 'integer', 'exists:list_links,id'],
             'text' => ['required', 'string', 'max:255'],
+            'client_request_id' => ['nullable', 'string', 'max:120'],
             'is_completed' => ['sometimes', 'boolean'],
             'quantity' => ['nullable', 'numeric', 'min:0.01', 'max:99999999.99'],
             'unit' => ['nullable', 'string', 'max:24'],
@@ -90,6 +91,11 @@ class ListItemApiService
             'list_link_id' => $context->linkId,
             'type' => $type,
             'text' => trim($validated['text']),
+            'client_request_id' => isset($validated['client_request_id'])
+                ? (trim((string) $validated['client_request_id']) !== ''
+                    ? trim((string) $validated['client_request_id'])
+                    : null)
+                : null,
             'sort_order' => $this->orderingService->nextSortOrder($context->ownerId, $type, $isCompleted, $context->linkId),
             'is_completed' => $isCompleted,
             'completed_at' => $isCompleted ? now() : null,

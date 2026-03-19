@@ -55,6 +55,7 @@ class ListItemSyncChunkActionHandler implements SyncChunkActionHandler
             'link_id' => $this->normalizeNullablePositiveInteger($operation['link_id'] ?? null),
             'type' => $type,
             'text' => (string) ($payload['text'] ?? ''),
+            'client_request_id' => (string) ($payload['client_request_id'] ?? ''),
             'is_completed' => (bool) ($payload['is_completed'] ?? false),
             'quantity' => $type === ListItem::TYPE_PRODUCT ? ($payload['quantity'] ?? null) : null,
             'unit' => $type === ListItem::TYPE_PRODUCT ? ($payload['unit'] ?? null) : null,

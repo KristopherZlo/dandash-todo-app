@@ -20,12 +20,14 @@ class ListItemCrudTest extends TestCase
                 'owner_id' => $user->id,
                 'type' => ListItem::TYPE_PRODUCT,
                 'text' => 'Milk',
+                'client_request_id' => 'req-milk-1',
                 'quantity' => 2,
                 'unit' => 'l',
             ])
             ->assertCreated()
             ->assertJsonPath('item.type', ListItem::TYPE_PRODUCT)
             ->assertJsonPath('item.text', 'Milk')
+            ->assertJsonPath('item.client_request_id', 'req-milk-1')
             ->assertJsonPath('item.is_completed', false);
 
         $storePayload = $storeResponse->json();

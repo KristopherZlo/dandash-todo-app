@@ -20,6 +20,7 @@ class ListItem extends Model
         'list_link_id',
         'type',
         'text',
+        'client_request_id',
         'sort_order',
         'quantity',
         'unit',

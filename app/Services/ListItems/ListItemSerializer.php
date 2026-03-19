@@ -21,6 +21,7 @@ class ListItemSerializer
             'list_link_id' => $item->list_link_id ? (int) $item->list_link_id : null,
             'type' => $item->type,
             'text' => $item->text,
+            'client_request_id' => $item->client_request_id ?: null,
             'sort_order' => (int) ($item->sort_order ?? 0),
             'quantity' => $item->quantity !== null ? (float) $item->quantity : null,
             'unit' => $item->unit,
