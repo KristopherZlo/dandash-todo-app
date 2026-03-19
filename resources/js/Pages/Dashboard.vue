@@ -7865,6 +7865,7 @@ onBeforeUnmount(() => {
                     <button
                         type="button"
                         class="flex items-center justify-between gap-2 rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-3 text-left text-sm font-semibold text-[#fcfcfa]"
+                        data-testid="suggestion-stats-open-product"
                         @click="openSuggestionStatsModal('product')"
                     >
                         <span>{{ '\u041f\u043e\u043a\u0443\u043f\u043a\u0438' }}</span>
@@ -7875,6 +7876,7 @@ onBeforeUnmount(() => {
                     <button
                         type="button"
                         class="flex items-center justify-between gap-2 rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-3 text-left text-sm font-semibold text-[#fcfcfa]"
+                        data-testid="suggestion-stats-open-todo"
                         @click="openSuggestionStatsModal('todo')"
                     >
                         <span>{{ '\u0414\u0435\u043b\u0430' }}</span>
@@ -8301,6 +8303,7 @@ onBeforeUnmount(() => {
             <button
                 type="button"
                 class="dashboard-tab-btn flex flex-1 flex-col items-center rounded-2xl px-3 py-2 text-xs transition-[background-color,color,transform] duration-220 ease-out"
+                data-testid="dashboard-tab-profile"
                 :class="activeTab === 'profile' ? 'dashboard-tab-btn--active bg-[#fcfcfa] text-[#19181a]' : 'dashboard-tab-btn--idle text-[#bcb7ba]'"
                 @click="activeTab = 'profile'"
             >
@@ -8630,13 +8633,23 @@ onBeforeUnmount(() => {
         </Transition>
 
         <Transition name="app-modal">
-            <div v-if="productStatsModalOpen" class="fixed inset-0 z-[120] bg-[#19181a]/90 p-2.5" @click.self="productStatsModalOpen = false">
+            <div
+                v-if="productStatsModalOpen"
+                class="fixed inset-0 z-[120] bg-[#19181a]/90 p-2.5"
+                data-testid="suggestion-stats-modal"
+                @click.self="closeSuggestionStatsModal"
+            >
                 <div class="flex h-full flex-col rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                     <div class="mb-3 flex items-center justify-between">
                         <h2 class="text-base font-semibold">
                             {{ suggestionStatsType === 'todo' ? '\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u0434\u0435\u043b' : '\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430 \u043f\u043e\u043a\u0443\u043f\u043e\u043a' }}
                         </h2>
-                        <button type="button" class="rounded-xl border border-[#403e41] p-2 text-[#bcb7ba]" @click="productStatsModalOpen = false">
+                        <button
+                            type="button"
+                            class="rounded-xl border border-[#403e41] p-2 text-[#bcb7ba]"
+                            data-testid="suggestion-stats-close"
+                            @click="closeSuggestionStatsModal"
+                        >
                             <X class="h-4 w-4" />
                         </button>
                     </div>
@@ -8677,6 +8690,7 @@ onBeforeUnmount(() => {
                                 v-model="suggestionStatsSearchQuery"
                                 type="text"
                                 class="h-11 w-full rounded-xl border border-[#403e41] bg-[#221f22] pl-10 pr-3 text-sm text-[#fcfcfa] outline-none transition focus:border-[#fcfcfa]/45"
+                                data-testid="suggestion-stats-search"
                                 :placeholder="suggestionStatsType === 'todo' ? '\u041f\u043e\u0438\u0441\u043a \u043f\u043e \u0434\u0435\u043b\u0430\u043c' : '\u041f\u043e\u0438\u0441\u043a \u043f\u043e \u043f\u043e\u043a\u0443\u043f\u043a\u0430\u043c'"
                             >
                         </div>
@@ -8685,6 +8699,7 @@ onBeforeUnmount(() => {
                             <button
                                 type="button"
                                 class="inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition"
+                                data-testid="suggestion-stats-view-active"
                                 :class="
                                     suggestionStatsView === 'active'
                                         ? 'border-[#fcfcfa]/40 bg-[#fcfcfa]/8 text-[#fcfcfa]'
@@ -8698,6 +8713,7 @@ onBeforeUnmount(() => {
                             <button
                                 type="button"
                                 class="inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition"
+                                data-testid="suggestion-stats-view-ignored"
                                 :class="
                                     suggestionStatsView === 'ignored'
                                         ? 'border-[#fcfcfa]/40 bg-[#fcfcfa]/8 text-[#fcfcfa]'
@@ -8747,6 +8763,8 @@ onBeforeUnmount(() => {
                             v-for="entry in pagedSuggestionStats.items"
                             :key="`stats-modal-${entry.suggestion_key}`"
                             class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-3"
+                            :data-testid="`suggestion-stats-row-${entry.suggestion_key}`"
+                            :data-suggestion-key="entry.suggestion_key"
                         >
                             <div class="flex items-start justify-between gap-3">
                                 <div class="min-w-0">
@@ -8764,6 +8782,7 @@ onBeforeUnmount(() => {
                                 <button
                                     type="button"
                                     class="shrink-0 rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-55"
+                                    :data-testid="`suggestion-stats-reset-${entry.suggestion_key}`"
                                     :class="
                                         isSuggestionResetDone(entry.suggestion_key)
                                             ? 'border-[#56b982]/60 bg-[#56b982]/18 text-[#56b982]'
@@ -8785,6 +8804,7 @@ onBeforeUnmount(() => {
                                     <span class="mb-1 block text-[11px] text-[#9f9a9d]">{{ '\u041a\u043e\u0433\u0434\u0430 \u043f\u0440\u0435\u0434\u043b\u0430\u0433\u0430\u0442\u044c' }}</span>
                                     <select
                                         class="h-10 w-full rounded-xl border border-[#403e41] bg-[#2d2a2c] px-3 text-sm text-[#fcfcfa] outline-none transition focus:border-[#fcfcfa]/45 disabled:cursor-not-allowed disabled:opacity-60"
+                                        :data-testid="`suggestion-stats-interval-${entry.suggestion_key}`"
                                         :disabled="isSavingSuggestionSettings(entry.suggestion_key) || isResettingSuggestionKey(entry.suggestion_key)"
                                         :value="suggestionIntervalPresetValueForEntry(entry)"
                                         @change="updateSuggestionStatsInterval(entry, $event.target.value)"
@@ -8803,6 +8823,7 @@ onBeforeUnmount(() => {
                                     <button
                                         type="button"
                                         class="h-10 rounded-xl border px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
+                                        :data-testid="`suggestion-stats-toggle-${entry.suggestion_key}`"
                                         :class="
                                             suggestionStatsView === 'ignored'
                                                 ? 'border-[#56b982]/50 bg-[#56b982]/12 text-[#56b982]'
@@ -8829,6 +8850,7 @@ onBeforeUnmount(() => {
                         <button
                             type="button"
                             class="rounded-xl border border-[#403e41] bg-[#221f22] px-3 py-2 text-sm font-semibold text-[#fcfcfa] transition disabled:cursor-not-allowed disabled:opacity-45"
+                            data-testid="suggestion-stats-prev-page"
                             :disabled="pagedSuggestionStats.page <= 1"
                             @click="goToSuggestionStatsPage(pagedSuggestionStats.page - 1)"
                         >
@@ -8840,6 +8862,7 @@ onBeforeUnmount(() => {
                         <button
                             type="button"
                             class="rounded-xl border border-[#403e41] bg-[#221f22] px-3 py-2 text-sm font-semibold text-[#fcfcfa] transition disabled:cursor-not-allowed disabled:opacity-45"
+                            data-testid="suggestion-stats-next-page"
                             :disabled="pagedSuggestionStats.page >= pagedSuggestionStats.totalPages"
                             @click="goToSuggestionStatsPage(pagedSuggestionStats.page + 1)"
                         >
