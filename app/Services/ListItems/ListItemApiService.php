@@ -200,6 +200,48 @@ class ListItemApiService
         ];
     }
 
+    public function updateSuggestionSettings(Request $request): array
+    {
+        $validated = $request->validate([
+            'owner_id' => ['required', 'integer', 'exists:users,id'],
+            'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
+            'link_id' => ['nullable', 'integer', 'exists:list_links,id'],
+            'suggestion_key' => ['required', 'string', 'max:190'],
+            'custom_interval_seconds' => ['nullable', 'integer', 'min:0', 'max:315360000'],
+            'ignored' => ['nullable', 'boolean'],
+        ]);
+
+        $ownerId = (int) $validated['owner_id'];
+        $type = (string) $validated['type'];
+        $linkId = isset($validated['link_id']) ? (int) $validated['link_id'] : null;
+        $context = $this->accessService->resolveReadContext($request, $ownerId, $linkId);
+        $state = $this->listItemSuggestionService->updateSuggestionSettings(
+            $context->ownerId,
+            $type,
+            (string) $validated['suggestion_key'],
+            array_key_exists('custom_interval_seconds', $validated)
+                ? max(0, (int) ($validated['custom_interval_seconds'] ?? 0))
+                : null,
+            array_key_exists('ignored', $validated)
+                ? (bool) $validated['ignored']
+                : null,
+        );
+
+        return [
+            'status' => 'ok',
+            'state' => [
+                'suggestion_key' => (string) ($state?->suggestion_key ?? ''),
+                'dismissed_count' => (int) ($state?->dismissed_count ?? 0),
+                'hidden_until' => $state?->hidden_until?->toISOString(),
+                'retired_at' => $state?->retired_at?->toISOString(),
+                'reset_at' => $state?->reset_at?->toISOString(),
+                'custom_interval_seconds' => $state?->custom_interval_seconds !== null
+                    ? (int) $state->custom_interval_seconds
+                    : null,
+            ],
+        ];
+    }
+
     public function dismissSuggestion(Request $request): array
     {
         $validated = $request->validate([

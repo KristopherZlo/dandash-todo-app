@@ -45,6 +45,11 @@ class ListItemController extends Controller
         return response()->json($this->listItemApiService->dismissSuggestion($request));
     }
 
+    public function updateSuggestionSettings(Request $request): JsonResponse
+    {
+        return response()->json($this->listItemApiService->updateSuggestionSettings($request));
+    }
+
     public function update(Request $request, ListItem $item): JsonResponse
     {
         return response()->json($this->listItemApiService->update($request, $item));

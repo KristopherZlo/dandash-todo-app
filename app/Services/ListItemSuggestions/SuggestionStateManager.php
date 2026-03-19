@@ -44,7 +44,48 @@ class SuggestionStateManager
         $state->hidden_until = null;
         $state->retired_at = null;
         $state->reset_at = now();
+        $state->custom_interval_seconds = null;
         $state->save();
+    }
+
+    public function updateSuggestionSettings(
+        int $ownerId,
+        string $type,
+        string $suggestionKey,
+        ?int $customIntervalSeconds = null,
+        ?bool $ignored = null
+    ): ?ListItemSuggestionState {
+        $normalizedKey = $this->textNormalizer->normalizeSuggestionKey($suggestionKey);
+
+        if ($normalizedKey === '') {
+            return null;
+        }
+
+        $state = ListItemSuggestionState::query()->firstOrNew([
+            'owner_id' => $ownerId,
+            'type' => $type,
+            'suggestion_key' => $normalizedKey,
+        ]);
+
+        $state->custom_interval_seconds = $customIntervalSeconds !== null && $customIntervalSeconds > 0
+            ? $customIntervalSeconds
+            : null;
+
+        if ($ignored !== null) {
+            if ($ignored) {
+                $state->dismissed_count = 0;
+                $state->hidden_until = null;
+                $state->retired_at = now();
+            } else {
+                $state->dismissed_count = 0;
+                $state->hidden_until = null;
+                $state->retired_at = null;
+            }
+        }
+
+        $state->save();
+
+        return $state->fresh();
     }
 
     public function dismissSuggestion(

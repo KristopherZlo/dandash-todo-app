@@ -25,6 +25,7 @@ class ListItemSyncChunkActionHandler implements SyncChunkActionHandler
             'reorder',
             'dismiss_suggestion',
             'reset_suggestion',
+            'update_suggestion_settings',
         ], true);
     }
 
@@ -39,6 +40,7 @@ class ListItemSyncChunkActionHandler implements SyncChunkActionHandler
             'reorder' => $this->handleReorderOperation($request, $operation),
             'dismiss_suggestion' => $this->handleDismissSuggestionOperation($request, $operation),
             'reset_suggestion' => $this->handleResetSuggestionOperation($request, $operation),
+            'update_suggestion_settings' => $this->handleUpdateSuggestionSettingsOperation($request, $operation),
             default => [],
         };
     }
@@ -131,6 +133,26 @@ class ListItemSyncChunkActionHandler implements SyncChunkActionHandler
         ]);
 
         return $this->listItemApiService->resetSuggestionData($resetRequest);
+    }
+
+    private function handleUpdateSuggestionSettingsOperation(Request $request, array $operation): array
+    {
+        $payload = is_array($operation['payload'] ?? null) ? $operation['payload'] : [];
+
+        $settingsRequest = $this->requestFactory->make($request, [
+            'owner_id' => (int) ($operation['owner_id'] ?? 0),
+            'link_id' => $this->normalizeNullablePositiveInteger($operation['link_id'] ?? null),
+            'type' => (string) ($operation['type'] ?? ''),
+            'suggestion_key' => (string) ($payload['suggestion_key'] ?? ''),
+            'custom_interval_seconds' => array_key_exists('custom_interval_seconds', $payload)
+                ? $payload['custom_interval_seconds']
+                : null,
+            'ignored' => array_key_exists('ignored', $payload)
+                ? (bool) $payload['ignored']
+                : null,
+        ]);
+
+        return $this->listItemApiService->updateSuggestionSettings($settingsRequest);
     }
 
     private function normalizeNullablePositiveInteger(mixed $value): ?int

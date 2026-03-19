@@ -371,6 +371,126 @@ class ListItemSuggestionTest extends TestCase
             ->assertJsonPath('summary.total_completed', 1);
     }
 
+    public function test_custom_suggestion_interval_can_delay_due_suggestion(): void
+    {
+        Carbon::setTestNow(CarbonImmutable::parse('2026-02-20 12:00:00'));
+
+        $user = User::factory()->create();
+        $timestamps = [
+            CarbonImmutable::now()->subDays(9),
+            CarbonImmutable::now()->subDays(6),
+            CarbonImmutable::now()->subDays(3),
+        ];
+
+        foreach ($timestamps as $createdAt) {
+            ListItem::query()->forceCreate([
+                'owner_id' => $user->id,
+                'type' => ListItem::TYPE_PRODUCT,
+                'text' => 'Coffee',
+                'created_by_id' => $user->id,
+                'updated_by_id' => $user->id,
+                'created_at' => $createdAt,
+                'updated_at' => $createdAt,
+            ]);
+        }
+
+        $this->actingAs($user)
+            ->getJson('/api/items/suggestions?owner_id='.$user->id.'&type=product')
+            ->assertOk()
+            ->assertJsonCount(1, 'suggestions');
+
+        $this->actingAs($user)
+            ->postJson('/api/items/suggestions/settings', [
+                'owner_id' => $user->id,
+                'type' => ListItem::TYPE_PRODUCT,
+                'suggestion_key' => 'coffee',
+                'custom_interval_seconds' => 864000,
+            ])
+            ->assertOk()
+            ->assertJsonPath('state.suggestion_key', 'coffee')
+            ->assertJsonPath('state.custom_interval_seconds', 864000);
+
+        $this->actingAs($user)
+            ->getJson('/api/items/suggestions?owner_id='.$user->id.'&type=product')
+            ->assertOk()
+            ->assertJsonCount(0, 'suggestions');
+    }
+
+    public function test_suggestion_can_be_ignored_and_returned_back_to_active_list(): void
+    {
+        Carbon::setTestNow(CarbonImmutable::parse('2026-02-20 12:00:00'));
+
+        $user = User::factory()->create();
+        $now = CarbonImmutable::now();
+
+        foreach ([
+            $now->subDays(9),
+            $now->subDays(6),
+            $now->subDays(3),
+        ] as $createdAt) {
+            ListItem::query()->forceCreate([
+                'owner_id' => $user->id,
+                'type' => ListItem::TYPE_PRODUCT,
+                'text' => 'Tea',
+                'is_completed' => true,
+                'completed_at' => $createdAt,
+                'created_by_id' => $user->id,
+                'updated_by_id' => $user->id,
+                'created_at' => $createdAt,
+                'updated_at' => $createdAt,
+            ]);
+        }
+
+        $this->actingAs($user)
+            ->postJson('/api/items/suggestions/settings', [
+                'owner_id' => $user->id,
+                'type' => ListItem::TYPE_PRODUCT,
+                'suggestion_key' => 'tea',
+                'ignored' => true,
+            ])
+            ->assertOk()
+            ->assertJsonPath('state.suggestion_key', 'tea');
+
+        $state = ListItemSuggestionState::query()->firstWhere([
+            'owner_id' => $user->id,
+            'type' => ListItem::TYPE_PRODUCT,
+            'suggestion_key' => 'tea',
+        ]);
+
+        $this->assertNotNull($state);
+        $this->assertNotNull($state->retired_at);
+
+        $this->actingAs($user)
+            ->getJson('/api/items/suggestions?owner_id='.$user->id.'&type=product')
+            ->assertOk()
+            ->assertJsonCount(0, 'suggestions');
+
+        $statsResponse = $this->actingAs($user)
+            ->getJson('/api/items/suggestions/stats?owner_id='.$user->id.'&type=product&limit=50')
+            ->assertOk();
+
+        $stats = collect($statsResponse->json('stats'));
+        $teaStats = $stats->firstWhere('suggestion_key', 'tea');
+
+        $this->assertIsArray($teaStats);
+        $this->assertNotNull($teaStats['retired_at'] ?? null);
+
+        $this->actingAs($user)
+            ->postJson('/api/items/suggestions/settings', [
+                'owner_id' => $user->id,
+                'type' => ListItem::TYPE_PRODUCT,
+                'suggestion_key' => 'tea',
+                'ignored' => false,
+            ])
+            ->assertOk()
+            ->assertJsonPath('state.retired_at', null);
+
+        $this->actingAs($user)
+            ->getJson('/api/items/suggestions?owner_id='.$user->id.'&type=product')
+            ->assertOk()
+            ->assertJsonCount(1, 'suggestions');
+    }
+
     protected function tearDown(): void
     {
         Carbon::setTestNow();

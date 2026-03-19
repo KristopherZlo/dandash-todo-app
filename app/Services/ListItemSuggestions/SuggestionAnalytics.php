@@ -103,10 +103,14 @@ class SuggestionAnalytics
             }
 
             $averageIntervalSeconds = (int) round(array_sum($intervals) / count($intervals));
+            $effectiveIntervalSeconds = max(
+                1,
+                (int) ($state?->custom_interval_seconds ?: $averageIntervalSeconds),
+            );
             $lastAddedAt = $timestamps[$occurrences - 1];
             $elapsedSeconds = max(0, $now->getTimestamp() - $lastAddedAt->getTimestamp());
-            $dueRatio = $averageIntervalSeconds > 0
-                ? $elapsedSeconds / $averageIntervalSeconds
+            $dueRatio = $effectiveIntervalSeconds > 0
+                ? $elapsedSeconds / $effectiveIntervalSeconds
                 : 0.0;
 
             $isDue = $dueRatio >= self::DUE_RATIO_THRESHOLD;
@@ -116,7 +120,7 @@ class SuggestionAnalytics
                 continue;
             }
 
-            $nextExpectedAt = $lastAddedAt->addSeconds($averageIntervalSeconds);
+            $nextExpectedAt = $lastAddedAt->addSeconds($effectiveIntervalSeconds);
             $secondsUntilExpected = max(0, $nextExpectedAt->getTimestamp() - $now->getTimestamp());
             $confidence = $this->estimateConfidence($intervals, $occurrences);
             $sortedVariants = $this->sortVariants($cluster['variants']);
@@ -134,6 +138,8 @@ class SuggestionAnalytics
                 'type' => $type,
                 'occurrences' => $occurrences,
                 'average_interval_seconds' => $averageIntervalSeconds,
+                'custom_interval_seconds' => $state?->custom_interval_seconds ? (int) $state->custom_interval_seconds : null,
+                'effective_interval_seconds' => $effectiveIntervalSeconds,
                 'last_added_at' => $lastAddedAt->toISOString(),
                 'next_expected_at' => $nextExpectedAt->toISOString(),
                 'seconds_until_expected' => $secondsUntilExpected,
@@ -253,6 +259,9 @@ class SuggestionAnalytics
             $averageIntervalSeconds = $intervals !== []
                 ? (int) round(array_sum($intervals) / count($intervals))
                 : null;
+            $effectiveIntervalSeconds = $state?->custom_interval_seconds
+                ? (int) $state->custom_interval_seconds
+                : $averageIntervalSeconds;
 
             $variantCounts = [];
             foreach ($clusterEntries as $entry) {
@@ -283,6 +292,8 @@ class SuggestionAnalytics
                 'text' => $displayText,
                 'occurrences' => $occurrences,
                 'average_interval_seconds' => $averageIntervalSeconds,
+                'custom_interval_seconds' => $state?->custom_interval_seconds ? (int) $state->custom_interval_seconds : null,
+                'effective_interval_seconds' => $effectiveIntervalSeconds,
                 'last_completed_at' => $lastTimestamp->toISOString(),
                 'variants' => array_slice(array_keys($sortedVariants), 0, 4),
                 'dismissed_count' => (int) ($state?->dismissed_count ?? 0),

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\ListItem;
 use App\Models\ListItemEvent;
+use App\Models\ListItemSuggestionState;
 use App\Services\ListItemSuggestions\SuggestionAnalytics;
 use App\Services\ListItemSuggestions\SuggestionHistorySource;
 use App\Services\ListItemSuggestions\SuggestionStateManager;
@@ -133,6 +134,22 @@ class ListItemSuggestionService
     public function resetSuggestionData(int $ownerId, string $type, string $suggestionKey): void
     {
         $this->stateManager->resetSuggestionData($ownerId, $this->normalizeSuggestionType($type), $suggestionKey);
+    }
+
+    public function updateSuggestionSettings(
+        int $ownerId,
+        string $type,
+        string $suggestionKey,
+        ?int $customIntervalSeconds = null,
+        ?bool $ignored = null
+    ): ?ListItemSuggestionState {
+        return $this->stateManager->updateSuggestionSettings(
+            $ownerId,
+            $this->normalizeSuggestionType($type),
+            $suggestionKey,
+            $customIntervalSeconds,
+            $ignored
+        );
     }
 
     public function normalizeSuggestionKey(string $value): string

@@ -272,6 +272,39 @@ class SyncChunkTest extends TestCase
         $this->assertNotNull($user->mood_updated_at);
     }
 
+    public function test_chunk_sync_can_update_suggestion_settings(): void
+    {
+        $user = User::factory()->create();
+
+        $response = $this->actingAs($user)->postJson('/api/sync/chunk', [
+            'operations' => [
+                [
+                    'op_id' => 'op-suggestion-settings-1',
+                    'action' => 'update_suggestion_settings',
+                    'owner_id' => $user->id,
+                    'type' => ListItem::TYPE_PRODUCT,
+                    'payload' => [
+                        'suggestion_key' => 'coffee',
+                        'custom_interval_seconds' => 172800,
+                        'ignored' => true,
+                    ],
+                ],
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('results.0.status', 'ok')
+            ->assertJsonPath('results.0.data.state.suggestion_key', 'coffee')
+            ->assertJsonPath('results.0.data.state.custom_interval_seconds', 172800);
+
+        $this->assertDatabaseHas('list_item_suggestion_states', [
+            'owner_id' => $user->id,
+            'type' => ListItem::TYPE_PRODUCT,
+            'suggestion_key' => 'coffee',
+            'custom_interval_seconds' => 172800,
+        ]);
+    }
+
     public function test_chunk_sync_rejects_stale_mood_update_state(): void
     {
         $user = User::factory()->create([

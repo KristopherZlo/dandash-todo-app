@@ -16,6 +16,7 @@ class ListItemSuggestionState extends Model
         'hidden_until',
         'retired_at',
         'reset_at',
+        'custom_interval_seconds',
     ];
 
     protected function casts(): array
@@ -25,6 +26,7 @@ class ListItemSuggestionState extends Model
             'hidden_until' => 'datetime',
             'retired_at' => 'datetime',
             'reset_at' => 'datetime',
+            'custom_interval_seconds' => 'integer',
         ];
     }
 
@@ -43,4 +45,3 @@ class ListItemSuggestionState extends Model
         return $query->where('type', $type);
     }
 }
-
