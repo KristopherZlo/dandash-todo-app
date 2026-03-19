@@ -895,8 +895,8 @@ function cloneEntries(entries) {
 }
 
 const MOOD_COLOR_VALUES = Object.freeze(['red', 'yellow', 'green']);
-const MOOD_FIRE_EMOJIS = Object.freeze(['🥰', '😝', '😈']);
-const MOOD_BATTERY_EMOJIS = Object.freeze(['😴', '😡', '😄', '😊']);
+const MOOD_FIRE_EMOJIS = Object.freeze(['🥰', '😝', '😈', '😭']);
+const MOOD_BATTERY_EMOJIS = Object.freeze(['😴', '😡', '😄', '😊', '😭']);
 const MOOD_UNKNOWN_EMOJI = '❔';
 const MOOD_STALE_RESET_AFTER_MS = 24 * 60 * 60 * 1000;
 

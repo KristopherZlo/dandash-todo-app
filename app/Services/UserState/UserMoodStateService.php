@@ -7,8 +7,8 @@ use App\Models\User;
 class UserMoodStateService
 {
     private const COLOR_VALUES = ['red', 'yellow', 'green'];
-    private const FIRE_EMOJIS = ['🥰', '😝', '😀'];
-    private const BATTERY_EMOJIS = ['😴', '😡', '😄', '😊'];
+    private const FIRE_EMOJIS = ['🥰', '😝', '😀', '😭'];
+    private const BATTERY_EMOJIS = ['😴', '😡', '😄', '😊', '😭'];
     private const UNKNOWN_EMOJI = '❔';
     private const STALE_RESET_AFTER_SECONDS = 86400;
 

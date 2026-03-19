@@ -243,7 +243,9 @@ class SyncChunkTest extends TestCase
                     'payload' => [
                         'color' => 'red',
                         'fire_level' => 83,
+                        'fire_emoji' => '😭',
                         'battery_level' => 27,
+                        'battery_emoji' => '😭',
                         'updated_at_ms' => now()->addSecond()->valueOf(),
                     ],
                 ],
@@ -254,7 +256,9 @@ class SyncChunkTest extends TestCase
             ->assertJsonPath('results.0.status', 'ok')
             ->assertJsonPath('results.0.data.mood.color', 'red')
             ->assertJsonPath('results.0.data.mood.fire_level', 83)
+            ->assertJsonPath('results.0.data.mood.fire_emoji', '😭')
             ->assertJsonPath('results.0.data.mood.battery_level', 27)
+            ->assertJsonPath('results.0.data.mood.battery_emoji', '😭')
             ->assertJsonPath('results.0.data.mood_cards.0.id', $user->id)
             ->assertJsonPath('results.0.data.applied', true);
 
@@ -262,7 +266,9 @@ class SyncChunkTest extends TestCase
 
         $this->assertSame('red', $user->mood_color);
         $this->assertSame(83, (int) $user->mood_fire_level);
+        $this->assertSame('😭', $user->mood_fire_emoji);
         $this->assertSame(27, (int) $user->mood_battery_level);
+        $this->assertSame('😭', $user->mood_battery_emoji);
         $this->assertNotNull($user->mood_updated_at);
     }
 
