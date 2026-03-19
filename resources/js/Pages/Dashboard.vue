@@ -4811,7 +4811,11 @@ function shouldDropOperationOnClientError(operation, statusCode) {
     }
 
     if (action === 'update') {
-        return statusCode === 404;
+        return statusCode === 404 || statusCode === 422;
+    }
+
+    if (action === 'create') {
+        return statusCode === 422;
     }
 
     return [
@@ -4832,7 +4836,45 @@ function shouldDropOperationOnClientError(operation, statusCode) {
 
 function applyDroppedOperationOnClientError(operation, statusCode) {
     const action = String(operation?.action ?? '');
-    if (action !== 'delete' || Number(statusCode) !== 404) {
+    const normalizedStatusCode = Number(statusCode);
+
+    if (action === 'create' && normalizedStatusCode === 422) {
+        const itemId = Number(operation?.item_id);
+        if (!Number.isFinite(itemId)) {
+            return;
+        }
+
+        applyLocalUpdate(
+            operation.owner_id,
+            operation.type,
+            (items) => items.filter((entry) => Number(entry.id) !== itemId),
+            operation.link_id,
+        );
+        markListMutated(operation.owner_id, operation.type, operation.link_id, 0);
+        return;
+    }
+
+    if (action === 'update' && normalizedStatusCode === 422) {
+        const itemId = Number(operation?.item_id);
+        if (Number.isFinite(itemId) && itemId > 0) {
+            applyLocalUpdate(operation.owner_id, operation.type, (items) => items.map((entry) => (
+                Number(entry.id) === itemId
+                    ? { ...entry, pending_sync: false }
+                    : entry
+            )), operation.link_id);
+        }
+
+        markListMutated(operation.owner_id, operation.type, operation.link_id, 0);
+        loadItems(
+            String(operation?.type ?? ''),
+            false,
+            operation.owner_id,
+            operation.link_id,
+        ).catch(() => {});
+        return;
+    }
+
+    if (action !== 'delete' || normalizedStatusCode !== 404) {
         return;
     }
 
@@ -5287,7 +5329,7 @@ async function syncOfflineQueue() {
 
                             if (
                                 statusCode === 422
-                                && ['update_profile', 'update_password'].includes(String(operation?.action ?? ''))
+                                && ['create', 'update', 'update_profile', 'update_password'].includes(String(operation?.action ?? ''))
                             ) {
                                 showError({
                                     response: {
@@ -5326,6 +5368,13 @@ async function syncOfflineQueue() {
                         dropQueueOperation(firstOperation.op_id);
                         queueRetryAt = 0;
                         clearQueueSyncRetryTimer();
+
+                        if (
+                            statusCode === 422
+                            && ['create', 'update', 'update_profile', 'update_password'].includes(String(firstOperation?.action ?? ''))
+                        ) {
+                            showError(error);
+                        }
 
                         continue;
                     }
