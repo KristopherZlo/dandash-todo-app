@@ -94,6 +94,8 @@ class ListItemOrderingService
         int $updatedById
     ): void {
         DB::transaction(function () use ($itemsById, $finalActiveIds, $finalCompletedIds, $updatedById): void {
+            $updatedAt = now();
+            $orderByItemId = [];
             $activeOrder = 1000;
             foreach ($finalActiveIds as $itemId) {
                 /** @var ListItem|null $item */
@@ -102,9 +104,7 @@ class ListItemOrderingService
                     continue;
                 }
 
-                $item->sort_order = $activeOrder;
-                $item->updated_by_id = $updatedById;
-                $item->save();
+                $orderByItemId[(int) $item->id] = $activeOrder;
                 $activeOrder += 1000;
             }
 
@@ -116,11 +116,34 @@ class ListItemOrderingService
                     continue;
                 }
 
-                $item->sort_order = $completedOrder;
-                $item->updated_by_id = $updatedById;
-                $item->save();
+                $orderByItemId[(int) $item->id] = $completedOrder;
                 $completedOrder += 1000;
             }
+
+            if ($orderByItemId === []) {
+                return;
+            }
+
+            $itemIds = array_keys($orderByItemId);
+            $caseSql = collect($orderByItemId)
+                ->map(fn (int $sortOrder, int $itemId): string => "WHEN {$itemId} THEN {$sortOrder}")
+                ->implode(' ');
+
+            $idPlaceholders = implode(', ', array_fill(0, count($itemIds), '?'));
+            $updatedAtSql = $updatedAt->format('Y-m-d H:i:s');
+
+            DB::update(
+                "UPDATE list_items
+                SET sort_order = CASE id {$caseSql} END,
+                    updated_by_id = ?,
+                    updated_at = ?
+                WHERE id IN ({$idPlaceholders})",
+                [
+                    $updatedById,
+                    $updatedAtSql,
+                    ...$itemIds,
+                ]
+            );
         });
     }
 }
