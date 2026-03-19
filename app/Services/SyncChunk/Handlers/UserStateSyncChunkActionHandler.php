@@ -2,6 +2,7 @@
 
 namespace App\Services\SyncChunk\Handlers;
 
+use App\Models\ListLink;
 use App\Models\User;
 use App\Services\ListSyncService;
 use App\Services\Realtime\UserSyncStateBroadcaster;
@@ -22,7 +23,7 @@ class UserStateSyncChunkActionHandler implements SyncChunkActionHandler
 
     public function supports(string $action): bool
     {
-        return in_array($action, ['sync_gamification', 'update_mood'], true);
+        return in_array($action, ['sync_gamification', 'update_mood', 'apply_shared_gamification_delta'], true);
     }
 
     public function handle(Request $request, array $operation): array
@@ -30,6 +31,7 @@ class UserStateSyncChunkActionHandler implements SyncChunkActionHandler
         return match ((string) ($operation['action'] ?? '')) {
             'sync_gamification' => $this->handleSyncGamificationOperation($request, $operation),
             'update_mood' => $this->handleUpdateMoodOperation($request, $operation),
+            'apply_shared_gamification_delta' => $this->handleApplySharedGamificationDeltaOperation($request, $operation),
             default => [],
         };
     }
@@ -71,5 +73,64 @@ class UserStateSyncChunkActionHandler implements SyncChunkActionHandler
             'mood_cards' => $this->listSyncService->getMoodCards($freshUser)->values()->all(),
             'applied' => $applied,
         ];
+    }
+
+    private function handleApplySharedGamificationDeltaOperation(Request $request, array $operation): array
+    {
+        $payload = is_array($operation['payload'] ?? null) ? $operation['payload'] : [];
+        $linkId = (int) ($payload['link_id'] ?? 0);
+        $delta = (float) ($payload['delta'] ?? 0.0);
+        $user = $request->user();
+        $link = $this->resolveAccessibleActiveLink((int) $user->id, $linkId);
+
+        if (! $link) {
+            return [
+                'applied' => false,
+                'partner_user_id' => null,
+            ];
+        }
+
+        $partnerUserId = $link->otherUserId((int) $user->id);
+        if (! $partnerUserId) {
+            return [
+                'applied' => false,
+                'partner_user_id' => null,
+            ];
+        }
+
+        $partnerUser = User::query()->find($partnerUserId);
+        if (! $partnerUser) {
+            return [
+                'applied' => false,
+                'partner_user_id' => (int) $partnerUserId,
+            ];
+        }
+
+        $applied = $this->gamificationStateService->applyProgressDelta($partnerUser, $delta);
+
+        if ($applied) {
+            $this->syncStateBroadcaster->broadcastToUser((int) $partnerUserId, 'gamification_changed', (int) $user->id);
+        }
+
+        return [
+            'applied' => $applied,
+            'partner_user_id' => (int) $partnerUserId,
+        ];
+    }
+
+    private function resolveAccessibleActiveLink(int $userId, int $linkId): ?ListLink
+    {
+        if ($userId <= 0 || $linkId <= 0) {
+            return null;
+        }
+
+        return ListLink::query()
+            ->whereKey($linkId)
+            ->where('is_active', true)
+            ->where(function ($query) use ($userId): void {
+                $query->where('user_one_id', $userId)
+                    ->orWhere('user_two_id', $userId);
+            })
+            ->first();
     }
 }

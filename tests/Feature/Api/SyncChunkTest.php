@@ -227,6 +227,63 @@ class SyncChunkTest extends TestCase
         $this->assertNotNull($user->gamification_updated_at);
     }
 
+    public function test_chunk_sync_applies_shared_gamification_delta_to_partner(): void
+    {
+        $owner = User::factory()->create([
+            'xp_progress' => 0.2,
+            'productivity_score' => 10,
+            'productivity_reward_history' => [10],
+            'xp_color_seed' => 17,
+        ]);
+        $partner = User::factory()->create([
+            'xp_progress' => 0.99,
+            'productivity_score' => 0,
+            'productivity_reward_history' => [],
+            'xp_color_seed' => 23,
+        ]);
+
+        [$userOneId, $userTwoId] = $owner->id < $partner->id
+            ? [$owner->id, $partner->id]
+            : [$partner->id, $owner->id];
+
+        $link = ListLink::query()->create([
+            'user_one_id' => $userOneId,
+            'user_two_id' => $userTwoId,
+            'is_active' => true,
+            'accepted_at' => now(),
+        ]);
+
+        $response = $this->actingAs($owner)->postJson('/api/sync/chunk', [
+            'operations' => [
+                [
+                    'op_id' => 'op-shared-gamification-1',
+                    'action' => 'apply_shared_gamification_delta',
+                    'payload' => [
+                        'link_id' => $link->id,
+                        'delta' => 0.02,
+                    ],
+                ],
+            ],
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('results.0.status', 'ok')
+            ->assertJsonPath('results.0.data.applied', true)
+            ->assertJsonPath('results.0.data.partner_user_id', $partner->id);
+
+        $owner->refresh();
+        $partner->refresh();
+
+        $this->assertEquals(0.2, (float) $owner->xp_progress);
+        $this->assertSame(10, (int) $owner->productivity_score);
+
+        $this->assertGreaterThan(0.0, (float) $partner->xp_progress);
+        $this->assertLessThan(0.02, (float) $partner->xp_progress);
+        $this->assertGreaterThan(0, (int) $partner->productivity_score);
+        $this->assertCount(1, $partner->productivity_reward_history ?? []);
+        $this->assertNotNull($partner->gamification_updated_at);
+    }
+
     public function test_chunk_sync_updates_user_mood_state(): void
     {
         $user = User::factory()->create([
