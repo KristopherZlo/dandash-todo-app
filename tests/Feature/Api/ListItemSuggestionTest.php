@@ -66,6 +66,28 @@ class ListItemSuggestionTest extends TestCase
             ->assertForbidden();
     }
 
+    public function test_item_added_only_once_is_not_suggested(): void
+    {
+        Carbon::setTestNow(CarbonImmutable::parse('2026-02-17 12:00:00'));
+
+        $user = User::factory()->create();
+
+        ListItem::query()->forceCreate([
+            'owner_id' => $user->id,
+            'type' => ListItem::TYPE_PRODUCT,
+            'text' => 'Avocado',
+            'created_by_id' => $user->id,
+            'updated_by_id' => $user->id,
+            'created_at' => CarbonImmutable::now()->subDays(5),
+            'updated_at' => CarbonImmutable::now()->subDays(5),
+        ]);
+
+        $this->actingAs($user)
+            ->getJson('/api/items/suggestions?owner_id='.$user->id.'&type=product')
+            ->assertOk()
+            ->assertJsonCount(0, 'suggestions');
+    }
+
     public function test_dismiss_suggestion_follows_interval_steps_and_then_removes_it(): void
     {
         Carbon::setTestNow(CarbonImmutable::parse('2026-02-17 12:00:00'));
