@@ -438,23 +438,10 @@ const selectedListOption = computed(() => findListOptionByOwner(selectedOwnerId.
 const selectedListLinkId = computed(() => normalizeLinkId(selectedListOption.value?.link_id));
 const selectedListLabel = computed(() => selectedListOption.value?.label ?? 'Личный');
 
-function isPendingCompletionMark(item) {
-    const state = swipeUndoState.value;
-    if (!state || state.action !== 'toggle' || !state.nextCompleted) {
-        return false;
-    }
-
-    return isSameListScope(state.ownerId, state.linkId, item?.owner_id, item?.list_link_id)
-        && String(state.type) === String(item?.type)
-        && Number(state.item?.id) === Number(item?.id);
-}
-
 function buildCompletedStats(items) {
     const normalizedItems = Array.isArray(items) ? items : [];
     const total = normalizedItems.length;
-    const completed = normalizedItems.filter(
-        (item) => item?.is_completed && !isPendingCompletionMark(item),
-    ).length;
+    const completed = normalizedItems.filter((item) => item?.is_completed).length;
 
     return {
         completed,
@@ -780,9 +767,7 @@ const swipeUndoMessage = computed(() => {
         return 'Элемент удален';
     }
 
-    return swipeUndoState.value.nextCompleted
-        ? 'Элемент отмечен выполненным'
-        : 'Элемент возвращен в активные';
+    return '';
 });
 const canShowRemoveCompletedButton = computed(() => {
     const state = swipeUndoState.value;
@@ -3819,7 +3804,7 @@ function isSwipeStateForItem(state, ownerId, type, itemId, linkId = undefined) {
         return false;
     }
 
-    if (state.action === 'toggle' || state.action === 'remove') {
+    if (state.action === 'remove') {
         return Number(state.item?.id) === Number(itemId);
     }
 
@@ -3867,7 +3852,7 @@ function rewriteSwipeUndoItemId(previousId, nextId, ownerId, type, linkId = unde
         return;
     }
 
-    if (state.action === 'toggle' || state.action === 'remove') {
+    if (state.action === 'remove') {
         if (Number(state.item?.id) === oldId) {
             state.item = {
                 ...state.item,
@@ -3904,19 +3889,6 @@ function rewriteSwipeUndoItemId(previousId, nextId, ownerId, type, linkId = unde
 
 function stageSwipeAction(state) {
     if (!state) {
-        return;
-    }
-
-    if (state.action === 'toggle') {
-        const togglePayload = {
-            is_completed: !!state.nextCompleted,
-        };
-
-        if (state.nextSortOrder !== undefined && state.nextSortOrder !== null) {
-            togglePayload.sort_order = normalizeSortOrderValue(state.nextSortOrder, 1000);
-        }
-
-        queueUpdate(state.ownerId, state.type, state.item.id, togglePayload, state.linkId);
         return;
     }
 
@@ -3991,22 +3963,6 @@ function undoSwipeAction() {
     const pendingState = swipeUndoState.value;
     swipeUndoState.value = null;
     clearSwipeUndoTimer();
-
-    if (pendingState.action === 'toggle') {
-        adjustXpProgress(
-            pendingState.nextCompleted
-                ? -XP_PROGRESS_PER_TOGGLE
-                : XP_PROGRESS_PER_TOGGLE,
-        );
-
-        upsertLocalItem(pendingState.ownerId, pendingState.type, {
-            ...pendingState.item,
-            pending_sync: false,
-        }, {
-            linkId: pendingState.linkId,
-        });
-        return;
-    }
 
     if (pendingState.action === 'remove') {
         applyLocalUpdate(pendingState.ownerId, pendingState.type, (items) => {
