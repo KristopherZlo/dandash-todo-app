@@ -8313,7 +8313,12 @@ onBeforeUnmount(() => {
         </nav>
 
         <Transition name="app-modal">
-            <div v-if="adModalOpen" class="fixed inset-0 z-[120] bg-[#19181a]/90 p-2.5" @click.self="closeAdModal">
+            <div
+                v-if="adModalOpen"
+                class="fixed inset-0 z-[120] bg-[#19181a]/90 p-2.5"
+                data-testid="ads-modal"
+                @click.self="closeAdModal"
+            >
                 <div class="relative flex h-full flex-col overflow-hidden rounded-3xl border border-[#403e41] bg-[#2d2a2c]">
                     <div class="absolute left-3 top-3 z-10 rounded-lg bg-black/35 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white">
                         advertisement
@@ -8322,6 +8327,7 @@ onBeforeUnmount(() => {
                         type="button"
                         class="absolute right-3 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-black/35 text-white transition hover:bg-black/55"
                         aria-label="Закрыть рекламу"
+                        data-testid="ads-modal-close"
                         @click="closeAdModal"
                     >
                         <X class="h-5 w-5" />

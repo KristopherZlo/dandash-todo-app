@@ -6,6 +6,7 @@
         "build": "vite build",
         "dev": "vite",
         "dev:lan": "vite --host 0.0.0.0 --port 5173 --strictPort",
+        "serve:e2e": "php artisan config:clear && php artisan serve --host=127.0.0.1 --port=8000",
         "test:unit": "vitest run",
         "test:unit:watch": "vitest",
         "test:e2e": "playwright test",

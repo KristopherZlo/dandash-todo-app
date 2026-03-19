@@ -9,6 +9,10 @@ function normalizeBaseUrl(value) {
     return normalized.endsWith('/') ? normalized : `${normalized}/`;
 }
 
+const baseURL = normalizeBaseUrl(process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:8000');
+const manageLocalWebServer = !process.env.PLAYWRIGHT_BASE_URL;
+const loginUrl = new URL('login', baseURL).toString();
+
 export default defineConfig({
     testDir: './tests/e2e',
     fullyParallel: true,
@@ -17,11 +21,19 @@ export default defineConfig({
         timeout: 5_000,
     },
     use: {
-        baseURL: normalizeBaseUrl(process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:8000'),
+        baseURL,
         trace: 'on-first-retry',
         screenshot: 'only-on-failure',
         video: 'retain-on-failure',
     },
+    webServer: manageLocalWebServer
+        ? {
+            command: 'npm run serve:e2e',
+            url: loginUrl,
+            reuseExistingServer: !process.env.CI,
+            timeout: 120_000,
+        }
+        : undefined,
     reporter: process.env.CI
         ? [['github'], ['html', { open: 'never' }]]
         : [['list'], ['html', { open: 'never' }]],
