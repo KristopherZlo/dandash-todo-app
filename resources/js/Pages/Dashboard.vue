@@ -31,6 +31,7 @@ import {
 import {
     deduplicateItemsById,
 } from '@/modules/dashboard/realtimeListMerge';
+import { createListSyncGuards } from '@/modules/dashboard/listSyncGuards';
 import {
     filterSuggestionStatsEntries,
     paginateSuggestionStatsEntries,
@@ -323,10 +324,7 @@ let productivityRewardHistory = [];
 const effectTimeouts = new Set();
 const itemCardElements = new Map();
 const soundPools = new Map();
-const listSyncVersions = new Map();
-const listServerVersions = new Map();
 const deletedItemTombstones = new Map();
-const recentLocalMutationsByList = new Map();
 const latestRealtimeEventTokenByList = new Map();
 const blockedSuggestionRefreshTypes = new Set();
 const xpGainSources = new Map();
@@ -861,7 +859,6 @@ const SOUND_POOL_LIMIT_PER_KEY = 6;
 const SOUND_SKIP_MUTE_MS = 3000;
 const ITEM_DELETE_TOMBSTONE_TTL_MS = 180000;
 const ITEM_DELETE_TOMBSTONE_SERVER_SKEW_MS = 1500;
-const LOCAL_LIST_MUTATION_HOLD_MS = 2000;
 const PRODUCTIVITY_DUST_MAX_PARTICLES = 50;
 const PRODUCTIVITY_DUST_MIN_OPACITY = 0.1;
 const PRODUCTIVITY_DUST_MAX_OPACITY = 0.75;
@@ -1252,6 +1249,20 @@ function listCacheKey(ownerId, type, linkId = null) {
 
     return `owner:${Number(ownerId)}:personal:${type}`;
 }
+
+const {
+    getListSyncVersion,
+    bumpListSyncVersion,
+    getKnownServerListVersion,
+    setKnownServerListVersion,
+    markListMutated,
+    clearRecentListMutation,
+    hasRecentListMutation,
+    reset: resetListSyncGuards,
+} = createListSyncGuards({
+    resolveLinkIdForOwner,
+    listCacheKey,
+});
 
 function suggestionsCacheKey(ownerId, type, linkId = undefined) {
     return listCacheKey(ownerId, type, resolveLinkIdForOwner(ownerId, linkId));
@@ -1706,82 +1717,6 @@ function applyCachedSyncState(syncSelection = false) {
     }
 
     applyState(cachedSyncState.value, { syncSelection });
-}
-
-function listSyncVersionKey(ownerId, type, linkId = undefined) {
-    const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
-    return listCacheKey(ownerId, type, resolvedLinkId);
-}
-
-function getListSyncVersion(ownerId, type, linkId = undefined) {
-    return Number(listSyncVersions.get(listSyncVersionKey(ownerId, type, linkId)) ?? 0);
-}
-
-function bumpListSyncVersion(ownerId, type, linkId = undefined) {
-    const versionKey = listSyncVersionKey(ownerId, type, linkId);
-    const nextVersion = getListSyncVersion(ownerId, type, linkId) + 1;
-    listSyncVersions.set(versionKey, nextVersion);
-    return nextVersion;
-}
-
-function getKnownServerListVersion(ownerId, type, linkId = undefined) {
-    return Number(listServerVersions.get(listSyncVersionKey(ownerId, type, linkId)) ?? 0);
-}
-
-function setKnownServerListVersion(ownerId, type, listVersion, linkId = undefined) {
-    const numericVersion = Number(listVersion);
-    if (!Number.isFinite(numericVersion) || numericVersion <= 0) {
-        return;
-    }
-
-    const versionKey = listSyncVersionKey(ownerId, type, linkId);
-    const normalizedVersion = Math.floor(numericVersion);
-    const previousVersion = Number(listServerVersions.get(versionKey) ?? 0);
-    if (previousVersion >= normalizedVersion) {
-        return;
-    }
-
-    listServerVersions.set(versionKey, normalizedVersion);
-    recentLocalMutationsByList.delete(listMutationGuardKey(ownerId, type, linkId));
-}
-
-function listMutationGuardKey(ownerId, type, linkId = undefined) {
-    const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
-    return listCacheKey(ownerId, type, resolvedLinkId);
-}
-
-function markListMutated(ownerId, type, linkId = undefined, atMs = Date.now()) {
-    const mutationAtMs = Number(atMs);
-    if (!Number.isFinite(mutationAtMs)) {
-        return;
-    }
-
-    if (mutationAtMs <= 0) {
-        recentLocalMutationsByList.delete(listMutationGuardKey(ownerId, type, linkId));
-        return;
-    }
-
-    recentLocalMutationsByList.set(listMutationGuardKey(ownerId, type, linkId), mutationAtMs);
-}
-
-function clearRecentListMutation(ownerId, type, linkId = undefined) {
-    recentLocalMutationsByList.delete(listMutationGuardKey(ownerId, type, linkId));
-}
-
-function hasRecentListMutation(ownerId, type, linkId = undefined, nowMs = Date.now()) {
-    const guardKey = listMutationGuardKey(ownerId, type, linkId);
-    const mutationAtMs = Number(recentLocalMutationsByList.get(guardKey) ?? 0);
-    if (!Number.isFinite(mutationAtMs) || mutationAtMs <= 0) {
-        recentLocalMutationsByList.delete(guardKey);
-        return false;
-    }
-
-    if ((Number(nowMs) - mutationAtMs) > LOCAL_LIST_MUTATION_HOLD_MS) {
-        recentLocalMutationsByList.delete(guardKey);
-        return false;
-    }
-
-    return true;
 }
 
 function deletedItemTombstoneKey(ownerId, type, itemId, linkId = undefined) {
@@ -7123,7 +7058,7 @@ function shouldApplyRealtimeListSnapshot(ownerId, type, linkId, eventPayload) {
         return true;
     }
 
-    const listKey = listMutationGuardKey(ownerId, type, linkId);
+    const listKey = listCacheKey(ownerId, type, resolveLinkIdForOwner(ownerId, linkId));
     const previousChangedAtToken = String(latestRealtimeEventTokenByList.get(listKey) ?? '').trim();
     if (previousChangedAtToken !== '' && previousChangedAtToken > eventChangedAtToken) {
         return false;
@@ -7320,8 +7255,7 @@ onBeforeUnmount(() => {
     clearXpGainSources();
     clearSoundPools();
     applyScrollLockState(false);
-    listSyncVersions.clear();
-    listServerVersions.clear();
+    resetListSyncGuards();
     deletedItemTombstones.clear();
     latestRealtimeEventTokenByList.clear();
     blockedSuggestionRefreshTypes.clear();
