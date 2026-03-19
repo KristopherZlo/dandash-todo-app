@@ -405,6 +405,22 @@ function normalizeLinkId(value) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function isSameListScope(leftOwnerId, leftLinkId = undefined, rightOwnerId, rightLinkId = undefined) {
+    const leftNormalizedLinkId = normalizeLinkId(leftLinkId);
+    const rightNormalizedLinkId = normalizeLinkId(rightLinkId);
+
+    if (leftNormalizedLinkId || rightNormalizedLinkId) {
+        return leftNormalizedLinkId !== null && leftNormalizedLinkId === rightNormalizedLinkId;
+    }
+
+    return Number(leftOwnerId) === Number(rightOwnerId);
+}
+
+function matchesScopedOperation(operation, ownerId, type, linkId = undefined) {
+    return String(operation?.type) === String(type)
+        && isSameListScope(operation?.owner_id, operation?.link_id, ownerId, linkId);
+}
+
 function findListOptionByOwner(ownerId) {
     return listOptions.value.find((option) => Number(option.owner_id) === Number(ownerId)) ?? null;
 }
@@ -428,8 +444,7 @@ function isPendingCompletionMark(item) {
         return false;
     }
 
-    return Number(state.ownerId) === Number(item?.owner_id)
-        && normalizeLinkId(state.linkId) === normalizeLinkId(item?.list_link_id)
+    return isSameListScope(state.ownerId, state.linkId, item?.owner_id, item?.list_link_id)
         && String(state.type) === String(item?.type)
         && Number(state.item?.id) === Number(item?.id);
 }
@@ -1211,7 +1226,11 @@ function cloneItems(items) {
 
 function listCacheKey(ownerId, type, linkId = null) {
     const normalizedLinkId = normalizeLinkId(linkId);
-    return `${Number(ownerId)}:${normalizedLinkId ? `link-${normalizedLinkId}` : 'personal'}:${type}`;
+    if (normalizedLinkId) {
+        return `shared:${normalizedLinkId}:${type}`;
+    }
+
+    return `owner:${Number(ownerId)}:personal:${type}`;
 }
 
 function suggestionsCacheKey(ownerId, type, linkId = undefined) {
@@ -1221,7 +1240,11 @@ function suggestionsCacheKey(ownerId, type, linkId = undefined) {
 function suggestionStatsCacheKey(ownerId, type, linkId = undefined) {
     const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
     const normalizedType = normalizeSuggestionStatsType(type);
-    return `${Number(ownerId)}:${normalizedLinkId ? `link-${normalizedLinkId}` : 'personal'}:${normalizedType}`;
+    if (normalizedLinkId) {
+        return `shared:${normalizedLinkId}:${normalizedType}`;
+    }
+
+    return `owner:${Number(ownerId)}:personal:${normalizedType}`;
 }
 
 function suggestionDeduplicationKey(suggestion) {
@@ -1785,8 +1808,7 @@ function isItemRecentlyDeleted(ownerId, type, itemId, linkId = undefined) {
 }
 
 function isCurrentListContext(ownerId, linkId = null) {
-    return Number(ownerId) === Number(selectedOwnerId.value)
-        && normalizeLinkId(linkId) === normalizeLinkId(selectedListLinkId.value);
+    return isSameListScope(ownerId, linkId, selectedOwnerId.value, selectedListLinkId.value);
 }
 
 function itemViewKey(item) {
@@ -2801,13 +2823,10 @@ function hasPendingDeleteIntent(ownerId, type, itemId, linkId = undefined) {
         return false;
     }
 
-    const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
     const hasQueuedDelete = offlineQueue.value.some((operation) => (
         operation.action === 'delete'
-        && Number(operation.owner_id) === Number(ownerId)
-        && String(operation.type) === String(type)
+        && matchesScopedOperation(operation, ownerId, type, linkId)
         && Number(operation.item_id) === numericItemId
-        && normalizeLinkId(operation.link_id) === resolvedLinkId
     ));
     if (hasQueuedDelete) {
         return true;
@@ -2825,7 +2844,7 @@ function hasPendingDeleteIntent(ownerId, type, itemId, linkId = undefined) {
         ownerId,
         type,
         numericItemId,
-        resolvedLinkId,
+        linkId,
     );
 }
 
@@ -3167,13 +3186,8 @@ function findQueueIndexFromEnd(predicate) {
 }
 
 function hasPendingOperations(ownerId, type, linkId = undefined) {
-    const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
-
     return offlineQueue.value.some(
-        (operation) =>
-            Number(operation.owner_id) === Number(ownerId)
-            && String(operation.type) === String(type)
-            && normalizeLinkId(operation.link_id) === normalizedLinkId,
+        (operation) => matchesScopedOperation(operation, ownerId, type, linkId),
     );
 }
 
@@ -3349,9 +3363,7 @@ function queueReorder(ownerId, type, order, linkId = undefined) {
     const existingIndex = findQueueIndexFromEnd(
         (operation) =>
             operation.action === 'reorder'
-            && Number(operation.owner_id) === Number(ownerId)
-            && String(operation.type) === String(type)
-            && normalizeLinkId(operation.link_id) === resolvedLinkId,
+            && matchesScopedOperation(operation, ownerId, type, resolvedLinkId),
     );
 
     if (existingIndex !== -1) {
@@ -3384,7 +3396,7 @@ function queueUpdate(ownerId, type, itemId, payload, linkId = undefined) {
         (operation) =>
             operation.action === 'create'
             && Number(operation.item_id) === numericItemId
-            && normalizeLinkId(operation.link_id) === resolvedLinkId,
+            && matchesScopedOperation(operation, ownerId, type, resolvedLinkId),
     );
 
     if (createIndex !== -1 && !isOperationBeingSynced(offlineQueue.value[createIndex]?.op_id)) {
@@ -3406,7 +3418,7 @@ function queueUpdate(ownerId, type, itemId, payload, linkId = undefined) {
         (operation) =>
             operation.action === 'update'
             && Number(operation.item_id) === numericItemId
-            && normalizeLinkId(operation.link_id) === resolvedLinkId,
+            && matchesScopedOperation(operation, ownerId, type, resolvedLinkId),
     );
 
     if (updateIndex !== -1 && !isOperationBeingSynced(offlineQueue.value[updateIndex]?.op_id)) {
@@ -3445,14 +3457,14 @@ function queueDelete(ownerId, type, itemId, linkId = undefined) {
         (operation) =>
             operation.action === 'create'
             && Number(operation.item_id) === numericItemId
-            && normalizeLinkId(operation.link_id) === resolvedLinkId,
+            && matchesScopedOperation(operation, ownerId, type, resolvedLinkId),
     );
 
     if (createIndex !== -1 && !isOperationBeingSynced(offlineQueue.value[createIndex]?.op_id)) {
         offlineQueue.value = offlineQueue.value.filter(
             (operation) => !(
                 Number(operation.item_id) === numericItemId
-                && normalizeLinkId(operation.link_id) === resolvedLinkId
+                && matchesScopedOperation(operation, ownerId, type, resolvedLinkId)
             ),
         );
         persistQueue();
@@ -3463,7 +3475,7 @@ function queueDelete(ownerId, type, itemId, linkId = undefined) {
         (operation) => !(
             operation.action === 'update'
             && Number(operation.item_id) === numericItemId
-            && normalizeLinkId(operation.link_id) === resolvedLinkId
+            && matchesScopedOperation(operation, ownerId, type, resolvedLinkId)
         ),
     );
     offlineQueue.value = offlineQueue.value
@@ -3472,7 +3484,7 @@ function queueDelete(ownerId, type, itemId, linkId = undefined) {
                 return operation;
             }
 
-            if (normalizeLinkId(operation.link_id) !== resolvedLinkId) {
+            if (!matchesScopedOperation(operation, ownerId, type, resolvedLinkId)) {
                 return operation;
             }
 
@@ -3498,10 +3510,8 @@ function queueDelete(ownerId, type, itemId, linkId = undefined) {
     const queuedDeleteIndex = findQueueIndexFromEnd(
         (operation) =>
             operation.action === 'delete'
-            && Number(operation.owner_id) === Number(ownerId)
-            && String(operation.type) === String(type)
+            && matchesScopedOperation(operation, ownerId, type, resolvedLinkId)
             && Number(operation.item_id) === numericItemId
-            && normalizeLinkId(operation.link_id) === resolvedLinkId,
     );
 
     if (queuedDeleteIndex !== -1) {
@@ -3563,10 +3573,8 @@ function queueSuggestionReset(ownerId, type, suggestionKey, linkId = undefined) 
     const existingIndex = findQueueIndexFromEnd(
         (operation) =>
             operation.action === 'reset_suggestion'
-            && Number(operation.owner_id) === Number(ownerId)
-            && String(operation.type) === String(type)
+            && matchesScopedOperation(operation, ownerId, type, resolvedLinkId)
             && String(operation?.payload?.suggestion_key ?? '') === normalizedKey
-            && normalizeLinkId(operation.link_id) === resolvedLinkId,
     );
 
     if (existingIndex !== -1) {
@@ -3790,11 +3798,8 @@ function hasPendingSwipeAction(ownerId, type, linkId = undefined) {
         return false;
     }
 
-    const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
-
-    return Number(swipeUndoState.value.ownerId) === Number(ownerId)
+    return isSameListScope(swipeUndoState.value.ownerId, swipeUndoState.value.linkId, ownerId, linkId)
         && String(swipeUndoState.value.type) === String(type)
-        && normalizeLinkId(swipeUndoState.value.linkId) === normalizedLinkId;
 }
 
 function isSwipeStateForItem(state, ownerId, type, itemId, linkId = undefined) {
@@ -3802,11 +3807,9 @@ function isSwipeStateForItem(state, ownerId, type, itemId, linkId = undefined) {
         return false;
     }
 
-    const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
     if (
-        Number(state.ownerId) !== Number(ownerId)
+        !isSameListScope(state.ownerId, state.linkId, ownerId, linkId)
         || String(state.type) !== String(type)
-        || normalizeLinkId(state.linkId) !== normalizedLinkId
     ) {
         return false;
     }
@@ -3827,7 +3830,6 @@ function isSwipeStateForItem(state, ownerId, type, itemId, linkId = undefined) {
 }
 
 function hasPendingItemOperation(ownerId, type, itemId, linkId = undefined, excludeOpId = null) {
-    const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
     const numericItemId = Number(itemId);
 
     return offlineQueue.value.some((operation) => {
@@ -3835,9 +3837,7 @@ function hasPendingItemOperation(ownerId, type, itemId, linkId = undefined, excl
             return false;
         }
 
-        return Number(operation.owner_id) === Number(ownerId)
-            && String(operation.type) === String(type)
-            && normalizeLinkId(operation.link_id) === normalizedLinkId
+        return matchesScopedOperation(operation, ownerId, type, linkId)
             && Number(operation.item_id) === numericItemId
             && (operation.action === 'create' || operation.action === 'update' || operation.action === 'delete');
     });
@@ -3849,11 +3849,9 @@ function rewriteSwipeUndoItemId(previousId, nextId, ownerId, type, linkId = unde
         return;
     }
 
-    const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
     if (
-        Number(state.ownerId) !== Number(ownerId)
+        !isSameListScope(state.ownerId, state.linkId, ownerId, linkId)
         || String(state.type) !== String(type)
-        || normalizeLinkId(state.linkId) !== normalizedLinkId
     ) {
         return;
     }
@@ -4783,7 +4781,6 @@ async function removeCompletedAfterSwipe(event = null) {
 }
 
 function hasPendingCreateOperation(ownerId, type, itemId, linkId = undefined, excludeOpId = null) {
-    const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
     const numericItemId = Number(itemId);
 
     return offlineQueue.value.some((operation) => {
@@ -4791,9 +4788,7 @@ function hasPendingCreateOperation(ownerId, type, itemId, linkId = undefined, ex
             return false;
         }
 
-        return Number(operation.owner_id) === Number(ownerId)
-            && String(operation.type) === String(type)
-            && normalizeLinkId(operation.link_id) === normalizedLinkId
+        return matchesScopedOperation(operation, ownerId, type, linkId)
             && Number(operation.item_id) === numericItemId
             && operation.action === 'create';
     });
@@ -4914,9 +4909,7 @@ function hasQueuedCreateForOperation(operation) {
 
     return offlineQueue.value.some((queuedOperation) => (
         queuedOperation.action === 'create'
-        && Number(queuedOperation.owner_id) === Number(operation?.owner_id)
-        && String(queuedOperation.type) === String(operation?.type)
-        && normalizeLinkId(queuedOperation.link_id) === normalizeLinkId(operation?.link_id)
+        && matchesScopedOperation(queuedOperation, operation?.owner_id, operation?.type, operation?.link_id)
         && Number(queuedOperation.item_id) === tempItemId
     ));
 }
@@ -5014,9 +5007,7 @@ function applySuccessfulSyncedOperation(operation, resultData) {
         const normalizedLinkId = normalizeLinkId(operation.link_id);
         const hasQueuedDeleteIntent = offlineQueue.value.some((queuedOperation) => (
             queuedOperation.action === 'delete'
-            && Number(queuedOperation.owner_id) === Number(operation.owner_id)
-            && String(queuedOperation.type) === String(operation.type)
-            && normalizeLinkId(queuedOperation.link_id) === normalizedLinkId
+            && matchesScopedOperation(queuedOperation, operation.owner_id, operation.type, normalizedLinkId)
             && Number(queuedOperation.item_id) === previousTempId
         ));
         const hasSwipeDeleteIntent = Boolean(
