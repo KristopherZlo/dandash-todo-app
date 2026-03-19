@@ -1545,6 +1545,51 @@ function queueGamificationState(payload) {
     });
 }
 
+function queueSharedGamificationDelta(linkId, delta) {
+    const normalizedLinkId = normalizeLinkId(linkId);
+    const normalizedDelta = Math.round((Number(delta) || 0) * 1000000) / 1000000;
+
+    if (!normalizedLinkId || !Number.isFinite(normalizedDelta) || Math.abs(normalizedDelta) < 0.000001) {
+        return;
+    }
+
+    const existingIndex = findQueueIndexFromEnd(
+        (operation) =>
+            operation.action === 'apply_shared_gamification_delta'
+            && Number(operation?.payload?.link_id) === normalizedLinkId,
+    );
+
+    if (existingIndex !== -1 && !isOperationBeingSynced(offlineQueue.value[existingIndex]?.op_id)) {
+        const existingDelta = Number(offlineQueue.value[existingIndex]?.payload?.delta) || 0;
+        const nextDelta = Math.round((existingDelta + normalizedDelta) * 1000000) / 1000000;
+
+        if (Math.abs(nextDelta) < 0.000001) {
+            offlineQueue.value.splice(existingIndex, 1);
+            persistQueue();
+            return;
+        }
+
+        offlineQueue.value[existingIndex] = {
+            ...offlineQueue.value[existingIndex],
+            payload: {
+                ...offlineQueue.value[existingIndex]?.payload,
+                link_id: normalizedLinkId,
+                delta: nextDelta,
+            },
+        };
+        persistQueue();
+        return;
+    }
+
+    enqueueOperation({
+        action: 'apply_shared_gamification_delta',
+        payload: {
+            link_id: normalizedLinkId,
+            delta: normalizedDelta,
+        },
+    });
+}
+
 function notifyGamificationStateChanged() {
     if (!shouldQueueGamificationSync()) {
         return;
@@ -3978,6 +4023,10 @@ function stageSwipeAction(state) {
         for (const removedEntry of state.removed ?? []) {
             queueDelete(state.ownerId, state.type, removedEntry.item.id, state.linkId);
         }
+
+        if (normalizeLinkId(state.linkId) && Number(state.xpGainTotal) > 0) {
+            queueSharedGamificationDelta(state.linkId, state.xpGainTotal);
+        }
     }
 }
 
@@ -4852,6 +4901,7 @@ function shouldDropOperationOnClientError(operation, statusCode) {
         'dismiss_suggestion',
         'reset_suggestion',
         'update_suggestion_settings',
+        'apply_shared_gamification_delta',
         'set_default_owner',
         'send_invitation',
         'accept_invitation',
@@ -5247,6 +5297,10 @@ function applySuccessfulSyncedOperation(operation, resultData) {
             );
             loadSuggestions(operation.type).catch(() => {});
         }
+        return;
+    }
+
+    if (action === 'apply_shared_gamification_delta') {
         return;
     }
 
@@ -6465,8 +6519,9 @@ async function toggleCompleted(item) {
     const { ownerId, linkId } = resolveItemContext(item);
     const nextCompleted = !item.is_completed;
     const nextSortOrder = nextSortOrderForLocalList(ownerId, item.type, nextCompleted, linkId);
+    const xpDelta = nextCompleted ? XP_PROGRESS_PER_TOGGLE : -XP_PROGRESS_PER_TOGGLE;
 
-    adjustXpProgress(nextCompleted ? XP_PROGRESS_PER_TOGGLE : -XP_PROGRESS_PER_TOGGLE);
+    adjustXpProgress(xpDelta);
 
     upsertLocalItem(ownerId, item.type, {
         ...item,
@@ -6483,6 +6538,10 @@ async function toggleCompleted(item) {
         is_completed: nextCompleted,
         sort_order: nextSortOrder,
     }, linkId);
+
+    if (normalizeLinkId(linkId)) {
+        queueSharedGamificationDelta(linkId, xpDelta);
+    }
 
     syncOfflineQueue().catch(() => {});
 }
