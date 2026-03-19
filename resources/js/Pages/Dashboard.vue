@@ -14,8 +14,22 @@ import {
 } from '@/modules/dashboard/productText';
 import { formatIntervalSeconds, suggestionStatusText } from '@/modules/dashboard/suggestionFormat';
 import {
+    areItemsEquivalent,
+    normalizeComparableValue,
+    normalizeItem,
+    normalizeItems,
+    normalizeSortOrderValue,
+    parseComparableTimestampMs,
+    sortItems,
+} from '@/modules/dashboard/listItemCollections';
+import { findBestPendingCreateMatch } from '@/modules/dashboard/pendingCreateMatch';
+import {
+    buildIncomingItemsFromRealtimeEvent,
+    readRealtimeChangedAtToken,
+    readRealtimeListVersion,
+} from '@/modules/dashboard/realtimeListEvents';
+import {
     deduplicateItemsById,
-    findRealtimeMatchForPendingCreate,
 } from '@/modules/dashboard/realtimeListMerge';
 import {
     filterSuggestionStatsEntries,
@@ -73,6 +87,33 @@ const appVersion = computed(() => String(page.props.meta?.app_version ?? 'dev'))
 const buildVersion = computed(() => String(page.props.meta?.build_version ?? 'dev'));
 
 const TOUCH_DRAG_HOLD_DELAY_MS = 500;
+const SAFARI_DRAG_FALLBACK_TOLERANCE_PX = 8;
+const SAFARI_DRAG_ANIMATION_MS = 0;
+const DEFAULT_DRAG_ANIMATION_MS = 220;
+
+function detectSafariBrowser() {
+    if (typeof navigator === 'undefined') {
+        return false;
+    }
+
+    const userAgent = String(navigator.userAgent ?? '');
+    const vendor = String(navigator.vendor ?? '');
+
+    if (!/Safari/i.test(userAgent) || !/Apple/i.test(vendor)) {
+        return false;
+    }
+
+    return !/(CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser|SamsungBrowser|UCBrowser|Chrome|Chromium|Android)/i.test(userAgent);
+}
+
+const isSafariBrowser = detectSafariBrowser();
+const dragAnimationMs = isSafariBrowser
+    ? SAFARI_DRAG_ANIMATION_MS
+    : DEFAULT_DRAG_ANIMATION_MS;
+const dragFallbackTolerancePx = isSafariBrowser
+    ? SAFARI_DRAG_FALLBACK_TOLERANCE_PX
+    : 0;
+
 const {
     activeTab,
     themeMode,
@@ -2636,130 +2677,11 @@ function waitForMs(milliseconds) {
     });
 }
 
-function normalizeSortOrderValue(value, fallback = 1000) {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) {
-        return fallback;
-    }
-
-    return Math.round(parsed);
-}
-
-function sortItems(items) {
-    return cloneItems(items).sort((left, right) => {
-        const completedSort = Number(left.is_completed) - Number(right.is_completed);
-        if (completedSort !== 0) {
-            return completedSort;
-        }
-
-        const leftSortOrder = normalizeSortOrderValue(left.sort_order, 1000);
-        const rightSortOrder = normalizeSortOrderValue(right.sort_order, 1000);
-        if (leftSortOrder !== rightSortOrder) {
-            return leftSortOrder - rightSortOrder;
-        }
-
-        return String(right.created_at ?? '').localeCompare(String(left.created_at ?? ''));
-    });
-}
-
-function normalizeComparableValue(value) {
-    if (value === null || value === undefined) {
-        return '';
-    }
-
-    return String(value);
-}
-
-function parseComparableTimestampMs(value) {
-    const parsed = Date.parse(normalizeComparableValue(value));
-    return Number.isFinite(parsed) ? parsed : null;
-}
-
-function areItemsEquivalent(leftItems, rightItems) {
-    const left = Array.isArray(leftItems) ? leftItems : [];
-    const right = Array.isArray(rightItems) ? rightItems : [];
-
-    if (left.length !== right.length) {
-        return false;
-    }
-
-    for (let index = 0; index < left.length; index += 1) {
-        const leftItem = left[index] ?? {};
-        const rightItem = right[index] ?? {};
-
-        if (Number(leftItem.id) !== Number(rightItem.id)) {
-            return false;
-        }
-
-        if (normalizeComparableValue(leftItem.local_id) !== normalizeComparableValue(rightItem.local_id)) {
-            return false;
-        }
-
-        if (Number(leftItem.owner_id) !== Number(rightItem.owner_id)) {
-            return false;
-        }
-
-        if (normalizeLinkId(leftItem.list_link_id) !== normalizeLinkId(rightItem.list_link_id)) {
-            return false;
-        }
-
-        if (normalizeComparableValue(leftItem.type) !== normalizeComparableValue(rightItem.type)) {
-            return false;
-        }
-
-        if (normalizeComparableValue(leftItem.text) !== normalizeComparableValue(rightItem.text)) {
-            return false;
-        }
-
-        if (normalizeComparableValue(leftItem.sort_order) !== normalizeComparableValue(rightItem.sort_order)) {
-            return false;
-        }
-
-        if (normalizeComparableValue(leftItem.quantity) !== normalizeComparableValue(rightItem.quantity)) {
-            return false;
-        }
-
-        if (normalizeComparableValue(leftItem.unit) !== normalizeComparableValue(rightItem.unit)) {
-            return false;
-        }
-
-        if (normalizeComparableValue(leftItem.due_at) !== normalizeComparableValue(rightItem.due_at)) {
-            return false;
-        }
-
-        if (normalizeComparableValue(leftItem.priority) !== normalizeComparableValue(rightItem.priority)) {
-            return false;
-        }
-
-        if (Boolean(leftItem.is_completed) !== Boolean(rightItem.is_completed)) {
-            return false;
-        }
-
-        if (normalizeComparableValue(leftItem.completed_at) !== normalizeComparableValue(rightItem.completed_at)) {
-            return false;
-        }
-
-        if (normalizeComparableValue(leftItem.created_at) !== normalizeComparableValue(rightItem.created_at)) {
-            return false;
-        }
-
-        if (normalizeComparableValue(leftItem.updated_at) !== normalizeComparableValue(rightItem.updated_at)) {
-            return false;
-        }
-
-        if (Boolean(leftItem.pending_sync) !== Boolean(rightItem.pending_sync)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 function setVisibleItems(type, items) {
     const nextItems = cloneItems(items);
 
     if (type === 'product') {
-        if (areItemsEquivalent(productItems.value, nextItems)) {
+        if (areItemsEquivalent(productItems.value, nextItems, { normalizeLinkId })) {
             return;
         }
 
@@ -2767,74 +2689,11 @@ function setVisibleItems(type, items) {
         return;
     }
 
-    if (areItemsEquivalent(todoItems.value, nextItems)) {
+    if (areItemsEquivalent(todoItems.value, nextItems, { normalizeLinkId })) {
         return;
     }
 
     todoItems.value = nextItems;
-}
-
-function normalizeItem(item, localIdOverride = null, context = {}) {
-    const ownerIdOverride = context?.ownerIdOverride;
-    const linkIdOverride = context?.linkIdOverride;
-
-    return {
-        ...item,
-        owner_id: Number(ownerIdOverride ?? item?.owner_id ?? 0),
-        list_link_id: normalizeLinkId(linkIdOverride ?? item?.list_link_id),
-        sort_order: normalizeSortOrderValue(item?.sort_order, 1000),
-        local_id: localIdOverride ?? item.local_id ?? `srv-${item.id}`,
-        priority: item?.type === 'todo' ? normalizeTodoPriority(item?.priority) : null,
-        pending_sync: false,
-    };
-}
-
-function normalizeItems(items, previousItems = [], context = {}) {
-    const previousList = Array.isArray(previousItems) ? previousItems : [];
-    const previousLocalIdById = new Map(
-        previousList
-            .map((item) => [Number(item?.id), String(item?.local_id ?? '').trim()])
-            .filter(([id, localId]) => Number.isFinite(id) && localId !== ''),
-    );
-    const previousItemById = new Map(
-        previousList
-            .map((item) => [Number(item?.id), item])
-            .filter(([id]) => Number.isFinite(id)),
-    );
-
-    const normalizedItems = (items ?? []).map((item) => {
-        const normalized = normalizeItem(item, null, context);
-        const itemId = Number(normalized.id);
-        const preservedLocalId = previousLocalIdById.get(itemId);
-
-        if (preservedLocalId) {
-            normalized.local_id = preservedLocalId;
-        }
-
-        const previousItem = previousItemById.get(itemId);
-        if (!previousItem) {
-            return normalized;
-        }
-
-        const previousUpdatedAtMs = parseComparableTimestampMs(previousItem.updated_at);
-        const nextUpdatedAtMs = parseComparableTimestampMs(normalized.updated_at);
-        const shouldKeepPrevious = previousUpdatedAtMs !== null
-            && (nextUpdatedAtMs === null || previousUpdatedAtMs >= nextUpdatedAtMs);
-
-        if (!shouldKeepPrevious) {
-            return normalized;
-        }
-
-        return {
-            ...normalized,
-            ...previousItem,
-            owner_id: normalized.owner_id,
-            list_link_id: normalized.list_link_id,
-            local_id: preservedLocalId || String(previousItem?.local_id ?? '').trim() || normalized.local_id,
-        };
-    });
-
-    return sortItems(deduplicateItemsById(normalizedItems));
 }
 
 function hasListSyncConflict(ownerId, type, linkId = undefined, expectedVersion = null) {
@@ -2928,9 +2787,9 @@ function readFilteredServerItems(ownerId, type, items, linkId = undefined) {
 function writeListToCache(ownerId, type, items, linkId = undefined) {
     const resolvedLinkId = resolveLinkIdForOwner(ownerId, linkId);
     const key = listCacheKey(ownerId, type, resolvedLinkId);
-    const normalized = sortItems(items);
+    const normalized = sortItems(deduplicateItemsById(items));
     const previous = Array.isArray(cachedItemsByList.value[key]) ? cachedItemsByList.value[key] : [];
-    const cacheChanged = !areItemsEquivalent(previous, normalized);
+    const cacheChanged = !areItemsEquivalent(previous, normalized, { normalizeLinkId });
 
     clearDeletedTombstonesForItems(ownerId, type, normalized, resolvedLinkId);
 
@@ -3168,6 +3027,10 @@ function generateTempId() {
     return nextTempId;
 }
 
+function generateClientRequestId() {
+    return `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function nextSortOrderForLocalList(ownerId, type, isCompleted = false, linkId = undefined) {
     const currentItems = readListFromCache(ownerId, type, linkId)
         .filter((item) => Boolean(item.is_completed) === Boolean(isCompleted));
@@ -3200,10 +3063,12 @@ function createOptimisticItem({
 }) {
     const now = new Date().toISOString();
     const tempId = generateTempId();
+    const clientRequestId = generateClientRequestId();
 
     return {
         id: tempId,
         local_id: `tmp-${Math.abs(tempId)}`,
+        client_request_id: clientRequestId,
         owner_id: Number(ownerId),
         list_link_id: normalizeLinkId(linkId),
         type,
@@ -3395,6 +3260,7 @@ function queueCreate(ownerId, type, item, linkId = undefined) {
         item_id: Number(item.id),
         payload: {
             text: item.text,
+            client_request_id: item.client_request_id ?? null,
             quantity: item.quantity ?? null,
             unit: item.unit ?? null,
             due_at: item.due_at ?? null,
@@ -5086,9 +4952,14 @@ function applySuccessfulSyncedOperation(operation, resultData) {
             return;
         }
 
-        const syncedItem = normalizeItem(syncedItemResponse, `srv-${syncedItemResponse.id}`, {
+        const syncedItem = normalizeItem({
+            ...syncedItemResponse,
+            local_id: `srv-${syncedItemResponse.id}`,
+        }, {
             ownerIdOverride: operation.owner_id,
             linkIdOverride: operation.link_id,
+            normalizeLinkId,
+            normalizeTodoPriority,
         });
         const previousTempId = Number(operation.item_id);
         const normalizedLinkId = normalizeLinkId(operation.link_id);
@@ -5883,6 +5754,8 @@ async function loadItems(type, showErrors = false, ownerIdOverride = null, linkI
         const normalizedItems = normalizeItems(response.data.items ?? [], cachedBeforeRequest, {
             ownerIdOverride: ownerId,
             linkIdOverride: linkId,
+            normalizeLinkId,
+            normalizeTodoPriority,
         });
         const filteredItems = readFilteredServerItems(ownerId, type, normalizedItems, linkId);
 
@@ -7157,6 +7030,8 @@ function mergeRealtimeItemsWithLocalPending(ownerId, type, incomingItems, linkId
     const normalizedIncoming = normalizeItems(incomingItems, previousItems, {
         ownerIdOverride: ownerId,
         linkIdOverride: resolvedLinkId,
+        normalizeLinkId,
+        normalizeTodoPriority,
     });
     const mergedById = new Map(
         normalizedIncoming
@@ -7185,7 +7060,7 @@ function mergeRealtimeItemsWithLocalPending(ownerId, type, incomingItems, linkId
 
         const isPendingCreateTempItem = itemId < 0 && hasPendingCreateOperation(ownerId, type, itemId, resolvedLinkId);
         const matchedIncomingCreateItem = isPendingCreateTempItem
-            ? findRealtimeMatchForPendingCreate(
+            ? findBestPendingCreateMatch(
                 localItem,
                 normalizedIncoming,
                 {
@@ -7220,6 +7095,9 @@ function mergeRealtimeItemsWithLocalPending(ownerId, type, incomingItems, linkId
                 local_id: String(localItem?.local_id ?? '').trim()
                     || String(matchedIncomingCreateItem?.local_id ?? '').trim()
                     || `tmp-${Math.abs(itemId)}`,
+                client_request_id: String(localItem?.client_request_id ?? '').trim()
+                    || String(matchedIncomingCreateItem?.client_request_id ?? '').trim()
+                    || null,
             });
             continue;
         }
@@ -7241,24 +7119,13 @@ function mergeRealtimeItemsWithLocalPending(ownerId, type, incomingItems, linkId
             list_link_id: normalizeLinkId(incomingItem.list_link_id ?? resolvedLinkId),
             local_id: String(localItem?.local_id ?? '').trim()
                 || String(incomingItem?.local_id ?? '').trim(),
+            client_request_id: String(localItem?.client_request_id ?? '').trim()
+                || String(incomingItem?.client_request_id ?? '').trim()
+                || null,
         });
     }
 
     return sortItems(deduplicateItemsById(Array.from(mergedById.values())));
-}
-
-function readRealtimeChangedAtToken(eventPayload) {
-    const changedAtToken = String(eventPayload?.changed_at ?? '').trim();
-    return changedAtToken === '' ? null : changedAtToken;
-}
-
-function readRealtimeListVersion(eventPayload) {
-    const numericVersion = Number(eventPayload?.list_version ?? 0);
-    if (!Number.isFinite(numericVersion) || numericVersion <= 0) {
-        return null;
-    }
-
-    return Math.floor(numericVersion);
 }
 
 function shouldApplyRealtimeListSnapshot(ownerId, type, linkId, eventPayload) {
@@ -7308,17 +7175,26 @@ function subscribeListChannel(ownerId) {
             return;
         }
 
-        const eventItems = Array.isArray(eventPayload?.items) ? eventPayload.items : null;
-        if (!eventItems) {
-            return;
-        }
-
         const type = resolveRealtimeListType(eventPayload);
         const eventOwnerId = Number(eventPayload?.owner_id ?? selectedOwnerId.value);
         const eventLinkId = resolveLinkIdForOwner(eventOwnerId, eventPayload?.list_link_id);
         if (!shouldApplyRealtimeListSnapshot(eventOwnerId, type, eventLinkId, eventPayload)) {
             return;
         }
+        const eventItems = buildIncomingItemsFromRealtimeEvent(
+            readListFromCache(eventOwnerId, type, eventLinkId),
+            eventPayload,
+            {
+                ownerIdOverride: eventOwnerId,
+                linkIdOverride: eventLinkId,
+                normalizeLinkId,
+                normalizeTodoPriority,
+            },
+        );
+        if (!Array.isArray(eventItems)) {
+            return;
+        }
+
         const mergedItems = mergeRealtimeItemsWithLocalPending(eventOwnerId, type, eventItems, eventLinkId);
         const filteredItems = readFilteredServerItems(eventOwnerId, type, mergedItems, eventLinkId);
         writeListToCache(eventOwnerId, type, filteredItems, eventLinkId);
@@ -7526,7 +7402,7 @@ onBeforeUnmount(() => {
 <template>
     <Head title="Dandash" />
 
-    <div class="min-h-screen bg-[#19181a] text-[#fcfcfa]">
+    <div class="min-h-screen bg-[#19181a] text-[#fcfcfa]" :class="{ 'safari-stability-mode': isSafariBrowser }">
         <div class="mx-auto flex min-h-screen w-full max-w-md flex-col px-4 pb-36 pt-4">
 
             <div
@@ -7683,7 +7559,11 @@ onBeforeUnmount(() => {
                     ghost-class="drag-ghost"
                     chosen-class="drag-chosen"
                     drag-class="drag-dragging"
-                    :animation="220"
+                    :animation="dragAnimationMs"
+                    :force-fallback="isSafariBrowser"
+                    :fallback-on-body="isSafariBrowser"
+                    :fallback-tolerance="dragFallbackTolerancePx"
+                    :remove-clone-on-hide="true"
                     class="space-y-3"
                     @end="onItemsReorder('product', $event)"
                 >
@@ -7833,7 +7713,11 @@ onBeforeUnmount(() => {
                     ghost-class="drag-ghost"
                     chosen-class="drag-chosen"
                     drag-class="drag-dragging"
-                    :animation="220"
+                    :animation="dragAnimationMs"
+                    :force-fallback="isSafariBrowser"
+                    :fallback-on-body="isSafariBrowser"
+                    :fallback-tolerance="dragFallbackTolerancePx"
+                    :remove-clone-on-hide="true"
                     class="space-y-3"
                     @end="onItemsReorder('todo', $event)"
                 >
@@ -9418,6 +9302,7 @@ onBeforeUnmount(() => {
     cursor: grab;
     user-select: none;
     -webkit-user-select: none;
+    -webkit-user-drag: none;
     touch-action: none;
 }
 
@@ -9444,6 +9329,20 @@ onBeforeUnmount(() => {
 
 .drag-dragging {
     opacity: 0.92;
+}
+
+.safari-stability-mode .drag-item-shell {
+    transition: none;
+}
+
+.safari-stability-mode .item-added-pop,
+.safari-stability-mode .drag-chosen,
+.safari-stability-mode .batch-remove-fly {
+    animation: none;
+}
+
+.safari-stability-mode :deep(.swipe-item-card) {
+    transition-duration: 0.01ms;
 }
 
 @keyframes drag-ready-glow {
