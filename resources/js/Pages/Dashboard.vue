@@ -2,6 +2,7 @@
 import SwipeListItem from '@/Components/SwipeListItem.vue';
 import ToastStack from '@/Components/ToastStack.vue';
 import { useDashboardChrome } from '@/composables/useDashboardChrome';
+import { useSuggestionStats } from '@/composables/useSuggestionStats';
 import { useToasts } from '@/composables/useToasts';
 import {
     buildProductEditableText,
@@ -33,9 +34,8 @@ import {
 } from '@/modules/dashboard/realtimeListMerge';
 import { createListSyncGuards } from '@/modules/dashboard/listSyncGuards';
 import {
-    filterSuggestionStatsEntries,
-    paginateSuggestionStatsEntries,
     parseSuggestionIntervalPresetValue,
+    SUGGESTION_STATS_PAGE_SIZE,
     SUGGESTION_INTERVAL_PRESETS,
     suggestionIntervalPresetValueForEntry,
 } from '@/modules/dashboard/suggestionStats';
@@ -159,8 +159,6 @@ const searchQuery = ref('');
 const searchResults = ref([]);
 const searchBusy = ref(false);
 
-const productStatsModalOpen = ref(false);
-const suggestionStatsType = ref('product');
 const productSuggestionsOpen = ref(true);
 const todoSuggestionsOpen = ref(true);
 const moodFireSliderActive = ref(false);
@@ -193,37 +191,8 @@ const xpColorSeed = ref(1);
 const xpProgressLevel = ref(1);
 const animationSkipEpoch = ref(0);
 const soundEnabled = ref(true);
-const productSuggestionStats = ref([]);
-const productStatsSummary = ref({
-    total_added: 0,
-    total_completed: 0,
-    unique_items: 0,
-    unique_products: 0,
-    due_suggestions: 0,
-    upcoming_suggestions: 0,
-    last_activity_at: null,
-});
-const productSuggestionStatsLoading = ref(false);
-const resettingSuggestionKeys = ref([]);
-const recentlyResetSuggestionKeys = ref([]);
-const savingSuggestionSettingsKeys = ref([]);
-const suggestionStatsSearchQuery = ref('');
-const suggestionStatsView = ref('active');
-const suggestionStatsPage = ref(1);
-const suggestionResetSuccessTimers = new Map();
-const suggestionResetRemovalTimers = new Map();
 const actionButtonSuccessState = ref({});
 const actionButtonSuccessTimers = new Map();
-
-const filteredSuggestionStats = computed(() => (
-    filterSuggestionStatsEntries(productSuggestionStats.value, {
-        view: suggestionStatsView.value,
-        query: suggestionStatsSearchQuery.value,
-    })
-));
-const pagedSuggestionStats = computed(() => (
-    paginateSuggestionStatsEntries(filteredSuggestionStats.value, suggestionStatsPage.value)
-));
 
 const {
     toasts,
@@ -469,6 +438,43 @@ function resolveLinkIdForOwner(ownerId, explicitLinkId = undefined) {
 
 const selectedListOption = computed(() => findListOptionByOwner(selectedOwnerId.value));
 const selectedListLinkId = computed(() => normalizeLinkId(selectedListOption.value?.link_id));
+const {
+    productStatsModalOpen,
+    suggestionStatsType,
+    productSuggestionStats,
+    productStatsSummary,
+    productSuggestionStatsLoading,
+    resettingSuggestionKeys,
+    recentlyResetSuggestionKeys,
+    suggestionStatsSearchQuery,
+    suggestionStatsView,
+    filteredSuggestionStats,
+    pagedSuggestionStats,
+    suggestionSettingsSuccessKey,
+    isSavingSuggestionSettings,
+    setSuggestionSettingsSaving,
+    suggestionStatsViewCount,
+    changeSuggestionStatsView,
+    goToSuggestionStatsPage,
+    formatSuggestionStatsEffectiveInterval,
+    isResettingSuggestionKey,
+    isSuggestionResetDone,
+    markSuggestionResetDone,
+    removeSuggestionStatsRowAfterReset,
+    suggestionStatsCount,
+    openSuggestionStatsModal: openSuggestionStatsModalState,
+    closeSuggestionStatsModal,
+    resetSuggestionStatsSummary,
+    disposeSuggestionStats,
+} = useSuggestionStats({
+    formatIntervalSeconds,
+    normalizeSuggestionStatsType,
+    normalizeLinkId,
+    readSuggestionStatsFromCache,
+    writeSuggestionStatsToCache,
+    selectedOwnerId,
+    selectedListLinkId,
+});
 const selectedListLabel = computed(() => selectedListOption.value?.label ?? 'Личный');
 
 function buildCompletedStats(items) {
@@ -5871,59 +5877,6 @@ function formatProductStatsSummaryNumber(value) {
     return new Intl.NumberFormat('ru-RU').format(Math.round(numeric));
 }
 
-function suggestionSettingsSuccessKey(suggestionKey, mode = 'settings') {
-    return `suggestion-settings:${String(mode ?? 'settings').trim()}:${String(suggestionKey ?? '').trim()}`;
-}
-
-function isSavingSuggestionSettings(suggestionKey) {
-    return savingSuggestionSettingsKeys.value.includes(String(suggestionKey ?? '').trim());
-}
-
-function setSuggestionSettingsSaving(suggestionKey, active) {
-    const normalizedKey = String(suggestionKey ?? '').trim();
-    if (normalizedKey === '') {
-        return;
-    }
-
-    if (active) {
-        if (!savingSuggestionSettingsKeys.value.includes(normalizedKey)) {
-            savingSuggestionSettingsKeys.value = [...savingSuggestionSettingsKeys.value, normalizedKey];
-        }
-        return;
-    }
-
-    savingSuggestionSettingsKeys.value = savingSuggestionSettingsKeys.value.filter((key) => key !== normalizedKey);
-}
-
-function suggestionStatsViewCount(view) {
-    return filterSuggestionStatsEntries(productSuggestionStats.value, {
-        view,
-        query: '',
-    }).length;
-}
-
-function changeSuggestionStatsView(view) {
-    suggestionStatsView.value = view;
-    suggestionStatsPage.value = 1;
-}
-
-function goToSuggestionStatsPage(page) {
-    const totalPages = Math.max(1, Number(pagedSuggestionStats.value?.totalPages) || 1);
-    suggestionStatsPage.value = Math.min(
-        totalPages,
-        Math.max(1, Math.floor(Number(page) || 1)),
-    );
-}
-
-function formatSuggestionStatsEffectiveInterval(entry) {
-    return formatProductStatsInterval(
-        entry?.custom_interval_seconds
-            ?? entry?.effective_interval_seconds
-            ?? entry?.average_interval_seconds
-            ?? null,
-    );
-}
-
 function applySuggestionStateToStatsCache(ownerId, statsType, suggestionKey, nextState, linkId) {
     const normalizedKey = String(suggestionKey ?? '').trim();
     if (normalizedKey === '') {
@@ -5973,82 +5926,10 @@ function removeSuggestionFromSuggestionsCache(ownerId, type, suggestionKey, link
     writeSuggestionsToCache(ownerId, type, filteredSuggestions, linkId);
 }
 
-function isResettingSuggestionKey(suggestionKey) {
-    return resettingSuggestionKeys.value.includes(String(suggestionKey ?? ''));
-}
-
-function isSuggestionResetDone(suggestionKey) {
-    return recentlyResetSuggestionKeys.value.includes(String(suggestionKey ?? ''));
-}
-
-function markSuggestionResetDone(suggestionKey, resetAfterMs = 1800) {
-    const normalizedKey = String(suggestionKey ?? '').trim();
-    if (normalizedKey === '') {
-        return;
-    }
-
-    if (!recentlyResetSuggestionKeys.value.includes(normalizedKey)) {
-        recentlyResetSuggestionKeys.value = [...recentlyResetSuggestionKeys.value, normalizedKey];
-    }
-
-    const existingTimer = suggestionResetSuccessTimers.get(normalizedKey);
-    if (existingTimer) {
-        clearTimeout(existingTimer);
-    }
-
-    const timerId = window.setTimeout(() => {
-        suggestionResetSuccessTimers.delete(normalizedKey);
-        recentlyResetSuggestionKeys.value = recentlyResetSuggestionKeys.value.filter((key) => key !== normalizedKey);
-    }, Math.max(600, Number(resetAfterMs) || 1800));
-
-    suggestionResetSuccessTimers.set(normalizedKey, timerId);
-}
-
-function removeSuggestionStatsRowAfterReset(suggestionKey, ownerId, statsType, linkId, delayMs = 1000) {
-    const normalizedKey = String(suggestionKey ?? '').trim();
-    if (normalizedKey === '') {
-        return;
-    }
-
-    const normalizedType = normalizeSuggestionStatsType(statsType);
-    const normalizedOwnerId = Number(ownerId);
-    const normalizedLinkId = normalizeLinkId(linkId);
-    const timerKey = `${normalizedType}:${normalizedOwnerId}:${normalizedLinkId ?? 0}:${normalizedKey}`;
-
-    const existingTimer = suggestionResetRemovalTimers.get(timerKey);
-    if (existingTimer) {
-        clearTimeout(existingTimer);
-    }
-
-    const timerId = window.setTimeout(() => {
-        suggestionResetRemovalTimers.delete(timerKey);
-
-        productSuggestionStats.value = productSuggestionStats.value.filter(
-            (statsEntry) => String(statsEntry?.suggestion_key ?? '') !== normalizedKey,
-        );
-
-        const cachedPayload = readSuggestionStatsFromCache(normalizedOwnerId, normalizedType, normalizedLinkId);
-        cachedPayload.stats = cachedPayload.stats.filter(
-            (statsEntry) => String(statsEntry?.suggestion_key ?? '') !== normalizedKey,
-        );
-        writeSuggestionStatsToCache(normalizedOwnerId, normalizedType, cachedPayload, normalizedLinkId);
-    }, Math.max(300, Number(delayMs) || 1000));
-
-    suggestionResetRemovalTimers.set(timerKey, timerId);
-}
-
-function suggestionStatsCount(type) {
-    const ownerId = Number(selectedOwnerId.value);
-    const linkId = selectedListLinkId.value;
-    return readSuggestionStatsFromCache(ownerId, normalizeSuggestionStatsType(type), linkId).stats.length;
-}
-
 async function openSuggestionStatsModal(type = 'product') {
-    suggestionStatsSearchQuery.value = '';
-    suggestionStatsView.value = 'active';
-    suggestionStatsPage.value = 1;
-    productStatsModalOpen.value = true;
-    await loadSuggestionStats(type, false);
+    const normalizedType = openSuggestionStatsModalState(type);
+    resetSuggestionStatsSummary();
+    await loadSuggestionStats(normalizedType, false);
 }
 
 async function updateSuggestionStatsRowSettings(entry, payload, options = {}) {
@@ -6169,7 +6050,7 @@ async function resetSuggestionStatsRow(entry) {
 
         showStatus('\u0414\u0430\u043d\u043d\u044b\u0435 \u043f\u043e\u0434\u0441\u043a\u0430\u0437\u043e\u043a \u0441\u0431\u0440\u043e\u0448\u0435\u043d\u044b.');
         markSuggestionResetDone(suggestionKey, 1400);
-        removeSuggestionStatsRowAfterReset(suggestionKey, ownerId, statsType, linkId, 1000);
+        removeSuggestionStatsRowAfterReset(suggestionKey, 1000);
     } finally {
         resettingSuggestionKeys.value = resettingSuggestionKeys.value.filter((key) => key !== suggestionKey);
     }
@@ -7153,17 +7034,6 @@ watch(activeTab, async (tab) => {
     }
 });
 
-watch([suggestionStatsSearchQuery, suggestionStatsView, suggestionStatsType], () => {
-    suggestionStatsPage.value = 1;
-});
-
-watch(filteredSuggestionStats, (entries) => {
-    const totalPages = Math.max(1, Math.ceil(entries.length / SUGGESTION_STATS_PAGE_SIZE));
-    if (suggestionStatsPage.value > totalPages) {
-        suggestionStatsPage.value = totalPages;
-    }
-});
-
 watch(themeMode, (mode) => {
     applyThemeMode(mode);
 });
@@ -7260,14 +7130,7 @@ onBeforeUnmount(() => {
     latestRealtimeEventTokenByList.clear();
     blockedSuggestionRefreshTypes.clear();
     itemCardElements.clear();
-    for (const timerId of suggestionResetSuccessTimers.values()) {
-        clearTimeout(timerId);
-    }
-    suggestionResetSuccessTimers.clear();
-    for (const timerId of suggestionResetRemovalTimers.values()) {
-        clearTimeout(timerId);
-    }
-    suggestionResetRemovalTimers.clear();
+    disposeSuggestionStats();
     for (const timerId of actionButtonSuccessTimers.values()) {
         clearTimeout(timerId);
     }
