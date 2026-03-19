@@ -120,10 +120,8 @@ class ListItemApiService
             $item->list_link_id ? (int) $item->list_link_id : null
         );
 
-        $this->realtimeNotifier->dispatchListItemsChangedSafely(
-            $item->owner_id,
-            $item->type,
-            $item->list_link_id ? (int) $item->list_link_id : null,
+        $this->realtimeNotifier->dispatchItemCreatedSafely(
+            $item->fresh(),
             (int) $request->user()->id,
             $listVersion
         );
@@ -377,10 +375,8 @@ class ListItemApiService
             $item->list_link_id ? (int) $item->list_link_id : null
         );
 
-        $this->realtimeNotifier->dispatchListItemsChangedSafely(
-            $item->owner_id,
-            $item->type,
-            $item->list_link_id ? (int) $item->list_link_id : null,
+        $this->realtimeNotifier->dispatchItemUpdatedSafely(
+            $item->fresh(),
             (int) $request->user()->id,
             $listVersion
         );
@@ -414,7 +410,7 @@ class ListItemApiService
             $itemsQuery->forOwner($context->ownerId)->whereNull('list_link_id');
         }
 
-        $this->orderingService->reorderItemsForScope(
+        $orderPayload = $this->orderingService->reorderItemsForScope(
             $itemsQuery,
             (array) $validated['order'],
             (int) $request->user()->id
@@ -425,9 +421,11 @@ class ListItemApiService
             $context->linkId
         );
 
-        $this->realtimeNotifier->dispatchListItemsChangedSafely(
+        $this->realtimeNotifier->dispatchListReorderedSafely(
             $context->ownerId,
             $type,
+            $orderPayload['active_order'] ?? [],
+            $orderPayload['completed_order'] ?? [],
             $context->linkId,
             (int) $request->user()->id,
             $listVersion
@@ -453,9 +451,10 @@ class ListItemApiService
             $linkId
         );
 
-        $this->realtimeNotifier->dispatchListItemsChangedSafely(
+        $this->realtimeNotifier->dispatchItemDeletedSafely(
             $ownerId,
             $type,
+            (int) $item->id,
             $linkId,
             (int) $request->user()->id,
             $listVersion

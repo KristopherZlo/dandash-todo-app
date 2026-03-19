@@ -28,13 +28,17 @@ class ListItemOrderingService
 
     /**
      * @param  array<int, int|string>  $requestedOrder
+     * @return array{active_order: array<int, int>, completed_order: array<int, int>}
      */
-    public function reorderItemsForScope(Builder $itemsQuery, array $requestedOrder, int $updatedById): void
+    public function reorderItemsForScope(Builder $itemsQuery, array $requestedOrder, int $updatedById): array
     {
         $itemsById = $itemsQuery->get()->keyBy('id');
 
         if ($itemsById->isEmpty()) {
-            return;
+            return [
+                'active_order' => [],
+                'completed_order' => [],
+            ];
         }
 
         $orderedIds = collect($requestedOrder)
@@ -45,7 +49,10 @@ class ListItemOrderingService
             ->values();
 
         if ($orderedIds->isEmpty()) {
-            return;
+            return [
+                'active_order' => [],
+                'completed_order' => [],
+            ];
         }
 
         $activeIds = $orderedIds
@@ -68,7 +75,7 @@ class ListItemOrderingService
             ->filter(fn (int $id): bool => ! $completedIds->contains($id))
             ->values();
 
-        $this->persistOrders(
+        return $this->persistOrders(
             $itemsById,
             $activeIds->concat($remainingActiveIds)->values(),
             $completedIds->concat($remainingCompletedIds)->values(),
@@ -92,8 +99,8 @@ class ListItemOrderingService
         Collection $finalActiveIds,
         Collection $finalCompletedIds,
         int $updatedById
-    ): void {
-        DB::transaction(function () use ($itemsById, $finalActiveIds, $finalCompletedIds, $updatedById): void {
+    ): array {
+        return DB::transaction(function () use ($itemsById, $finalActiveIds, $finalCompletedIds, $updatedById): array {
             $updatedAt = now();
             $orderByItemId = [];
             $activeOrder = 1000;
@@ -121,7 +128,10 @@ class ListItemOrderingService
             }
 
             if ($orderByItemId === []) {
-                return;
+                return [
+                    'active_order' => [],
+                    'completed_order' => [],
+                ];
             }
 
             $itemIds = array_keys($orderByItemId);
@@ -144,6 +154,17 @@ class ListItemOrderingService
                     ...$itemIds,
                 ]
             );
+
+            return [
+                'active_order' => $finalActiveIds
+                    ->map(static fn (mixed $itemId): int => (int) $itemId)
+                    ->values()
+                    ->all(),
+                'completed_order' => $finalCompletedIds
+                    ->map(static fn (mixed $itemId): int => (int) $itemId)
+                    ->values()
+                    ->all(),
+            ];
         });
     }
 }

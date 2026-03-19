@@ -18,7 +18,13 @@ class ListItemsChanged implements ShouldBroadcastNow
         public ?int $listLinkId = null,
         public ?int $actorUserId = null,
         public int $listVersion = 0,
-        public array $items = []
+        public array $items = [],
+        public string $mode = 'snapshot',
+        public ?string $operation = null,
+        public ?array $item = null,
+        public ?int $removedItemId = null,
+        public ?array $activeOrder = null,
+        public ?array $completedOrder = null,
     ) {
     }
 
@@ -45,6 +51,12 @@ class ListItemsChanged implements ShouldBroadcastNow
             'actor_user_id' => $this->actorUserId,
             'list_version' => $this->listVersion,
             'items' => $this->items,
+            'mode' => $this->mode,
+            'operation' => $this->operation,
+            'item' => $this->item,
+            'removed_item_id' => $this->removedItemId,
+            'active_order' => $this->activeOrder,
+            'completed_order' => $this->completedOrder,
             'changed_at' => now()->toISOString(),
         ];
     }
