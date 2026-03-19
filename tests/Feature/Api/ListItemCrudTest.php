@@ -46,6 +46,35 @@ class ListItemCrudTest extends TestCase
         $this->assertGreaterThan(0, (int) ($indexResponse->json('list_version') ?? 0));
     }
 
+    public function test_user_can_store_completed_item_in_single_request(): void
+    {
+        $user = User::factory()->create();
+
+        $response = $this->actingAs($user)
+            ->postJson('/api/items', [
+                'owner_id' => $user->id,
+                'type' => ListItem::TYPE_PRODUCT,
+                'text' => 'Mayonnaise',
+                'is_completed' => true,
+            ])
+            ->assertCreated()
+            ->assertJsonPath('item.text', 'Mayonnaise')
+            ->assertJsonPath('item.is_completed', true)
+            ->assertJsonPath('list_version', 1);
+
+        $createdItemId = (int) ($response->json('item.id') ?? 0);
+        $this->assertGreaterThan(0, $createdItemId);
+        $this->assertNotNull($response->json('item.completed_at'));
+
+        $this->assertDatabaseHas('list_items', [
+            'id' => $createdItemId,
+            'owner_id' => $user->id,
+            'type' => ListItem::TYPE_PRODUCT,
+            'text' => 'Mayonnaise',
+            'is_completed' => true,
+        ]);
+    }
+
     public function test_user_can_update_todo_fields_via_api(): void
     {
         $user = User::factory()->create();
