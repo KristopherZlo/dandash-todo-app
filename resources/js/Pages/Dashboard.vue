@@ -1,6 +1,7 @@
 <script setup>
 import SwipeListItem from '@/Components/SwipeListItem.vue';
 import { useActionButtonSuccess } from '@/composables/useActionButtonSuccess';
+import { useActionLocks } from '@/composables/useActionLocks';
 import ToastStack from '@/Components/ToastStack.vue';
 import { useDashboardChrome } from '@/composables/useDashboardChrome';
 import { useSuggestionStats } from '@/composables/useSuggestionStats';
@@ -314,49 +315,12 @@ const xpGainSources = new Map();
 const xpGainSourceCleanupTimeouts = new Map();
 let megaCardImpactAnimation = null;
 let suppressNextSelectedOwnerPersist = false;
-const sharingActionLocks = new Set();
-const sharingActionLockKeys = ref([]);
-
-function setSharingActionLockVisualState(key, locked) {
-    const normalizedKey = String(key ?? '').trim();
-    if (normalizedKey === '') {
-        return;
-    }
-
-    if (locked) {
-        if (!sharingActionLockKeys.value.includes(normalizedKey)) {
-            sharingActionLockKeys.value = [...sharingActionLockKeys.value, normalizedKey];
-        }
-        return;
-    }
-
-    sharingActionLockKeys.value = sharingActionLockKeys.value.filter((entry) => entry !== normalizedKey);
-}
-
-function acquireSharingActionLock(key) {
-    const normalizedKey = String(key ?? '').trim();
-    if (normalizedKey === '') {
-        return false;
-    }
-
-    if (sharingActionLocks.has(normalizedKey)) {
-        return false;
-    }
-
-    sharingActionLocks.add(normalizedKey);
-    setSharingActionLockVisualState(normalizedKey, true);
-    return true;
-}
-
-function releaseSharingActionLock(key) {
-    const normalizedKey = String(key ?? '').trim();
-    sharingActionLocks.delete(normalizedKey);
-    setSharingActionLockVisualState(normalizedKey, false);
-}
-
-function isSharingActionLocked(key) {
-    return sharingActionLockKeys.value.includes(String(key ?? '').trim());
-}
+const {
+    acquireActionLock: acquireSharingActionLock,
+    releaseActionLock: releaseSharingActionLock,
+    isActionLocked: isSharingActionLocked,
+    resetActionLocks: resetSharingActionLocks,
+} = useActionLocks();
 
 function inviteSendActionLockKey(userId) {
     return `send-invite:${Number(userId) || 0}`;
@@ -7101,6 +7065,7 @@ onBeforeUnmount(() => {
     itemCardElements.clear();
     disposeSuggestionStats();
     disposeActionButtonSuccess();
+    resetSharingActionLocks();
     disposeToasts();
 
     if (queueSyncRetryTimer) {
