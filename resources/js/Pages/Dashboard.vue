@@ -1284,6 +1284,18 @@ function readSuggestionStatsFromCache(ownerId, type, linkId = undefined) {
     return normalizeSuggestionStatsPayload(undefined);
 }
 
+function readSuggestionStatsContext(type = suggestionStatsType.value) {
+    return {
+        ownerId: Number(selectedOwnerId.value),
+        linkId: selectedListLinkId.value,
+        statsType: normalizeSuggestionStatsType(type),
+    };
+}
+
+function readSuggestionStatsPayload(context) {
+    return readSuggestionStatsFromCache(context.ownerId, context.statsType, context.linkId);
+}
+
 function writeSuggestionStatsToCache(ownerId, type, payload, linkId = undefined) {
     const key = suggestionStatsCacheKey(ownerId, type, linkId);
     const normalized = normalizeSuggestionStatsPayload(payload);
@@ -1304,10 +1316,21 @@ function writeSuggestionStatsToCache(ownerId, type, payload, linkId = undefined)
     }
 }
 
+function writeSuggestionStatsPayload(context, payload) {
+    writeSuggestionStatsToCache(context.ownerId, context.statsType, payload, context.linkId);
+}
+
+function mutateSuggestionStatsPayload(context, mutator) {
+    const cachedPayload = readSuggestionStatsPayload(context);
+    if (typeof mutator === 'function') {
+        mutator(cachedPayload);
+    }
+    writeSuggestionStatsPayload(context, cachedPayload);
+    return cachedPayload;
+}
+
 function suggestionStatsCount(type) {
-    const ownerId = Number(selectedOwnerId.value);
-    const linkId = selectedListLinkId.value;
-    return readSuggestionStatsFromCache(ownerId, normalizeSuggestionStatsType(type), linkId).stats.length;
+    return readSuggestionStatsPayload(readSuggestionStatsContext(type)).stats.length;
 }
 
 function normalizeSearchQuery(query) {
@@ -5696,12 +5719,10 @@ async function loadSuggestionStats(type = suggestionStatsType.value, showErrors 
         return;
     }
 
-    const normalizedType = normalizeSuggestionStatsType(type);
-    suggestionStatsType.value = normalizedType;
-    const ownerId = Number(selectedOwnerId.value);
-    const linkId = selectedListLinkId.value;
+    const suggestionContext = readSuggestionStatsContext(type);
+    suggestionStatsType.value = suggestionContext.statsType;
     const assignCached = () => {
-        const cachedPayload = readSuggestionStatsFromCache(ownerId, normalizedType, linkId);
+        const cachedPayload = readSuggestionStatsPayload(suggestionContext);
         productSuggestionStats.value = cachedPayload.stats;
         productStatsSummary.value = cachedPayload.summary;
     };
@@ -5717,13 +5738,13 @@ async function loadSuggestionStats(type = suggestionStatsType.value, showErrors 
     try {
         const response = await requestApi(() => window.axios.get('api/items/suggestions/stats', {
             params: {
-                owner_id: ownerId,
-                link_id: linkId,
-                type: normalizedType,
+                owner_id: suggestionContext.ownerId,
+                link_id: suggestionContext.linkId,
+                type: suggestionContext.statsType,
                 limit: 200,
             },
         }));
-        writeSuggestionStatsToCache(ownerId, normalizedType, response.data ?? {}, linkId);
+        writeSuggestionStatsPayload(suggestionContext, response.data ?? {});
     } catch (error) {
         if (isConnectivityError(error)) {
             assignCached();
@@ -5775,41 +5796,39 @@ function formatProductStatsSummaryNumber(value) {
     return new Intl.NumberFormat('ru-RU').format(Math.round(numeric));
 }
 
-function applySuggestionStateToStatsCache(ownerId, statsType, suggestionKey, nextState, linkId) {
+function applySuggestionStateToStatsCache(context, suggestionKey, nextState) {
     const normalizedKey = String(suggestionKey ?? '').trim();
     if (normalizedKey === '') {
         return;
     }
 
-    const normalizedType = normalizeSuggestionStatsType(statsType);
-    const cachedPayload = readSuggestionStatsFromCache(ownerId, normalizedType, linkId);
-    cachedPayload.stats = cachedPayload.stats.map((statsEntry) => {
-        if (String(statsEntry?.suggestion_key ?? '') !== normalizedKey) {
-            return statsEntry;
-        }
+    mutateSuggestionStatsPayload(context, (cachedPayload) => {
+        cachedPayload.stats = cachedPayload.stats.map((statsEntry) => {
+            if (String(statsEntry?.suggestion_key ?? '') !== normalizedKey) {
+                return statsEntry;
+            }
 
-        const averageIntervalSeconds = Number(statsEntry?.average_interval_seconds);
-        const customIntervalSeconds = nextState?.custom_interval_seconds !== undefined
-            ? nextState.custom_interval_seconds
-            : statsEntry?.custom_interval_seconds;
-        const effectiveIntervalSeconds = customIntervalSeconds ?? (
-            Number.isFinite(averageIntervalSeconds) && averageIntervalSeconds > 0
-                ? averageIntervalSeconds
-                : null
-        );
+            const averageIntervalSeconds = Number(statsEntry?.average_interval_seconds);
+            const customIntervalSeconds = nextState?.custom_interval_seconds !== undefined
+                ? nextState.custom_interval_seconds
+                : statsEntry?.custom_interval_seconds;
+            const effectiveIntervalSeconds = customIntervalSeconds ?? (
+                Number.isFinite(averageIntervalSeconds) && averageIntervalSeconds > 0
+                    ? averageIntervalSeconds
+                    : null
+            );
 
-        return {
-            ...statsEntry,
-            dismissed_count: nextState?.dismissed_count ?? statsEntry?.dismissed_count ?? 0,
-            hidden_until: nextState?.hidden_until ?? statsEntry?.hidden_until ?? null,
-            retired_at: nextState?.retired_at ?? null,
-            reset_at: nextState?.reset_at ?? statsEntry?.reset_at ?? null,
-            custom_interval_seconds: customIntervalSeconds ?? null,
-            effective_interval_seconds: effectiveIntervalSeconds,
-        };
+            return {
+                ...statsEntry,
+                dismissed_count: nextState?.dismissed_count ?? statsEntry?.dismissed_count ?? 0,
+                hidden_until: nextState?.hidden_until ?? statsEntry?.hidden_until ?? null,
+                retired_at: nextState?.retired_at ?? null,
+                reset_at: nextState?.reset_at ?? statsEntry?.reset_at ?? null,
+                custom_interval_seconds: customIntervalSeconds ?? null,
+                effective_interval_seconds: effectiveIntervalSeconds,
+            };
+        });
     });
-
-    writeSuggestionStatsToCache(ownerId, normalizedType, cachedPayload, linkId);
 }
 
 function removeSuggestionFromSuggestionsCache(ownerId, type, suggestionKey, linkId) {
@@ -5824,17 +5843,17 @@ function removeSuggestionFromSuggestionsCache(ownerId, type, suggestionKey, link
     writeSuggestionsToCache(ownerId, type, filteredSuggestions, linkId);
 }
 
-function removeSuggestionStatsEntryFromCache(ownerId, type, suggestionKey, linkId) {
+function removeSuggestionStatsEntryFromCache(context, suggestionKey) {
     const normalizedKey = String(suggestionKey ?? '').trim();
     if (normalizedKey === '') {
         return;
     }
 
-    const cachedPayload = readSuggestionStatsFromCache(ownerId, type, linkId);
-    cachedPayload.stats = cachedPayload.stats.filter(
-        (statsEntry) => String(statsEntry?.suggestion_key ?? '') !== normalizedKey,
-    );
-    writeSuggestionStatsToCache(ownerId, type, cachedPayload, linkId);
+    mutateSuggestionStatsPayload(context, (cachedPayload) => {
+        cachedPayload.stats = cachedPayload.stats.filter(
+            (statsEntry) => String(statsEntry?.suggestion_key ?? '') !== normalizedKey,
+        );
+    });
 }
 
 async function openSuggestionStatsModal(type = 'product') {
@@ -5855,9 +5874,7 @@ async function updateSuggestionStatsRowSettings(entry, payload, options = {}) {
         removeFromSuggestions = false,
     } = options;
 
-    const ownerId = Number(selectedOwnerId.value);
-    const linkId = selectedListLinkId.value;
-    const statsType = normalizeSuggestionStatsType(suggestionStatsType.value);
+    const suggestionContext = readSuggestionStatsContext();
     const currentCustomIntervalSeconds = entry?.custom_interval_seconds ?? null;
     const currentIgnored = String(entry?.retired_at ?? '').trim() !== '';
     const hasCustomIntervalOverride = Object.prototype.hasOwnProperty.call(payload ?? {}, 'custom_interval_seconds');
@@ -5879,10 +5896,15 @@ async function updateSuggestionStatsRowSettings(entry, payload, options = {}) {
 
     setSuggestionSettingsSaving(suggestionKey, true);
     try {
-        applySuggestionStateToStatsCache(ownerId, statsType, suggestionKey, statePatch, linkId);
+        applySuggestionStateToStatsCache(suggestionContext, suggestionKey, statePatch);
 
         if (removeFromSuggestions || (hasIgnoredOverride && nextIgnored)) {
-            removeSuggestionFromSuggestionsCache(ownerId, statsType, suggestionKey, linkId);
+            removeSuggestionFromSuggestionsCache(
+                suggestionContext.ownerId,
+                suggestionContext.statsType,
+                suggestionKey,
+                suggestionContext.linkId,
+            );
         }
 
         const queuedPayload = { ...payload };
@@ -5893,7 +5915,13 @@ async function updateSuggestionStatsRowSettings(entry, payload, options = {}) {
             queuedPayload.ignored = nextIgnored;
         }
 
-        queueSuggestionSettingsUpdate(ownerId, statsType, suggestionKey, queuedPayload, linkId);
+        queueSuggestionSettingsUpdate(
+            suggestionContext.ownerId,
+            suggestionContext.statsType,
+            suggestionKey,
+            queuedPayload,
+            suggestionContext.linkId,
+        );
         await syncOfflineQueue();
 
         if (successMessage) {
@@ -5938,32 +5966,35 @@ async function resetSuggestionStatsRow(entry) {
 
     resettingSuggestionKeys.value = [...resettingSuggestionKeys.value, suggestionKey];
     try {
-        const ownerId = Number(selectedOwnerId.value);
-        const linkId = selectedListLinkId.value;
-        const statsType = normalizeSuggestionStatsType(suggestionStatsType.value);
-        const cachedPayload = readSuggestionStatsFromCache(ownerId, statsType, linkId);
+        const suggestionContext = readSuggestionStatsContext();
 
-        cachedPayload.stats = cachedPayload.stats.map((statsEntry) => (
-            String(statsEntry?.suggestion_key ?? '') === suggestionKey
-                ? {
-                    ...statsEntry,
-                    dismissed_count: 0,
-                    hidden_until: null,
-                    retired_at: null,
-                    reset_at: new Date().toISOString(),
-                }
-                : statsEntry
-        ));
-        writeSuggestionStatsToCache(ownerId, statsType, cachedPayload, linkId);
+        mutateSuggestionStatsPayload(suggestionContext, (cachedPayload) => {
+            cachedPayload.stats = cachedPayload.stats.map((statsEntry) => (
+                String(statsEntry?.suggestion_key ?? '') === suggestionKey
+                    ? {
+                        ...statsEntry,
+                        dismissed_count: 0,
+                        hidden_until: null,
+                        retired_at: null,
+                        reset_at: new Date().toISOString(),
+                    }
+                    : statsEntry
+            ));
+        });
 
-        queueSuggestionReset(ownerId, statsType, suggestionKey, linkId);
+        queueSuggestionReset(
+            suggestionContext.ownerId,
+            suggestionContext.statsType,
+            suggestionKey,
+            suggestionContext.linkId,
+        );
         syncOfflineQueue().catch(() => {});
 
         showStatus('\u0414\u0430\u043d\u043d\u044b\u0435 \u043f\u043e\u0434\u0441\u043a\u0430\u0437\u043e\u043a \u0441\u0431\u0440\u043e\u0448\u0435\u043d\u044b.');
         markSuggestionResetDone(suggestionKey, 1400);
         scheduleSuggestionStatsRowRemoval(suggestionKey, {
             delayMs: 1000,
-            onRemove: () => removeSuggestionStatsEntryFromCache(ownerId, statsType, suggestionKey, linkId),
+            onRemove: () => removeSuggestionStatsEntryFromCache(suggestionContext, suggestionKey),
         });
     } finally {
         resettingSuggestionKeys.value = resettingSuggestionKeys.value.filter((key) => key !== suggestionKey);
