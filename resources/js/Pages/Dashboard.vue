@@ -1,5 +1,6 @@
 <script setup>
 import SwipeListItem from '@/Components/SwipeListItem.vue';
+import { useActionButtonSuccess } from '@/composables/useActionButtonSuccess';
 import ToastStack from '@/Components/ToastStack.vue';
 import { useDashboardChrome } from '@/composables/useDashboardChrome';
 import { useSuggestionStats } from '@/composables/useSuggestionStats';
@@ -201,8 +202,11 @@ const xpColorSeed = ref(1);
 const xpProgressLevel = ref(1);
 const animationSkipEpoch = ref(0);
 const soundEnabled = ref(true);
-const actionButtonSuccessState = ref({});
-const actionButtonSuccessTimers = new Map();
+const {
+    isActionButtonSuccess,
+    markActionButtonSuccess,
+    disposeActionButtonSuccess,
+} = useActionButtonSuccess();
 
 const {
     toasts,
@@ -352,40 +356,6 @@ function releaseSharingActionLock(key) {
 
 function isSharingActionLocked(key) {
     return sharingActionLockKeys.value.includes(String(key ?? '').trim());
-}
-
-function isActionButtonSuccess(key) {
-    return Boolean(actionButtonSuccessState.value[String(key ?? '').trim()]);
-}
-
-function markActionButtonSuccess(key, resetAfterMs = 1800) {
-    const normalizedKey = String(key ?? '').trim();
-    if (normalizedKey === '') {
-        return;
-    }
-
-    actionButtonSuccessState.value = {
-        ...actionButtonSuccessState.value,
-        [normalizedKey]: true,
-    };
-
-    const existingTimer = actionButtonSuccessTimers.get(normalizedKey);
-    if (existingTimer) {
-        clearTimeout(existingTimer);
-    }
-
-    const timerId = window.setTimeout(() => {
-        actionButtonSuccessTimers.delete(normalizedKey);
-        if (!actionButtonSuccessState.value[normalizedKey]) {
-            return;
-        }
-
-        const nextState = { ...actionButtonSuccessState.value };
-        delete nextState[normalizedKey];
-        actionButtonSuccessState.value = nextState;
-    }, Math.max(600, Number(resetAfterMs) || 1800));
-
-    actionButtonSuccessTimers.set(normalizedKey, timerId);
 }
 
 function inviteSendActionLockKey(userId) {
@@ -7130,10 +7100,7 @@ onBeforeUnmount(() => {
     blockedSuggestionRefreshTypes.clear();
     itemCardElements.clear();
     disposeSuggestionStats();
-    for (const timerId of actionButtonSuccessTimers.values()) {
-        clearTimeout(timerId);
-    }
-    actionButtonSuccessTimers.clear();
+    disposeActionButtonSuccess();
     disposeToasts();
 
     if (queueSyncRetryTimer) {
