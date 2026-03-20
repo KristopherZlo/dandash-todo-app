@@ -23,6 +23,16 @@ import {
     parseComparableTimestampMs,
     sortItems,
 } from '@/modules/dashboard/listItemCollections';
+import {
+    buildListChannelName,
+    findListOptionByOwner as findListOptionByOwnerFromScope,
+    isSameListScope as isSameListScopeFromScope,
+    listCacheKey as listCacheKeyFromScope,
+    matchesScopedOperation as matchesScopedOperationFromScope,
+    resolveLinkIdForOwner as resolveLinkIdForOwnerFromScope,
+    suggestionStatsCacheKey as suggestionStatsCacheKeyFromScope,
+    suggestionsCacheKey as suggestionsCacheKeyFromScope,
+} from '@/modules/dashboard/listScopes';
 import { findBestPendingCreateMatch } from '@/modules/dashboard/pendingCreateMatch';
 import {
     buildIncomingItemsFromRealtimeEvent,
@@ -408,32 +418,25 @@ function normalizeLinkId(value) {
 }
 
 function isSameListScope(leftOwnerId, leftLinkId = undefined, rightOwnerId, rightLinkId = undefined) {
-    const leftNormalizedLinkId = normalizeLinkId(leftLinkId);
-    const rightNormalizedLinkId = normalizeLinkId(rightLinkId);
-
-    if (leftNormalizedLinkId || rightNormalizedLinkId) {
-        return leftNormalizedLinkId !== null && leftNormalizedLinkId === rightNormalizedLinkId;
-    }
-
-    return Number(leftOwnerId) === Number(rightOwnerId);
+    return isSameListScopeFromScope(leftOwnerId, leftLinkId, rightOwnerId, rightLinkId, {
+        normalizeLinkId,
+    });
 }
 
 function matchesScopedOperation(operation, ownerId, type, linkId = undefined) {
-    return String(operation?.type) === String(type)
-        && isSameListScope(operation?.owner_id, operation?.link_id, ownerId, linkId);
+    return matchesScopedOperationFromScope(operation, ownerId, type, linkId, {
+        normalizeLinkId,
+    });
 }
 
 function findListOptionByOwner(ownerId) {
-    return listOptions.value.find((option) => Number(option.owner_id) === Number(ownerId)) ?? null;
+    return findListOptionByOwnerFromScope(listOptions.value, ownerId);
 }
 
 function resolveLinkIdForOwner(ownerId, explicitLinkId = undefined) {
-    const explicit = normalizeLinkId(explicitLinkId);
-    if (explicit) {
-        return explicit;
-    }
-
-    return normalizeLinkId(findListOptionByOwner(ownerId)?.link_id);
+    return resolveLinkIdForOwnerFromScope(ownerId, explicitLinkId, listOptions.value, {
+        normalizeLinkId,
+    });
 }
 
 const selectedListOption = computed(() => findListOptionByOwner(selectedOwnerId.value));
@@ -1248,12 +1251,9 @@ function cloneItems(items) {
 }
 
 function listCacheKey(ownerId, type, linkId = null) {
-    const normalizedLinkId = normalizeLinkId(linkId);
-    if (normalizedLinkId) {
-        return `shared:${normalizedLinkId}:${type}`;
-    }
-
-    return `owner:${Number(ownerId)}:personal:${type}`;
+    return listCacheKeyFromScope(ownerId, type, linkId, {
+        normalizeLinkId,
+    });
 }
 
 const {
@@ -1271,17 +1271,19 @@ const {
 });
 
 function suggestionsCacheKey(ownerId, type, linkId = undefined) {
-    return listCacheKey(ownerId, type, resolveLinkIdForOwner(ownerId, linkId));
+    return suggestionsCacheKeyFromScope(ownerId, type, linkId, listOptions.value, {
+        normalizeLinkId,
+    });
 }
 
 function suggestionStatsCacheKey(ownerId, type, linkId = undefined) {
-    const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId);
-    const normalizedType = normalizeSuggestionStatsType(type);
-    if (normalizedLinkId) {
-        return `shared:${normalizedLinkId}:${normalizedType}`;
-    }
-
-    return `owner:${Number(ownerId)}:personal:${normalizedType}`;
+    return suggestionStatsCacheKeyFromScope(
+        ownerId,
+        normalizeSuggestionStatsType(type),
+        linkId,
+        listOptions.value,
+        { normalizeLinkId },
+    );
 }
 
 function suggestionDeduplicationKey(suggestion) {
@@ -6949,13 +6951,10 @@ function shouldApplyRealtimeListSnapshot(ownerId, type, linkId, eventPayload) {
     return true;
 }
 
-function buildListChannelName(ownerId) {
-    const linkId = resolveLinkIdForOwner(ownerId);
-    if (linkId) {
-        return `lists.shared.${linkId}`;
-    }
-
-    return `lists.personal.${Number(ownerId)}`;
+function buildListChannelNameForOwner(ownerId) {
+    return buildListChannelName(ownerId, listOptions.value, {
+        normalizeLinkId,
+    });
 }
 
 function subscribeListChannel(ownerId) {
@@ -6963,7 +6962,7 @@ function subscribeListChannel(ownerId) {
         return;
     }
 
-    const nextChannelName = buildListChannelName(ownerId);
+    const nextChannelName = buildListChannelNameForOwner(ownerId);
 
     if (listChannelName) {
         window.Echo.leave(listChannelName);
