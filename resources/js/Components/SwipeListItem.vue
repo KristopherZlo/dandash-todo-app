@@ -17,10 +17,12 @@ const dragging = ref(false);
 const touchId = ref(null);
 const pressStartedAt = ref(0);
 const touchSwipeLocked = ref(false);
+const suppressMouseUntil = ref(0);
 
 const gestureThreshold = 72;
 const swipeActivationDistance = 8;
 const maxSwipeAngleDeg = 35;
+const TOUCH_MOUSE_SUPPRESSION_MS = 520;
 
 const cardStyle = computed(() => ({
     transform: `translateX(${dragX.value}px)`,
@@ -87,7 +89,19 @@ function cancelDrag() {
     touchSwipeLocked.value = false;
 }
 
+function suppressSyntheticMouseEvents() {
+    suppressMouseUntil.value = Date.now() + TOUCH_MOUSE_SUPPRESSION_MS;
+}
+
+function shouldIgnoreMouseEvent() {
+    return Date.now() < suppressMouseUntil.value;
+}
+
 function onMouseDown(event) {
+    if (shouldIgnoreMouseEvent()) {
+        return;
+    }
+
     if (event.button !== 0) {
         return;
     }
@@ -104,6 +118,10 @@ function onMouseDown(event) {
 }
 
 function onMouseMove(event) {
+    if (shouldIgnoreMouseEvent()) {
+        return;
+    }
+
     if (!dragging.value) {
         return;
     }
@@ -117,6 +135,10 @@ function onMouseMove(event) {
 }
 
 function onMouseUp() {
+    if (shouldIgnoreMouseEvent()) {
+        return;
+    }
+
     endDrag();
 }
 
@@ -136,6 +158,7 @@ function onTouchStart(event) {
 
     touchId.value = touch.identifier;
     startY.value = touch.clientY;
+    suppressSyntheticMouseEvents();
     beginDrag(touch.clientX);
 }
 
@@ -170,6 +193,7 @@ function onTouchMove(event) {
     }
 
     event.preventDefault();
+    suppressSyntheticMouseEvents();
     updateDrag(touch.clientX);
 }
 
@@ -181,6 +205,7 @@ function onTouchEnd(event) {
     const ended = Array.from(event.changedTouches).some((item) => item.identifier === touchId.value);
 
     if (ended) {
+        suppressSyntheticMouseEvents();
         endDrag();
     }
 }
@@ -201,10 +226,12 @@ function onTouchEnd(event) {
         <div
             class="swipe-item-card"
             :style="cardStyle"
+            draggable="false"
             @mousedown="onMouseDown"
             @mousemove="onMouseMove"
             @mouseup="onMouseUp"
             @mouseleave="onMouseUp"
+            @dragstart.prevent
             @touchstart.passive="onTouchStart"
             @touchmove="onTouchMove"
             @touchend="onTouchEnd"
@@ -257,6 +284,7 @@ function onTouchEnd(event) {
     cursor: pointer;
     user-select: none;
     -webkit-user-select: none;
+    -webkit-user-drag: none;
     touch-action: pan-y;
     transition: transform 0.2s ease-out;
 }

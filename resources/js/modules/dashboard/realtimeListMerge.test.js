@@ -25,6 +25,16 @@ describe('realtimeListMerge', () => {
         expect(result).toEqual([first, noId, second]);
     });
 
+    it('deduplicates items by local_id while preserving first occurrence', () => {
+        const tempItem = { id: -1, local_id: 'tmp-1', text: 'Milk' };
+        const syncedDuplicate = { id: 88, local_id: 'tmp-1', text: 'Milk synced' };
+        const distinctItem = { id: 89, local_id: 'srv-89', text: 'Bread' };
+
+        const result = deduplicateItemsById([tempItem, syncedDuplicate, distinctItem]);
+
+        expect(result).toEqual([tempItem, distinctItem]);
+    });
+
     it('matches pending create temp item with realtime server item', () => {
         const localPending = {
             id: -101,

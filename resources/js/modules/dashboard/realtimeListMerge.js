@@ -17,19 +17,32 @@ export function deduplicateItemsById(items) {
     const normalizedItems = Array.isArray(items) ? items : [];
     const deduplicated = [];
     const seenIds = new Set();
+    const seenLocalIds = new Set();
 
     for (const item of normalizedItems) {
         const itemId = Number(item?.id);
+        const localId = String(item?.local_id ?? '').trim();
         if (!Number.isFinite(itemId)) {
+            if (localId !== '' && seenLocalIds.has(localId)) {
+                continue;
+            }
+
+            if (localId !== '') {
+                seenLocalIds.add(localId);
+            }
+
             deduplicated.push(item);
             continue;
         }
 
-        if (seenIds.has(itemId)) {
+        if (seenIds.has(itemId) || (localId !== '' && seenLocalIds.has(localId))) {
             continue;
         }
 
         seenIds.add(itemId);
+        if (localId !== '') {
+            seenLocalIds.add(localId);
+        }
         deduplicated.push(item);
     }
 
