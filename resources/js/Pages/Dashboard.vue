@@ -26,14 +26,7 @@ import {
     sortItems,
 } from '@/modules/dashboard/listItemCollections';
 import {
-    buildListChannelName,
-    findListOptionByOwner as findListOptionByOwnerFromScope,
-    isSameListScope as isSameListScopeFromScope,
-    listCacheKey as listCacheKeyFromScope,
-    matchesScopedOperation as matchesScopedOperationFromScope,
-    resolveLinkIdForOwner as resolveLinkIdForOwnerFromScope,
-    suggestionStatsCacheKey as suggestionStatsCacheKeyFromScope,
-    suggestionsCacheKey as suggestionsCacheKeyFromScope,
+    createListScopeHelpers,
 } from '@/modules/dashboard/listScopes';
 import { findBestPendingCreateMatch } from '@/modules/dashboard/pendingCreateMatch';
 import {
@@ -350,28 +343,19 @@ function normalizeLinkId(value) {
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
-
-function isSameListScope(leftOwnerId, leftLinkId = undefined, rightOwnerId, rightLinkId = undefined) {
-    return isSameListScopeFromScope(leftOwnerId, leftLinkId, rightOwnerId, rightLinkId, {
-        normalizeLinkId,
-    });
-}
-
-function matchesScopedOperation(operation, ownerId, type, linkId = undefined) {
-    return matchesScopedOperationFromScope(operation, ownerId, type, linkId, {
-        normalizeLinkId,
-    });
-}
-
-function findListOptionByOwner(ownerId) {
-    return findListOptionByOwnerFromScope(listOptions.value, ownerId);
-}
-
-function resolveLinkIdForOwner(ownerId, explicitLinkId = undefined) {
-    return resolveLinkIdForOwnerFromScope(ownerId, explicitLinkId, listOptions.value, {
-        normalizeLinkId,
-    });
-}
+const {
+    isSameListScope,
+    matchesScopedOperation,
+    findListOptionByOwner,
+    resolveLinkIdForOwner,
+    listCacheKey,
+    suggestionsCacheKey,
+    suggestionStatsCacheKey,
+    buildListChannelName: buildListChannelNameForOwner,
+} = createListScopeHelpers({
+    getListOptions: () => listOptions.value,
+    normalizeLinkId,
+});
 
 const selectedListOption = computed(() => findListOptionByOwner(selectedOwnerId.value));
 const selectedListLinkId = computed(() => normalizeLinkId(selectedListOption.value?.link_id));
@@ -397,8 +381,7 @@ const {
     isResettingSuggestionKey,
     isSuggestionResetDone,
     markSuggestionResetDone,
-    removeSuggestionStatsRowAfterReset,
-    suggestionStatsCount,
+    scheduleSuggestionStatsRowRemoval,
     openSuggestionStatsModal: openSuggestionStatsModalState,
     closeSuggestionStatsModal,
     resetSuggestionStatsSummary,
@@ -406,11 +389,6 @@ const {
 } = useSuggestionStats({
     formatIntervalSeconds,
     normalizeSuggestionStatsType,
-    normalizeLinkId,
-    readSuggestionStatsFromCache,
-    writeSuggestionStatsToCache,
-    selectedOwnerId,
-    selectedListLinkId,
 });
 const selectedListLabel = computed(() => selectedListOption.value?.label ?? 'Личный');
 
@@ -1184,12 +1162,6 @@ function cloneItems(items) {
     return items.map((item) => ({ ...item }));
 }
 
-function listCacheKey(ownerId, type, linkId = null) {
-    return listCacheKeyFromScope(ownerId, type, linkId, {
-        normalizeLinkId,
-    });
-}
-
 const {
     getListSyncVersion,
     bumpListSyncVersion,
@@ -1203,22 +1175,6 @@ const {
     resolveLinkIdForOwner,
     listCacheKey,
 });
-
-function suggestionsCacheKey(ownerId, type, linkId = undefined) {
-    return suggestionsCacheKeyFromScope(ownerId, type, linkId, listOptions.value, {
-        normalizeLinkId,
-    });
-}
-
-function suggestionStatsCacheKey(ownerId, type, linkId = undefined) {
-    return suggestionStatsCacheKeyFromScope(
-        ownerId,
-        normalizeSuggestionStatsType(type),
-        linkId,
-        listOptions.value,
-        { normalizeLinkId },
-    );
-}
 
 function suggestionDeduplicationKey(suggestion) {
     const bySuggestionKey = String(suggestion?.suggestion_key ?? '').trim().toLowerCase();
@@ -1346,6 +1302,12 @@ function writeSuggestionStatsToCache(ownerId, type, payload, linkId = undefined)
         productSuggestionStats.value = normalized.stats;
         productStatsSummary.value = normalized.summary;
     }
+}
+
+function suggestionStatsCount(type) {
+    const ownerId = Number(selectedOwnerId.value);
+    const linkId = selectedListLinkId.value;
+    return readSuggestionStatsFromCache(ownerId, normalizeSuggestionStatsType(type), linkId).stats.length;
 }
 
 function normalizeSearchQuery(query) {
@@ -5862,6 +5824,19 @@ function removeSuggestionFromSuggestionsCache(ownerId, type, suggestionKey, link
     writeSuggestionsToCache(ownerId, type, filteredSuggestions, linkId);
 }
 
+function removeSuggestionStatsEntryFromCache(ownerId, type, suggestionKey, linkId) {
+    const normalizedKey = String(suggestionKey ?? '').trim();
+    if (normalizedKey === '') {
+        return;
+    }
+
+    const cachedPayload = readSuggestionStatsFromCache(ownerId, type, linkId);
+    cachedPayload.stats = cachedPayload.stats.filter(
+        (statsEntry) => String(statsEntry?.suggestion_key ?? '') !== normalizedKey,
+    );
+    writeSuggestionStatsToCache(ownerId, type, cachedPayload, linkId);
+}
+
 async function openSuggestionStatsModal(type = 'product') {
     const normalizedType = openSuggestionStatsModalState(type);
     resetSuggestionStatsSummary();
@@ -5986,7 +5961,10 @@ async function resetSuggestionStatsRow(entry) {
 
         showStatus('\u0414\u0430\u043d\u043d\u044b\u0435 \u043f\u043e\u0434\u0441\u043a\u0430\u0437\u043e\u043a \u0441\u0431\u0440\u043e\u0448\u0435\u043d\u044b.');
         markSuggestionResetDone(suggestionKey, 1400);
-        removeSuggestionStatsRowAfterReset(suggestionKey, 1000);
+        scheduleSuggestionStatsRowRemoval(suggestionKey, {
+            delayMs: 1000,
+            onRemove: () => removeSuggestionStatsEntryFromCache(ownerId, statsType, suggestionKey, linkId),
+        });
     } finally {
         resettingSuggestionKeys.value = resettingSuggestionKeys.value.filter((key) => key !== suggestionKey);
     }
@@ -6883,12 +6861,6 @@ function shouldApplyRealtimeListSnapshot(ownerId, type, linkId, eventPayload) {
 
     latestRealtimeEventTokenByList.set(listKey, eventChangedAtToken);
     return true;
-}
-
-function buildListChannelNameForOwner(ownerId) {
-    return buildListChannelName(ownerId, listOptions.value, {
-        normalizeLinkId,
-    });
 }
 
 function subscribeListChannel(ownerId) {

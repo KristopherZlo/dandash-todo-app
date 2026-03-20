@@ -1,24 +1,7 @@
 import { ref } from 'vue';
 
 export function useActionLocks() {
-    const activeActionLockKeys = ref([]);
-    const activeActionLocks = new Set();
-
-    function setActionLockVisualState(key, locked) {
-        const normalizedKey = String(key ?? '').trim();
-        if (normalizedKey === '') {
-            return;
-        }
-
-        if (locked) {
-            if (!activeActionLockKeys.value.includes(normalizedKey)) {
-                activeActionLockKeys.value = [...activeActionLockKeys.value, normalizedKey];
-            }
-            return;
-        }
-
-        activeActionLockKeys.value = activeActionLockKeys.value.filter((entry) => entry !== normalizedKey);
-    }
+    const activeActionLocks = ref(new Set());
 
     function acquireActionLock(key) {
         const normalizedKey = String(key ?? '').trim();
@@ -26,32 +9,40 @@ export function useActionLocks() {
             return false;
         }
 
-        if (activeActionLocks.has(normalizedKey)) {
+        if (activeActionLocks.value.has(normalizedKey)) {
             return false;
         }
 
-        activeActionLocks.add(normalizedKey);
-        setActionLockVisualState(normalizedKey, true);
+        const nextLocks = new Set(activeActionLocks.value);
+        nextLocks.add(normalizedKey);
+        activeActionLocks.value = nextLocks;
         return true;
     }
 
     function releaseActionLock(key) {
         const normalizedKey = String(key ?? '').trim();
-        activeActionLocks.delete(normalizedKey);
-        setActionLockVisualState(normalizedKey, false);
+        if (normalizedKey === '' || !activeActionLocks.value.has(normalizedKey)) {
+            return;
+        }
+
+        const nextLocks = new Set(activeActionLocks.value);
+        nextLocks.delete(normalizedKey);
+        activeActionLocks.value = nextLocks;
     }
 
     function isActionLocked(key) {
-        return activeActionLockKeys.value.includes(String(key ?? '').trim());
+        return activeActionLocks.value.has(String(key ?? '').trim());
     }
 
     function resetActionLocks() {
-        activeActionLocks.clear();
-        activeActionLockKeys.value = [];
+        if (activeActionLocks.value.size === 0) {
+            return;
+        }
+
+        activeActionLocks.value = new Set();
     }
 
     return {
-        activeActionLockKeys,
         acquireActionLock,
         releaseActionLock,
         isActionLocked,

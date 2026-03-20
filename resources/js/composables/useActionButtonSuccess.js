@@ -1,11 +1,11 @@
 import { ref } from 'vue';
 
 export function useActionButtonSuccess() {
-    const actionButtonSuccessState = ref({});
+    const successState = ref({});
     const actionButtonSuccessTimers = new Map();
 
     function isActionButtonSuccess(key) {
-        return Boolean(actionButtonSuccessState.value[String(key ?? '').trim()]);
+        return Boolean(successState.value[String(key ?? '').trim()]);
     }
 
     function markActionButtonSuccess(key, resetAfterMs = 1800) {
@@ -14,8 +14,8 @@ export function useActionButtonSuccess() {
             return;
         }
 
-        actionButtonSuccessState.value = {
-            ...actionButtonSuccessState.value,
+        successState.value = {
+            ...successState.value,
             [normalizedKey]: true,
         };
 
@@ -26,13 +26,13 @@ export function useActionButtonSuccess() {
 
         const timerId = globalThis.setTimeout(() => {
             actionButtonSuccessTimers.delete(normalizedKey);
-            if (!actionButtonSuccessState.value[normalizedKey]) {
+            if (!successState.value[normalizedKey]) {
                 return;
             }
 
-            const nextState = { ...actionButtonSuccessState.value };
+            const nextState = { ...successState.value };
             delete nextState[normalizedKey];
-            actionButtonSuccessState.value = nextState;
+            successState.value = nextState;
         }, Math.max(600, Number(resetAfterMs) || 1800));
 
         actionButtonSuccessTimers.set(normalizedKey, timerId);
@@ -46,7 +46,6 @@ export function useActionButtonSuccess() {
     }
 
     return {
-        actionButtonSuccessState,
         isActionButtonSuccess,
         markActionButtonSuccess,
         disposeActionButtonSuccess,

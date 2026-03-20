@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     buildListChannelName,
+    createListScopeHelpers,
     findListOptionByOwner,
     isSameListScope,
     listCacheKey,
@@ -54,5 +55,18 @@ describe('listScopes', () => {
     it('builds realtime channel names from resolved scope', () => {
         expect(buildListChannelName(9, listOptions, options)).toBe('lists.shared.22');
         expect(buildListChannelName(7, listOptions, options)).toBe('lists.personal.7');
+    });
+
+    it('binds list options and normalizer through helper factory', () => {
+        const helpers = createListScopeHelpers({
+            getListOptions: () => listOptions,
+            normalizeLinkId,
+        });
+
+        expect(helpers.findListOptionByOwner(9)?.link_id).toBe(22);
+        expect(helpers.resolveLinkIdForOwner(9)).toBe(22);
+        expect(helpers.listCacheKey(9, 'todo', 22)).toBe('shared:22:todo');
+        expect(helpers.suggestionStatsCacheKey(7, 'Product')).toBe('owner:7:personal:product');
+        expect(helpers.buildListChannelName(9)).toBe('lists.shared.22');
     });
 });

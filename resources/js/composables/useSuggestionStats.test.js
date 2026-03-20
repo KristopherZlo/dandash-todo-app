@@ -1,37 +1,17 @@
-import { nextTick, ref } from 'vue';
+import { nextTick } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useSuggestionStats } from './useSuggestionStats';
 
 function createComposable(initialStats = []) {
-    const selectedOwnerId = ref(7);
-    const selectedListLinkId = ref(12);
-    const cache = {
-        '7:product:12': {
-            stats: initialStats.map((entry) => ({ ...entry })),
-        },
-    };
-
     const api = useSuggestionStats({
         formatIntervalSeconds: (value) => `interval:${value ?? 'auto'}`,
         normalizeSuggestionStatsType: (value) => (String(value) === 'todo' ? 'todo' : 'product'),
-        normalizeLinkId: (value) => (value == null ? null : Number(value)),
-        readSuggestionStatsFromCache: (ownerId, type, linkId) => ({
-            stats: [...(cache[`${ownerId}:${type}:${linkId ?? 'personal'}`]?.stats ?? [])],
-        }),
-        writeSuggestionStatsToCache: (ownerId, type, payload, linkId) => {
-            cache[`${ownerId}:${type}:${linkId ?? 'personal'}`] = {
-                stats: [...(payload?.stats ?? [])],
-            };
-        },
-        selectedOwnerId,
-        selectedListLinkId,
     });
+
+    api.productSuggestionStats.value = initialStats.map((entry) => ({ ...entry }));
 
     return {
         api,
-        cache,
-        selectedOwnerId,
-        selectedListLinkId,
     };
 }
 
@@ -84,25 +64,38 @@ describe('useSuggestionStats', () => {
         expect(api.suggestionStatsViewCount('ignored')).toBe(1);
     });
 
-    it('removes reset rows from state and cache after the timeout', () => {
+    it('removes reset rows from state after the timeout and runs removal callback', () => {
         vi.useFakeTimers();
-        const { api, cache } = createComposable([
+        const onRemove = vi.fn();
+        const { api } = createComposable([
             { suggestion_key: 'milk', text: 'Milk', retired_at: null },
             { suggestion_key: 'bread', text: 'Bread', retired_at: null },
         ]);
 
-        api.productSuggestionStats.value = [
-            { suggestion_key: 'milk', text: 'Milk', retired_at: null },
-            { suggestion_key: 'bread', text: 'Bread', retired_at: null },
-        ];
-
-        api.removeSuggestionStatsRowAfterReset('milk', 300);
+        api.scheduleSuggestionStatsRowRemoval('milk', {
+            delayMs: 300,
+            onRemove,
+        });
 
         vi.advanceTimersByTime(299);
         expect(api.productSuggestionStats.value.map((entry) => entry.suggestion_key)).toEqual(['milk', 'bread']);
 
         vi.advanceTimersByTime(1);
         expect(api.productSuggestionStats.value.map((entry) => entry.suggestion_key)).toEqual(['bread']);
-        expect(cache['7:product:12'].stats.map((entry) => entry.suggestion_key)).toEqual(['bread']);
+        expect(onRemove).toHaveBeenCalledWith('milk');
+    });
+
+    it('does not remove local rows after context type changes before timeout', () => {
+        vi.useFakeTimers();
+        const { api } = createComposable([
+            { suggestion_key: 'milk', text: 'Milk', retired_at: null },
+            { suggestion_key: 'bread', text: 'Bread', retired_at: null },
+        ]);
+
+        api.scheduleSuggestionStatsRowRemoval('milk', { delayMs: 300 });
+        api.suggestionStatsType.value = 'todo';
+
+        vi.advanceTimersByTime(300);
+        expect(api.productSuggestionStats.value.map((entry) => entry.suggestion_key)).toEqual(['milk', 'bread']);
     });
 });

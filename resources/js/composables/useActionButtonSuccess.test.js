@@ -25,12 +25,12 @@ describe('useActionButtonSuccess', () => {
         const success = useActionButtonSuccess();
 
         success.markActionButtonSuccess('', 900);
-        expect(success.actionButtonSuccessState.value).toEqual({});
+        expect(success.isActionButtonSuccess('')).toBe(false);
 
         success.markActionButtonSuccess('set-mine:5', 900);
         success.disposeActionButtonSuccess();
 
         vi.advanceTimersByTime(900);
-        expect(success.actionButtonSuccessState.value['set-mine:5']).toBe(true);
+        expect(success.isActionButtonSuccess('set-mine:5')).toBe(true);
     });
 });

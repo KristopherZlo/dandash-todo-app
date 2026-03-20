@@ -7,6 +7,14 @@ function resolveNormalizer(normalizeLinkId) {
     return typeof normalizeLinkId === 'function' ? normalizeLinkId : defaultNormalizeLinkId;
 }
 
+function resolveListOptions(getListOptions) {
+    if (typeof getListOptions !== 'function') {
+        return [];
+    }
+
+    return Array.isArray(getListOptions()) ? getListOptions() : [];
+}
+
 export function isSameListScope(leftOwnerId, leftLinkId = undefined, rightOwnerId, rightLinkId = undefined, options = {}) {
     const normalizeLinkId = resolveNormalizer(options.normalizeLinkId);
     const leftNormalizedLinkId = normalizeLinkId(leftLinkId);
@@ -75,4 +83,46 @@ export function buildListChannelName(ownerId, listOptions = [], options = {}) {
     }
 
     return `lists.personal.${Number(ownerId)}`;
+}
+
+export function createListScopeHelpers(options = {}) {
+    const normalizeLinkId = resolveNormalizer(options.normalizeLinkId);
+    const getListOptions = typeof options.getListOptions === 'function'
+        ? options.getListOptions
+        : () => [];
+
+    function scopeOptions() {
+        return { normalizeLinkId };
+    }
+
+    function readListOptions() {
+        return resolveListOptions(getListOptions);
+    }
+
+    return {
+        isSameListScope(leftOwnerId, leftLinkId = undefined, rightOwnerId, rightLinkId = undefined) {
+            return isSameListScope(leftOwnerId, leftLinkId, rightOwnerId, rightLinkId, scopeOptions());
+        },
+        matchesScopedOperation(operation, ownerId, type, linkId = undefined) {
+            return matchesScopedOperation(operation, ownerId, type, linkId, scopeOptions());
+        },
+        findListOptionByOwner(ownerId) {
+            return findListOptionByOwner(readListOptions(), ownerId);
+        },
+        resolveLinkIdForOwner(ownerId, explicitLinkId = undefined) {
+            return resolveLinkIdForOwner(ownerId, explicitLinkId, readListOptions(), scopeOptions());
+        },
+        listCacheKey(ownerId, type, linkId = null) {
+            return listCacheKey(ownerId, type, linkId, scopeOptions());
+        },
+        suggestionsCacheKey(ownerId, type, linkId = undefined) {
+            return suggestionsCacheKey(ownerId, type, linkId, readListOptions(), scopeOptions());
+        },
+        suggestionStatsCacheKey(ownerId, type, linkId = undefined) {
+            return suggestionStatsCacheKey(ownerId, type, linkId, readListOptions(), scopeOptions());
+        },
+        buildListChannelName(ownerId) {
+            return buildListChannelName(ownerId, readListOptions(), scopeOptions());
+        },
+    };
 }

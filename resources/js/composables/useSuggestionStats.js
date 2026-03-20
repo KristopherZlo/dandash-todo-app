@@ -20,11 +20,6 @@ export function useSuggestionStats(options = {}) {
     const {
         formatIntervalSeconds,
         normalizeSuggestionStatsType,
-        normalizeLinkId,
-        readSuggestionStatsFromCache,
-        writeSuggestionStatsToCache,
-        selectedOwnerId,
-        selectedListLinkId,
     } = options;
 
     const productStatsModalOpen = ref(false);
@@ -137,16 +132,29 @@ export function useSuggestionStats(options = {}) {
         suggestionResetSuccessTimers.set(normalizedKey, timerId);
     }
 
-    function removeSuggestionStatsRowAfterReset(suggestionKey, delayMs = 1000) {
+    function removeSuggestionStatsRow(suggestionKey) {
         const normalizedKey = String(suggestionKey ?? '').trim();
         if (normalizedKey === '') {
             return;
         }
 
-        const normalizedType = normalizeSuggestionStatsType(suggestionStatsType.value);
-        const normalizedOwnerId = Number(selectedOwnerId.value);
-        const normalizedLinkId = normalizeLinkId(selectedListLinkId.value);
-        const timerKey = `${normalizedType}:${normalizedOwnerId}:${normalizedLinkId ?? 0}:${normalizedKey}`;
+        productSuggestionStats.value = productSuggestionStats.value.filter(
+            (statsEntry) => String(statsEntry?.suggestion_key ?? '') !== normalizedKey,
+        );
+    }
+
+    function scheduleSuggestionStatsRowRemoval(suggestionKey, options = {}) {
+        const normalizedKey = String(suggestionKey ?? '').trim();
+        if (normalizedKey === '') {
+            return;
+        }
+
+        const {
+            delayMs = 1000,
+            onRemove = null,
+        } = options;
+        const sourceType = normalizeSuggestionStatsType(suggestionStatsType.value);
+        const timerKey = `${sourceType}:${normalizedKey}`;
 
         const existingTimer = suggestionResetRemovalTimers.get(timerKey);
         if (existingTimer) {
@@ -155,25 +163,16 @@ export function useSuggestionStats(options = {}) {
 
         const timerId = globalThis.setTimeout(() => {
             suggestionResetRemovalTimers.delete(timerKey);
+            if (typeof onRemove === 'function') {
+                onRemove(normalizedKey);
+            }
 
-            productSuggestionStats.value = productSuggestionStats.value.filter(
-                (statsEntry) => String(statsEntry?.suggestion_key ?? '') !== normalizedKey,
-            );
-
-            const cachedPayload = readSuggestionStatsFromCache(normalizedOwnerId, normalizedType, normalizedLinkId);
-            cachedPayload.stats = cachedPayload.stats.filter(
-                (statsEntry) => String(statsEntry?.suggestion_key ?? '') !== normalizedKey,
-            );
-            writeSuggestionStatsToCache(normalizedOwnerId, normalizedType, cachedPayload, normalizedLinkId);
+            if (normalizeSuggestionStatsType(suggestionStatsType.value) === sourceType) {
+                removeSuggestionStatsRow(normalizedKey);
+            }
         }, Math.max(300, Number(delayMs) || 1000));
 
         suggestionResetRemovalTimers.set(timerKey, timerId);
-    }
-
-    function suggestionStatsCount(type) {
-        const ownerId = Number(selectedOwnerId.value);
-        const linkId = selectedListLinkId.value;
-        return readSuggestionStatsFromCache(ownerId, normalizeSuggestionStatsType(type), linkId).stats.length;
     }
 
     function openSuggestionStatsModal(type = 'product') {
@@ -240,8 +239,7 @@ export function useSuggestionStats(options = {}) {
         isResettingSuggestionKey,
         isSuggestionResetDone,
         markSuggestionResetDone,
-        removeSuggestionStatsRowAfterReset,
-        suggestionStatsCount,
+        scheduleSuggestionStatsRowRemoval,
         openSuggestionStatsModal,
         closeSuggestionStatsModal,
         resetSuggestionStatsSummary,

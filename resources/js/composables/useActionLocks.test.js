@@ -17,13 +17,12 @@ describe('useActionLocks', () => {
         const locks = useActionLocks();
 
         expect(locks.acquireActionLock('')).toBe(false);
-        expect(locks.activeActionLockKeys.value).toEqual([]);
+        expect(locks.isActionLocked('')).toBe(false);
 
         locks.acquireActionLock('set-mine:5');
         locks.acquireActionLock('send-invite:7');
         locks.resetActionLocks();
 
-        expect(locks.activeActionLockKeys.value).toEqual([]);
         expect(locks.isActionLocked('set-mine:5')).toBe(false);
         expect(locks.isActionLocked('send-invite:7')).toBe(false);
     });
