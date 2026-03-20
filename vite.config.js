@@ -81,6 +81,11 @@ export default defineConfig(({ mode }) => {
             port: devPort,
             strictPort: true,
             origin,
+            cors: {
+                // Allow the app page origin (localhost, LAN host, artisan serve, Apache)
+                // instead of forcing the Vite dev-server origin with :5173.
+                origin: true,
+            },
             hmr: {
                 host: hmrHost,
                 protocol: hmrProtocol,
