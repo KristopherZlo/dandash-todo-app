@@ -99,9 +99,9 @@ const localUser = reactive({
 const appVersion = computed(() => String(page.props.meta?.app_version ?? 'dev'));
 const buildVersion = computed(() => String(page.props.meta?.build_version ?? 'dev'));
 const MOOD_COLOR_VALUES = Object.freeze(['red', 'yellow', 'green']);
-const MOOD_FIRE_EMOJIS = Object.freeze(['СЂСџТђВ°', 'СЂСџВСњ', 'СЂСџВв‚¬']);
-const MOOD_BATTERY_EMOJIS = Object.freeze(['СЂСџВТ‘', 'СЂСџВРЋ', 'СЂСџВвЂћ']);
-const MOOD_UNKNOWN_EMOJI = 'РІСњвЂќ';
+const MOOD_FIRE_EMOJIS = Object.freeze(['🥰', '😝', '😈']);
+const MOOD_BATTERY_EMOJIS = Object.freeze(['😴', '😡', '😄']);
+const MOOD_UNKNOWN_EMOJI = '❔';
 const MOOD_STALE_RESET_AFTER_MS = 24 * 60 * 60 * 1000;
 
 const TOUCH_DRAG_HOLD_DELAY_MS = 500;
@@ -419,7 +419,7 @@ const {
     listOptions,
     selectedListId,
 });
-const selectedListLabel = computed(() => selectedListOption.value?.label ?? 'Р вЂєР С‘РЎвЂЎР Р…РЎвЂ№Р в„–');
+const selectedListLabel = computed(() => selectedListOption.value?.label ?? 'Личный');
 const fireMoodEmojiOptions = computed(() => (
     selfMoodPreferences.value.fire_recent_emojis?.length
         ? selfMoodPreferences.value.fire_recent_emojis
@@ -653,18 +653,18 @@ const productivityDustParticles = computed(() => (
         };
     })
 ));
-const resolvedThemeLabel = computed(() => (resolvedTheme.value === 'light' ? 'Р РЋР Р†Р ВµРЎвЂљР В»Р В°РЎРЏ' : 'Р СћРЎвЂР СР Р…Р В°РЎРЏ'));
+const resolvedThemeLabel = computed(() => (resolvedTheme.value === 'light' ? 'Светлая' : 'Тёмная'));
 const activeTabTitle = computed(() => {
     if (activeTab.value === 'products') {
-        return 'Р РЋР С—Р С‘РЎРѓР С•Р С” Р С—РЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљР С•Р Р†';
+        return 'Список продуктов';
     }
 
     if (activeTab.value === 'todos') {
-        return 'Р РЋР С—Р С‘РЎРѓР С•Р С” Р Т‘Р ВµР В»';
+        return 'Список дел';
     }
 
     if (activeTab.value === 'mood') {
-        return 'Р СњР В°РЎРѓРЎвЂљРЎР‚Р С•Р ВµР Р…Р С‘Р Вµ';
+        return 'Настроение';
     }
 
     return '';
@@ -745,7 +745,7 @@ const visibleTodoSuggestions = computed(() => {
 const offlineMode = computed(() => !isBrowserOnline.value || !serverReachable.value);
 const browserOffline = computed(() => !isBrowserOnline.value);
 const queuedChangesCount = computed(() => offlineQueue.value.length);
-const offlineStatusText = computed(() => (isBrowserOnline.value ? 'Р СњР ВµРЎвЂљ Р Т‘Р С•РЎРѓРЎвЂљРЎС“Р С—Р В° Р С” РЎРѓР ВµРЎР‚Р Р†Р ВµРЎР‚РЎС“' : 'Р СњР ВµРЎвЂљ Р С‘Р Р…РЎвЂљР ВµРЎР‚Р Р…Р ВµРЎвЂљР В°'));
+const offlineStatusText = computed(() => (isBrowserOnline.value ? 'Нет доступа к серверу' : 'Нет интернета'));
 const swipeUndoState = ref(null);
 const swipeUndoMessage = computed(() => {
     if (!swipeUndoState.value) {
@@ -753,11 +753,11 @@ const swipeUndoMessage = computed(() => {
     }
 
     if (swipeUndoState.value.action === 'remove_completed_batch') {
-        return 'Р Р€Р Т‘Р В°Р В»Р ВµР Р…РЎвЂ№ Р Р†РЎвЂ№Р С—Р С•Р В»Р Р…Р ВµР Р…Р Р…РЎвЂ№Р Вµ РЎРЊР В»Р ВµР СР ВµР Р…РЎвЂљРЎвЂ№';
+        return 'Удалены выполненные элементы';
     }
 
     if (swipeUndoState.value.action === 'remove') {
-        return 'Р В­Р В»Р ВµР СР ВµР Р…РЎвЂљ РЎС“Р Т‘Р В°Р В»Р ВµР Р…';
+        return 'Элемент удален';
     }
 
     return '';
@@ -1006,7 +1006,7 @@ function withMoodStaleFallback(payload, nowMs = Date.now()) {
 function resolveLinkedUserName(userId, linkEntries = links.value) {
     const numericUserId = Number(userId);
     if (!Number.isFinite(numericUserId) || numericUserId <= 0) {
-        return 'Р СџР С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЉ';
+        return 'Пользователь';
     }
 
     if (numericUserId === Number(localUser.id)) {
@@ -1020,7 +1020,7 @@ function resolveLinkedUserName(userId, linkEntries = links.value) {
         return name;
     }
 
-    return `Р СџР С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЉ ${numericUserId}`;
+    return `Пользователь ${numericUserId}`;
 }
 
 function normalizeMoodCard(entry, linkEntries = links.value) {
@@ -1160,31 +1160,31 @@ function formatMoodUpdatedAgo(moodPayload) {
     const mood = normalizeMoodPayload(moodPayload);
     const updatedAtMs = Number(mood.updated_at_ms || 0);
     if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0) {
-        return 'Р С•Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р…Р С‘Р в„– Р Р…Р ВµРЎвЂљ';
+        return 'обновлений нет';
     }
 
     const diffSeconds = Math.max(0, Math.floor((moodRelativeNowMs.value - updatedAtMs) / 1000));
 
     if (diffSeconds < 45) {
-        return 'Р С•Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р…Р С• РЎвЂљР С•Р В»РЎРЉР С”Р С• РЎвЂЎРЎвЂљР С•';
+        return 'обновлено только что';
     }
 
     if (diffSeconds < 3600) {
         const minutes = Math.max(1, Math.floor(diffSeconds / 60));
-        return `Р С•Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р…Р С• ${moodRelativeTimeFormatter.format(-minutes, 'minute')}`;
+        return `обновлено ${moodRelativeTimeFormatter.format(-minutes, 'minute')}`;
     }
 
     if (diffSeconds < 86400) {
         const hours = Math.max(1, Math.floor(diffSeconds / 3600));
-        return `Р С•Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р…Р С• ${moodRelativeTimeFormatter.format(-hours, 'hour')}`;
+        return `обновлено ${moodRelativeTimeFormatter.format(-hours, 'hour')}`;
     }
 
     if (diffSeconds < 604800) {
         const days = Math.max(1, Math.floor(diffSeconds / 86400));
-        return `Р С•Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р…Р С• ${moodRelativeTimeFormatter.format(-days, 'day')}`;
+        return `обновлено ${moodRelativeTimeFormatter.format(-days, 'day')}`;
     }
 
-    return `Р С•Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р…Р С• ${moodUpdatedAtDateFormatter.format(new Date(updatedAtMs))}`;
+    return `обновлено ${moodUpdatedAtDateFormatter.format(new Date(updatedAtMs))}`;
 }
 
 function persistSuggestionsCache() {
@@ -5424,7 +5424,7 @@ async function syncOfflineQueue() {
 
 function formatDueAt(isoValue) {
     if (!isoValue) {
-        return 'Р вЂР ВµР В· Р Т‘Р ВµР Т‘Р В»Р В°Р в„–Р Р…Р В°';
+        return 'Без дедлайна';
     }
 
     return new Intl.DateTimeFormat('ru-RU', {
@@ -6756,13 +6756,13 @@ async function sendInvite(userId) {
 
         if (browserOffline.value || isQueueOperationPending(queuedOpId)) {
             markActionButtonSuccess(inviteSendSuccessKey(userId), 2200);
-            showStatus('Р СџРЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘Р Вµ Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘Р С‘ Р С‘ Р В±РЎС“Р Т‘Р ВµРЎвЂљ Р С•РЎвЂљР С—РЎР‚Р В°Р Р†Р В»Р ВµР Р…Р С• Р С—РЎР‚Р С‘ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.');
+            showStatus('Приглашение в очереди и будет отправлено при синхронизации.');
             return;
         }
 
         await refreshState(false, false);
         markActionButtonSuccess(inviteSendSuccessKey(userId), 2200);
-        showStatus('Р СџРЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘Р Вµ Р С•РЎвЂљР С—РЎР‚Р В°Р Р†Р В»Р ВµР Р…Р С•.');
+        showStatus('Приглашение отправлено.');
     } finally {
         releaseSharingActionLock(actionLockKey);
     }
@@ -6774,7 +6774,7 @@ async function finalizeQueuedStateAction(opId, options = {}) {
     }
 
     const {
-        pendingMessage = 'Р ВР В·Р СР ВµР Р…Р ВµР Р…Р С‘Р Вµ Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р…Р С• Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
+        pendingMessage = 'Изменение добавлено в очередь синхронизации.',
         successMessage = '',
         syncSelection = true,
     } = options;
@@ -6797,7 +6797,7 @@ async function finalizeQueuedStateAction(opId, options = {}) {
 }
 
 async function createListPrompt() {
-    const nextName = window.prompt('Р СњР В°Р В·Р Р†Р В°Р Р…Р С‘Р Вµ РЎРѓР С—Р С‘РЎРѓР С”Р В°', '') ?? null;
+    const nextName = window.prompt('Название списка', '') ?? null;
     if (nextName === null) {
         return;
     }
@@ -6805,8 +6805,8 @@ async function createListPrompt() {
     await finalizeQueuedStateAction(
         queueCreateList(nextName),
         {
-            pendingMessage: 'Р СњР С•Р Р†РЎвЂ№Р в„– РЎРѓР С—Р С‘РЎРѓР С•Р С” Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р… Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
-            successMessage: 'Р РЋР С—Р С‘РЎРѓР С•Р С” РЎРѓР С•Р В·Р Т‘Р В°Р Р….',
+            pendingMessage: 'Новый список добавлен в очередь синхронизации.',
+            successMessage: 'Список создан.',
             syncSelection: true,
         },
     );
@@ -6818,7 +6818,7 @@ async function renameListPrompt(list = selectedListOption.value) {
         return;
     }
 
-    const nextName = window.prompt('Р СњР С•Р Р†Р С•Р Вµ Р Р…Р В°Р В·Р Р†Р В°Р Р…Р С‘Р Вµ РЎРѓР С—Р С‘РЎРѓР С”Р В°', String(list?.name ?? list?.label ?? '')) ?? null;
+    const nextName = window.prompt('Новое название списка', String(list?.name ?? list?.label ?? '')) ?? null;
     if (nextName === null) {
         return;
     }
@@ -6826,8 +6826,8 @@ async function renameListPrompt(list = selectedListOption.value) {
     await finalizeQueuedStateAction(
         queueRenameList(listId, nextName),
         {
-            pendingMessage: 'Р СџР ВµРЎР‚Р ВµР С‘Р СР ВµР Р…Р С•Р Р†Р В°Р Р…Р С‘Р Вµ РЎРѓР С—Р С‘РЎРѓР С”Р В° Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р…Р С• Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
-            successMessage: 'Р РЋР С—Р С‘РЎРѓР С•Р С” Р С—Р ВµРЎР‚Р ВµР С‘Р СР ВµР Р…Р С•Р Р†Р В°Р Р….',
+            pendingMessage: 'Переименование списка добавлено в очередь синхронизации.',
+            successMessage: 'Список переименован.',
             syncSelection: true,
         },
     );
@@ -6839,15 +6839,15 @@ async function deleteListEntry(list = selectedListOption.value) {
         return;
     }
 
-    if (!window.confirm(`Р Р€Р Т‘Р В°Р В»Р С‘РЎвЂљРЎРЉ РЎРѓР С—Р С‘РЎРѓР С•Р С” "${String(list?.name ?? list?.label ?? 'Р вЂР ВµР В· Р Р…Р В°Р В·Р Р†Р В°Р Р…Р С‘РЎРЏ')}"?`)) {
+    if (!window.confirm(`Удалить список "${String(list?.name ?? list?.label ?? 'Без названия')}"?`)) {
         return;
     }
 
     await finalizeQueuedStateAction(
         queueDeleteList(listId),
         {
-            pendingMessage: 'Р Р€Р Т‘Р В°Р В»Р ВµР Р…Р С‘Р Вµ РЎРѓР С—Р С‘РЎРѓР С”Р В° Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р…Р С• Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
-            successMessage: 'Р РЋР С—Р С‘РЎРѓР С•Р С” РЎС“Р Т‘Р В°Р В»РЎвЂР Р….',
+            pendingMessage: 'Удаление списка добавлено в очередь синхронизации.',
+            successMessage: 'Список удалён.',
             syncSelection: true,
         },
     );
@@ -6859,7 +6859,7 @@ async function saveCurrentListAsTemplate() {
         return;
     }
 
-    const nextName = window.prompt('Р СњР В°Р В·Р Р†Р В°Р Р…Р С‘Р Вµ РЎв‚¬Р В°Р В±Р В»Р С•Р Р…Р В°', String(selectedListLabel.value ?? '')) ?? null;
+    const nextName = window.prompt('Название шаблона', String(selectedListLabel.value ?? '')) ?? null;
     if (nextName === null) {
         return;
     }
@@ -6867,8 +6867,8 @@ async function saveCurrentListAsTemplate() {
     await finalizeQueuedStateAction(
         queueSaveTemplate(listId, nextName),
         {
-            pendingMessage: 'Р РЃР В°Р В±Р В»Р С•Р Р… Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р… Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
-            successMessage: 'Р РЃР В°Р В±Р В»Р С•Р Р… РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎвЂР Р….',
+            pendingMessage: 'Шаблон добавлен в очередь синхронизации.',
+            successMessage: 'Шаблон сохранён.',
             syncSelection: false,
         },
     );
@@ -6880,7 +6880,7 @@ async function createListFromTemplate(template) {
         return;
     }
 
-    const nextName = window.prompt('Р СњР В°Р В·Р Р†Р В°Р Р…Р С‘Р Вµ Р Р…Р С•Р Р†Р С•Р С–Р С• РЎРѓР С—Р С‘РЎРѓР С”Р В°', String(template?.name ?? '')) ?? null;
+    const nextName = window.prompt('Название нового списка', String(template?.name ?? '')) ?? null;
     if (nextName === null) {
         return;
     }
@@ -6888,8 +6888,8 @@ async function createListFromTemplate(template) {
     await finalizeQueuedStateAction(
         queueCreateFromTemplate(templateId, nextName),
         {
-            pendingMessage: 'Р СњР С•Р Р†РЎвЂ№Р в„– РЎРѓР С—Р С‘РЎРѓР С•Р С” Р С‘Р В· РЎв‚¬Р В°Р В±Р В»Р С•Р Р…Р В° Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р… Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
-            successMessage: 'Р РЋР С—Р С‘РЎРѓР С•Р С” Р С‘Р В· РЎв‚¬Р В°Р В±Р В»Р С•Р Р…Р В° РЎРѓР С•Р В·Р Т‘Р В°Р Р….',
+            pendingMessage: 'Новый список из шаблона добавлен в очередь синхронизации.',
+            successMessage: 'Список из шаблона создан.',
             syncSelection: true,
         },
     );
@@ -6901,15 +6901,15 @@ async function deleteTemplateEntry(template) {
         return;
     }
 
-    if (!window.confirm(`Р Р€Р Т‘Р В°Р В»Р С‘РЎвЂљРЎРЉ РЎв‚¬Р В°Р В±Р В»Р С•Р Р… "${String(template?.name ?? 'Р вЂР ВµР В· Р Р…Р В°Р В·Р Р†Р В°Р Р…Р С‘РЎРЏ')}"?`)) {
+    if (!window.confirm(`Удалить шаблон "${String(template?.name ?? 'Без названия')}"?`)) {
         return;
     }
 
     await finalizeQueuedStateAction(
         queueDeleteTemplate(templateId),
         {
-            pendingMessage: 'Р Р€Р Т‘Р В°Р В»Р ВµР Р…Р С‘Р Вµ РЎв‚¬Р В°Р В±Р В»Р С•Р Р…Р В° Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р…Р С• Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
-            successMessage: 'Р РЃР В°Р В±Р В»Р С•Р Р… РЎС“Р Т‘Р В°Р В»РЎвЂР Р….',
+            pendingMessage: 'Удаление шаблона добавлено в очередь синхронизации.',
+            successMessage: 'Шаблон удалён.',
             syncSelection: false,
         },
     );
@@ -6922,15 +6922,15 @@ async function removeMemberFromList(list, member) {
         return;
     }
 
-    if (!window.confirm(`Р Р€Р В±РЎР‚Р В°РЎвЂљРЎРЉ ${String(member?.name ?? 'РЎС“РЎвЂЎР В°РЎРѓРЎвЂљР Р…Р С‘Р С”Р В°')} Р С‘Р В· РЎРѓР С—Р С‘РЎРѓР С”Р В°?`)) {
+    if (!window.confirm(`Убрать ${String(member?.name ?? 'участника')} из списка?`)) {
         return;
     }
 
     await finalizeQueuedStateAction(
         queueRemoveMember(listId, userId),
         {
-            pendingMessage: 'Р ВР В·Р СР ВµР Р…Р ВµР Р…Р С‘Р Вµ РЎС“РЎвЂЎР В°РЎРѓРЎвЂљР Р…Р С‘Р С”Р С•Р Р† Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р…Р С• Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
-            successMessage: 'Р Р€РЎвЂЎР В°РЎРѓРЎвЂљР Р…Р С‘Р С” РЎС“Р Т‘Р В°Р В»РЎвЂР Р… Р С‘Р В· РЎРѓР С—Р С‘РЎРѓР С”Р В°.',
+            pendingMessage: 'Изменение участников добавлено в очередь синхронизации.',
+            successMessage: 'Участник удалён из списка.',
             syncSelection: true,
         },
     );
@@ -6961,7 +6961,7 @@ async function acceptInvitation(invitationId) {
             response: {
                 status: 422,
                 data: {
-                    message: 'Р СњР Вµ РЎС“Р Т‘Р В°Р В»Р С•РЎРѓРЎРЉ Р С—РЎР‚Р С‘Р Р…РЎРЏРЎвЂљРЎРЉ Р С—РЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘Р Вµ. Р СџР С•Р С—РЎР‚Р С•Р В±РЎС“Р в„–РЎвЂљР Вµ Р ВµРЎвЂ°РЎвЂ РЎР‚Р В°Р В·.',
+                    message: 'Не удалось принять приглашение. Попробуйте ещё раз.',
                 },
             },
         });
@@ -7001,7 +7001,7 @@ async function declineInvitation(invitationId) {
             response: {
                 status: 422,
                 data: {
-                    message: 'Р СњР Вµ РЎС“Р Т‘Р В°Р В»Р С•РЎРѓРЎРЉ Р С•Р В±Р Р…Р С•Р Р†Р С‘РЎвЂљРЎРЉ Р С—РЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘Р Вµ. Р СџР С•Р С—РЎР‚Р С•Р В±РЎС“Р в„–РЎвЂљР Вµ Р ВµРЎвЂ°РЎвЂ РЎР‚Р В°Р В·.',
+                    message: 'Не удалось обновить приглашение. Попробуйте ещё раз.',
                 },
             },
         });
@@ -7035,7 +7035,7 @@ async function setMine(linkId) {
     await syncOfflineQueue();
     if (browserOffline.value || (queuedOpId && isQueueOperationPending(queuedOpId))) {
         markActionButtonSuccess(setMineSuccessKey(linkId), 2200);
-        showStatus('Р РЋР С—Р С‘РЎРѓР С•Р С” Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘Р С‘ Р Р…Р В° РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘РЎР‹.');
+        showStatus('Список в очереди на синхронизацию.');
         return;
     }
     markActionButtonSuccess(setMineSuccessKey(linkId), 2200);
@@ -7068,7 +7068,7 @@ async function breakLink(linkId) {
     const queuedOpId = queueBreakLink(linkId);
     await syncOfflineQueue();
     if (browserOffline.value || (queuedOpId && isQueueOperationPending(queuedOpId))) {
-        showStatus('Р ВР В·Р СР ВµР Р…Р ВµР Р…Р С‘Р Вµ Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘Р С‘ Р Р…Р В° РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘РЎР‹.');
+        showStatus('Изменение в очереди на синхронизацию.');
         return;
     }
     showStatus('\u0421\u0432\u044f\u0437\u044c \u0441\u043f\u0438\u0441\u043a\u043e\u0432 \u0440\u0430\u0437\u043e\u0440\u0432\u0430\u043d\u0430.');
@@ -7552,7 +7552,7 @@ onBeforeUnmount(() => {
                 <span class="inline-flex items-center gap-2">
                     <WifiOff class="h-4 w-4 text-[#fcfcfa]" />
                     <span>
-                        offline: {{ offlineStatusText }}, Р С‘Р В·Р СР ВµР Р…Р ВµР Р…Р С‘РЎРЏ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏРЎР‹РЎвЂљРЎРѓРЎРЏ Р В»Р С•Р С”Р В°Р В»РЎРЉР Р…Р С•
+                        offline: {{ offlineStatusText }}, изменения сохраняются локально
                     </span>
                 </span>
                 <span v-if="queuedChangesCount > 0" class="shrink-0 rounded-lg border border-[#403e41] px-2 py-0.5 text-[11px]">
@@ -7610,7 +7610,7 @@ onBeforeUnmount(() => {
                                     <span class="min-w-0">
                                         <span class="block truncate">{{ option.label }}</span>
                                         <span class="mt-0.5 block text-[11px]" :class="Number(option.owner_id) === Number(selectedOwnerId) ? 'text-[#d7d2d5]' : 'text-[#8c878a]'">
-                                            {{ option.member_count }} РЎС“РЎвЂЎР В°РЎРѓРЎвЂљР Р…Р С‘Р С”(Р В°) Р’В· {{ option.total_pending_count }} Р Р…Р ВµР В·Р В°Р Р†Р ВµРЎР‚РЎв‚¬РЎвЂР Р…Р Р…РЎвЂ№РЎвЂ¦
+                                            {{ option.member_count }} участник(а) · {{ option.total_pending_count }} незавершённых
                                         </span>
                                     </span>
                                     <span class="inline-flex items-center gap-1">
@@ -7639,7 +7639,7 @@ onBeforeUnmount(() => {
                 <div class="mb-2 flex items-center justify-between gap-2">
                     <div>
                         <p class="text-[10px] uppercase tracking-[0.16em] text-[#b7c8ff]">Other Lists</p>
-                        <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">Р вЂўРЎРѓРЎвЂљРЎРЉ Р Р…Р ВµР В·Р В°Р Р†Р ВµРЎР‚РЎв‚¬РЎвЂР Р…Р Р…Р С•Р Вµ Р Р† Р Т‘РЎР‚РЎС“Р С–Р С‘РЎвЂ¦ РЎРѓР С—Р С‘РЎРѓР С”Р В°РЎвЂ¦</p>
+                        <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">Есть незавершённое в других списках</p>
                     </div>
                     <span class="text-xs text-[#d7d2d5]">{{ crossListReminders.length }}</span>
                 </div>
@@ -7665,7 +7665,7 @@ onBeforeUnmount(() => {
                         <input
                             v-model="newProductText"
                             type="text"
-                            placeholder="Р вЂќР С•Р В±Р В°Р Р†Р С‘РЎвЂљРЎРЉ Р С—РЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљ (Р Р…Р В°Р С—РЎР‚Р С‘Р СР ВµРЎР‚: Р СР С•Р В»Р С•Р С”Р С• 2 Р В»)..."
+                            placeholder="Добавить продукт (например: молоко 2 л)..."
                             class="w-full rounded-2xl border border-[#403e41] bg-[#221f22] px-4 py-3 text-sm text-[#fcfcfa] placeholder:text-[#7f7b7e] focus:border-[#fcfcfa]/45 focus:outline-none"
                             @keyup.enter="addProduct"
                         >
@@ -7761,7 +7761,7 @@ onBeforeUnmount(() => {
                                     <button
                                         type="button"
                                         class="drag-handle absolute right-[-4px] top-0 inline-flex h-5 w-5 items-center justify-center rounded-md text-[11px] font-semibold leading-none tracking-[-0.08em] text-[#7f7b7e] transition hover:text-[#fcfcfa]"
-                                        aria-label="Р СџР ВµРЎР‚Р ВµРЎвЂљР В°РЎвЂ°Р С‘РЎвЂљРЎРЉ Р С”Р В°РЎР‚РЎвЂљР С•РЎвЂЎР С”РЎС“"
+                                        aria-label="Перетащить карточку"
                                     >
                                         :::
                                     </button>
@@ -7803,7 +7803,7 @@ onBeforeUnmount(() => {
                         <input
                             v-model="newTodoText"
                             type="text"
-                            placeholder="Р вЂќР С•Р В±Р В°Р Р†Р С‘РЎвЂљРЎРЉ Р Т‘Р ВµР В»Р С•..."
+                            placeholder="Добавить дело..."
                             class="w-full rounded-2xl border border-[#403e41] bg-[#221f22] px-4 py-3 text-sm text-[#fcfcfa] placeholder:text-[#7f7b7e] focus:border-[#fcfcfa]/45 focus:outline-none"
                             @keyup.enter="addTodo"
                         >
@@ -7817,7 +7817,7 @@ onBeforeUnmount(() => {
                         <label
                             class="relative inline-flex cursor-pointer items-center rounded-2xl border border-[#403e41] bg-[#221f22] px-3 text-[#fcfcfa] transition hover:border-[#fcfcfa]"
                             :class="{ 'border-[#fcfcfa]': !!newTodoDueAt }"
-                            aria-label="Р вЂ™РЎвЂ№Р В±РЎР‚Р В°РЎвЂљРЎРЉ Р Т‘Р ВµР Т‘Р В»Р В°Р в„–Р Р…"
+                            aria-label="Выбрать дедлайн"
                         >
                             <CalendarDays class="h-4 w-4 text-[#fcfcfa]" />
                             <input
@@ -7911,7 +7911,7 @@ onBeforeUnmount(() => {
                                     <button
                                         type="button"
                                         class="drag-handle absolute right-[-4px] top-0 inline-flex h-5 w-5 items-center justify-center rounded-md text-[11px] font-semibold leading-none tracking-[-0.08em] text-[#7f7b7e] transition hover:text-[#fcfcfa]"
-                                        aria-label="Р СџР ВµРЎР‚Р ВµРЎвЂљР В°РЎвЂ°Р С‘РЎвЂљРЎРЉ Р С”Р В°РЎР‚РЎвЂљР С•РЎвЂЎР С”РЎС“"
+                                        aria-label="Перетащить карточку"
                                     >
                                         :::
                                     </button>
@@ -7943,7 +7943,7 @@ onBeforeUnmount(() => {
                                                 type="button"
                                                 data-no-swipe
                                                 class="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-[#fcfcfa]/45 text-[#fcfcfa] transition hover:border-[#fcfcfa]"
-                                                aria-label="Р ВР В·Р СР ВµР Р…Р С‘РЎвЂљРЎРЉ Р Т‘Р ВµР Т‘Р В»Р В°Р в„–Р Р…"
+                                                aria-label="Изменить дедлайн"
                                                 @pointerdown.stop="markTodoControlInteraction"
                                                 @click.stop="openTodoItemDuePicker(item)"
                                             >
@@ -7982,7 +7982,7 @@ onBeforeUnmount(() => {
                                 {{ card.name }}
                             </p>
                             <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">
-                                {{ card.is_self ? 'Р Р†РЎвЂ№' : 'РЎС“РЎвЂЎР В°РЎРѓРЎвЂљР Р…Р С‘Р С”' }}
+                                {{ card.is_self ? 'вы' : 'участник' }}
                             </p>
                             <p class="mt-0.5 text-[11px] text-[#9f9a9d]">
                                 {{ formatMoodUpdatedAgo(card.mood) }}
@@ -8139,7 +8139,7 @@ onBeforeUnmount(() => {
                                 <p class="text-[10px] uppercase tracking-[0.18em]" :class="isLightTheme ? 'text-[#7a8193]' : 'text-[#7f7b7e]'">PROFILE</p>
                                 <h2 class="mt-1 truncate text-lg font-semibold" :class="isLightTheme ? 'text-[#181b22]' : 'text-[#fcfcfa]'">{{ localUser.name }}</h2>
                                 <p class="mt-1 truncate text-xs" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">
-                                    @{{ localUser.tag || 'tag' }} Р’В· {{ localUser.email || 'email@example.com' }}
+                                    @{{ localUser.tag || 'tag' }} В· {{ localUser.email || 'email@example.com' }}
                                 </p>
                             </div>
                         </div>
@@ -8164,7 +8164,7 @@ onBeforeUnmount(() => {
                             </div>
                             <div class="relative z-[1] min-w-0">
                                 <div class="min-w-0">
-                                    <p class="text-[10px] uppercase tracking-[0.18em]" :class="isLightTheme ? 'text-[#4f66d8]' : 'text-[#b7c8ff]'">Р СџРЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљР С‘Р Р†Р Р…Р С•РЎРѓРЎвЂљРЎРЉ</p>
+                                    <p class="text-[10px] uppercase tracking-[0.18em]" :class="isLightTheme ? 'text-[#4f66d8]' : 'text-[#b7c8ff]'">Продуктивность</p>
                                     <p class="mt-2 text-5xl font-black leading-none tracking-tight" :class="isLightTheme ? 'text-[#151922]' : 'text-[#fcfcfa]'">{{ productivityScore }}</p>
                                 </div>
                             </div>
@@ -8176,8 +8176,8 @@ onBeforeUnmount(() => {
                         >
                             <div class="mb-2 flex items-center justify-between gap-2">
                                 <div class="min-w-0">
-                                    <p class="truncate text-sm font-semibold" :class="isLightTheme ? 'text-[#1a1d24]' : 'text-[#fcfcfa]'">Р вЂєРЎР‹Р Т‘Р С‘ Р С‘ РЎРѓР С—Р С‘РЎРѓР С”Р С‘</p>
-                                    <p class="mt-0.5 text-xs" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">Р вЂўР Т‘Р С‘Р Р…РЎвЂ№Р в„– РЎвЂ Р ВµР Р…РЎвЂљРЎР‚ Р С—Р С•Р С‘РЎРѓР С”Р В°, Р С—РЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘Р в„– Р С‘ РЎРѓР Р†РЎРЏР В·Р ВµР в„–.</p>
+                                    <p class="truncate text-sm font-semibold" :class="isLightTheme ? 'text-[#1a1d24]' : 'text-[#fcfcfa]'">Люди и списки</p>
+                                    <p class="mt-0.5 text-xs" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">Единый центр поиска, приглашений и связей.</p>
                                 </div>
                                 <Share2 class="h-4 w-4 shrink-0" :class="isLightTheme ? 'text-[#5b7fff]' : 'text-[#d8e7ff]'" />
                             </div>
@@ -8192,8 +8192,8 @@ onBeforeUnmount(() => {
                                     "
                                     @click="openCollabHub('share')"
                                 >
-                                    <span class="truncate">Р СџР С•Р Т‘Р ВµР В»Р С‘РЎвЂљРЎРЉРЎРѓРЎРЏ</span>
-                                    <span class="text-[11px]" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">Р СџР С•Р С‘РЎРѓР С”</span>
+                                    <span class="truncate">Поделиться</span>
+                                    <span class="text-[11px]" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">Поиск</span>
                                 </button>
                                 <button
                                     type="button"
@@ -8205,7 +8205,7 @@ onBeforeUnmount(() => {
                                     "
                                     @click="openCollabHub('invitations')"
                                 >
-                                    <span class="truncate">Р СџРЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘РЎРЏ</span>
+                                    <span class="truncate">Приглашения</span>
                                     <span
                                         class="inline-flex min-w-6 items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-semibold"
                                         :class="
@@ -8227,7 +8227,7 @@ onBeforeUnmount(() => {
                                     "
                                     @click="openCollabHub('lists')"
                                 >
-                                    <span class="truncate">Р РЋР С—Р С‘РЎРѓР С”Р С‘</span>
+                                    <span class="truncate">Списки</span>
                                     <span class="text-[11px]" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">{{ listOptions.length }}</span>
                                 </button>
                             </div>
@@ -8256,7 +8256,7 @@ onBeforeUnmount(() => {
                     @click="shareModalOpen = true"
                 >
                     <Share2 class="h-4 w-4" />
-                    Р СџР С•Р Т‘Р ВµР В»Р С‘РЎвЂљРЎРЉРЎРѓРЎРЏ РЎРѓР С—Р С‘РЎРѓР С”Р В°Р СР С‘
+                    Поделиться списками
                 </button>
 
                 <button
@@ -8267,7 +8267,7 @@ onBeforeUnmount(() => {
                         inviteModalTab = 'invitations';
                     "
                 >
-                    Р СљР С•Р С‘ Р С—РЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘РЎРЏ ({{ pendingInvitationsCount }})
+                    Мои приглашения ({{ pendingInvitationsCount }})
                 </button>
 
                 </div>
@@ -8298,7 +8298,7 @@ onBeforeUnmount(() => {
 
                 <div class="rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                     <h3 class="mb-3 text-sm font-semibold text-[#fcfcfa]">
-                        Р СћР ВµР СР В° Р С‘Р Р…РЎвЂљР ВµРЎР‚РЎвЂћР ВµР в„–РЎРѓР В°
+                        Тема интерфейса
                     </h3>
                     <div class="grid grid-cols-3 gap-2">
                         <button
@@ -8311,7 +8311,7 @@ onBeforeUnmount(() => {
                             "
                             @click="setThemeMode('system')"
                         >
-                            Р РЋР С‘РЎРѓРЎвЂљР ВµР СР В°
+                            Система
                         </button>
                         <button
                             type="button"
@@ -8323,7 +8323,7 @@ onBeforeUnmount(() => {
                             "
                             @click="setThemeMode('light')"
                         >
-                            Р РЋР Р†Р ВµРЎвЂљР В»Р В°РЎРЏ
+                            Светлая
                         </button>
                         <button
                             type="button"
@@ -8335,17 +8335,17 @@ onBeforeUnmount(() => {
                             "
                             @click="setThemeMode('dark')"
                         >
-                            Р СћРЎвЂР СР Р…Р В°РЎРЏ
+                            Тёмная
                         </button>
                     </div>
                     <p class="mt-2 text-xs text-[#9f9a9d]">
-                        Р С’Р С”РЎвЂљР С‘Р Р†Р Р…Р С•: {{ resolvedThemeLabel }}
+                        Активно: {{ resolvedThemeLabel }}
                     </p>
                 </div>
 
                 <div class="rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                     <h3 class="mb-3 text-sm font-semibold text-[#fcfcfa]">
-                        Р СњР В°РЎРѓРЎвЂљРЎР‚Р С•Р в„–Р С”Р С‘ Р В°Р С”Р С”Р В°РЎС“Р Р…РЎвЂљР В°
+                        Настройки аккаунта
                     </h3>
                     <div class="space-y-2">
                         <input
@@ -8372,33 +8372,33 @@ onBeforeUnmount(() => {
                             :disabled="profileForm.loading"
                             @click="saveProfile"
                         >
-                            Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…Р С‘РЎвЂљРЎРЉ Р С—РЎР‚Р С•РЎвЂћР С‘Р В»РЎРЉ
+                            Сохранить профиль
                         </button>
                     </div>
                 </div>
 
                 <div class="rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                     <h3 class="mb-3 text-sm font-semibold text-[#fcfcfa]">
-                        Р РЋР СР ВµР Р…Р В° Р С—Р В°РЎР‚Р С•Р В»РЎРЏ
+                        Смена пароля
                     </h3>
                     <div class="space-y-2">
                         <input
                             v-model="passwordForm.current_password"
                             type="password"
                             class="w-full rounded-xl border border-[#403e41] bg-[#2d2a2c] px-3 py-2 text-sm text-[#fcfcfa] focus:border-[#fcfcfa]/45 focus:outline-none"
-                            placeholder="Р СћР ВµР С”РЎС“РЎвЂ°Р С‘Р в„– Р С—Р В°РЎР‚Р С•Р В»РЎРЉ"
+                            placeholder="Текущий пароль"
                         >
                         <input
                             v-model="passwordForm.password"
                             type="password"
                             class="w-full rounded-xl border border-[#403e41] bg-[#2d2a2c] px-3 py-2 text-sm text-[#fcfcfa] focus:border-[#fcfcfa]/45 focus:outline-none"
-                            placeholder="Р СњР С•Р Р†РЎвЂ№Р в„– Р С—Р В°РЎР‚Р С•Р В»РЎРЉ"
+                            placeholder="Новый пароль"
                         >
                         <input
                             v-model="passwordForm.password_confirmation"
                             type="password"
                             class="w-full rounded-xl border border-[#403e41] bg-[#2d2a2c] px-3 py-2 text-sm text-[#fcfcfa] focus:border-[#fcfcfa]/45 focus:outline-none"
-                            placeholder="Р СџР С•Р Р†РЎвЂљР С•РЎР‚Р С‘РЎвЂљР Вµ Р С—Р В°РЎР‚Р С•Р В»РЎРЉ"
+                            placeholder="Повторите пароль"
                         >
                         <button
                             type="button"
@@ -8406,7 +8406,7 @@ onBeforeUnmount(() => {
                             :disabled="passwordForm.loading"
                             @click="savePassword"
                         >
-                            Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…Р С‘РЎвЂљРЎРЉ Р С—Р В°РЎР‚Р С•Р В»РЎРЉ
+                            Сохранить пароль
                         </button>
                     </div>
                 </div>
@@ -8421,11 +8421,11 @@ onBeforeUnmount(() => {
 
                 <div class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-2 text-xs text-[#9f9a9d]">
                     <div class="flex items-center justify-between gap-3">
-                        <span>Р вЂ™Р ВµРЎР‚РЎРѓР С‘РЎРЏ Р С—РЎР‚Р С‘Р В»Р С•Р В¶Р ВµР Р…Р С‘РЎРЏ</span>
+                        <span>Версия приложения</span>
                         <span class="font-mono text-[#d7d2d5]">{{ appVersion }}</span>
                     </div>
                     <div class="mt-1 flex items-center justify-between gap-3">
-                        <span>Р вЂ™Р ВµРЎР‚РЎРѓР С‘РЎРЏ Р В±Р С‘Р В»Р Т‘Р В°</span>
+                        <span>Версия билда</span>
                         <span class="font-mono text-[#d7d2d5]">{{ buildVersion }}</span>
                     </div>
                 </div>
@@ -8684,7 +8684,7 @@ onBeforeUnmount(() => {
                         v-if="canShowRemoveCompletedButton"
                         type="button"
                         class="rounded-xl border border-[#ee5c81]/55 bg-[#ee5c81]/14 p-2 text-[#ee5c81] hover:border-[#ee5c81]"
-                        aria-label="Р Р€Р Т‘Р В°Р В»Р С‘РЎвЂљРЎРЉ Р Р†РЎвЂ№Р С—Р С•Р В»Р Р…Р ВµР Р…Р Р…РЎвЂ№Р Вµ"
+                        aria-label="Удалить выполненные"
                         @click="removeCompletedAfterSwipe($event)"
                     >
                         <Trash2 class="h-4 w-4" />
@@ -8692,7 +8692,7 @@ onBeforeUnmount(() => {
                     <button
                         type="button"
                         class="rounded-xl border border-[#403e41] p-2 text-[#fcfcfa] hover:border-[#fcfcfa]/45"
-                        aria-label="Р С›РЎвЂљР СР ВµР Р…Р С‘РЎвЂљРЎРЉ"
+                        aria-label="Отменить"
                         @click="undoSwipeAction"
                     >
                         <RotateCcw class="h-4 w-4" />
@@ -8755,7 +8755,7 @@ onBeforeUnmount(() => {
                 @click="activeTab = 'products'"
             >
                 <ShoppingCart class="bottom-menu-icon mb-1 h-4 w-4" />
-                Р СџРЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљРЎвЂ№
+                Продукты
             </button>
             <button
                 type="button"
@@ -8764,7 +8764,7 @@ onBeforeUnmount(() => {
                 @click="activeTab = 'todos'"
             >
                 <Check class="bottom-menu-icon mb-1 h-4 w-4" />
-                Р вЂќР ВµР В»Р В°
+                Дела
             </button>
             <button
                 type="button"
@@ -8773,7 +8773,7 @@ onBeforeUnmount(() => {
                 @click="activeTab = 'mood'"
             >
                 <Smile class="bottom-menu-icon mb-1 h-4 w-4" />
-                Р СњР В°РЎРѓРЎвЂљРЎР‚Р С•Р ВµР Р…Р С‘Р Вµ
+                Настроение
             </button>
             <button
                 type="button"
@@ -8783,7 +8783,7 @@ onBeforeUnmount(() => {
                 @click="activeTab = 'profile'"
             >
                 <UserRound class="bottom-menu-icon mb-1 h-4 w-4" />
-                Р СџРЎР‚Р С•РЎвЂћР С‘Р В»РЎРЉ
+                Профиль
             </button>
         </nav>
 
@@ -8801,7 +8801,7 @@ onBeforeUnmount(() => {
                     <button
                         type="button"
                         class="absolute right-3 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-black/35 text-white transition hover:bg-black/55"
-                        aria-label="Р вЂ”Р В°Р С”РЎР‚РЎвЂ№РЎвЂљРЎРЉ РЎР‚Р ВµР С”Р В»Р В°Р СРЎС“"
+                        aria-label="Закрыть рекламу"
                         data-testid="ads-modal-close"
                         @click="closeAdModal"
                     >
@@ -8810,7 +8810,7 @@ onBeforeUnmount(() => {
                     <img
                         v-if="activeAdBannerPath"
                         :src="activeAdBannerPath"
-                        alt="Р В Р ВµР С”Р В»Р В°Р СР Р…РЎвЂ№Р в„– Р В±Р В°Р Р…Р Р…Р ВµРЎР‚"
+                        alt="Рекламный баннер"
                         class="h-full w-full object-fill"
                     >
                 </div>
@@ -8822,7 +8822,7 @@ onBeforeUnmount(() => {
                 <div class="flex h-full flex-col rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                 <div class="mb-3 flex items-center justify-between">
                     <h2 class="text-base font-semibold">
-                        Р СџР С•Р Т‘Р ВµР В»Р С‘РЎвЂљРЎРЉРЎРѓРЎРЏ РЎРѓР С—Р С‘РЎРѓР С”Р В°Р СР С‘
+                        Поделиться списками
                     </h2>
                     <button
                         type="button"
@@ -8837,7 +8837,7 @@ onBeforeUnmount(() => {
                     <input
                         v-model="searchQuery"
                         type="text"
-                        placeholder="Р вЂ™Р Р†Р ВµР Т‘Р С‘РЎвЂљР Вµ РЎвЂљР ВµР С–..."
+                        placeholder="Введите тег..."
                         class="w-full rounded-xl border border-[#403e41] bg-[#221f22] px-3 py-2 text-sm text-[#fcfcfa] focus:border-[#fcfcfa]/45 focus:outline-none"
                         @keyup.enter="findUsers"
                     >
@@ -8848,7 +8848,7 @@ onBeforeUnmount(() => {
                         @click="findUsers"
                     >
                         <Search class="h-4 w-4" />
-                        Р СњР В°Р в„–РЎвЂљР С‘
+                        Найти
                     </button>
                 </div>
 
@@ -8879,8 +8879,8 @@ onBeforeUnmount(() => {
                         >
                             {{
                                 isInviteSentConfirmed(result.id)
-                                    ? 'Р С›РЎвЂљР С—РЎР‚Р В°Р Р†Р В»Р ВµР Р…Р С•'
-                                    : (isSharingActionLocked(inviteSendActionLockKey(result.id)) ? '...' : 'Р СџРЎР‚Р С‘Р С–Р В»Р В°РЎРѓР С‘РЎвЂљРЎРЉ')
+                                    ? 'Отправлено'
+                                    : (isSharingActionLocked(inviteSendActionLockKey(result.id)) ? '...' : 'Пригласить')
                             }}
                         </button>
                     </div>
@@ -8894,7 +8894,7 @@ onBeforeUnmount(() => {
             <div class="flex h-full flex-col rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                 <div class="mb-3 flex items-center justify-between">
                     <h2 class="text-base font-semibold">
-                        Р вЂєРЎР‹Р Т‘Р С‘ Р С‘ РЎРѓР С—Р С‘РЎРѓР С”Р С‘
+                        Люди и списки
                     </h2>
                     <button
                         type="button"
@@ -8916,7 +8916,7 @@ onBeforeUnmount(() => {
                         "
                         @click="inviteModalTab = 'share'"
                     >
-                        Р СџР С•Р С‘РЎРѓР С”
+                        Поиск
                     </button>
                     <button
                         type="button"
@@ -8928,7 +8928,7 @@ onBeforeUnmount(() => {
                         "
                         @click="inviteModalTab = 'invitations'"
                     >
-                        Р СџРЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘РЎРЏ
+                        Приглашения
                     </button>
                     <button
                         type="button"
@@ -8947,7 +8947,7 @@ onBeforeUnmount(() => {
                 <div v-if="inviteModalTab === 'share'" class="flex-1 overflow-y-auto">
                     <div class="mb-3 rounded-2xl border border-[#403e41] bg-[#221f22] p-3">
                         <p class="text-xs text-[#9f9a9d]">
-                            Р СњР В°Р в„–Р Т‘Р С‘РЎвЂљР Вµ Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ Р С—Р С• РЎвЂљР ВµР С–РЎС“ Р С‘ Р С•РЎвЂљР С—РЎР‚Р В°Р Р†РЎРЉРЎвЂљР Вµ Р С—РЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘Р Вµ Р Р…Р В° Р С•Р В±РЎвЂ°Р С‘Р в„– РЎРѓР С—Р С‘РЎРѓР С•Р С”.
+                            Найдите пользователя по тегу и отправьте приглашение на общий список.
                         </p>
                     </div>
 
@@ -8955,7 +8955,7 @@ onBeforeUnmount(() => {
                         <input
                             v-model="searchQuery"
                             type="text"
-                            placeholder="Р вЂ™Р Р†Р ВµР Т‘Р С‘РЎвЂљР Вµ РЎвЂљР ВµР С–..."
+                            placeholder="Введите тег..."
                             class="w-full rounded-xl border border-[#403e41] bg-[#221f22] px-3 py-2 text-sm text-[#fcfcfa] focus:border-[#fcfcfa]/45 focus:outline-none"
                             @keyup.enter="findUsers"
                         >
@@ -8966,7 +8966,7 @@ onBeforeUnmount(() => {
                             @click="findUsers"
                         >
                             <Search class="h-4 w-4" />
-                            Р СњР В°Р в„–РЎвЂљР С‘
+                            Найти
                         </button>
                     </div>
 
@@ -8997,13 +8997,13 @@ onBeforeUnmount(() => {
                             >
                                 {{
                                     isInviteSentConfirmed(result.id)
-                                        ? 'Р С›РЎвЂљР С—РЎР‚Р В°Р Р†Р В»Р ВµР Р…Р С•'
-                                        : (isSharingActionLocked(inviteSendActionLockKey(result.id)) ? '...' : 'Р СџРЎР‚Р С‘Р С–Р В»Р В°РЎРѓР С‘РЎвЂљРЎРЉ')
+                                        ? 'Отправлено'
+                                        : (isSharingActionLocked(inviteSendActionLockKey(result.id)) ? '...' : 'Пригласить')
                                 }}
                             </button>
                         </div>
                         <p v-if="!searchBusy && searchResults.length === 0 && searchQuery.trim().length >= 2" class="px-1 text-xs text-[#9f9a9d]">
-                            Р СњР С‘РЎвЂЎР ВµР С–Р С• Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р…Р С•.
+                            Ничего не найдено.
                         </p>
                     </div>
                 </div>
@@ -9023,26 +9023,26 @@ onBeforeUnmount(() => {
                                 class="rounded-xl bg-[#a5d774]/20 px-3 py-1.5 text-xs font-semibold text-[#a5d774]"
                                 @click="acceptInvitation(invitation.id)"
                             >
-                                Р СџРЎР‚Р С‘Р Р…РЎРЏРЎвЂљРЎРЉ
+                                Принять
                             </button>
                             <button
                                 type="button"
                                 class="rounded-xl bg-[#ee5c81]/20 px-3 py-1.5 text-xs font-semibold text-[#ee5c81]"
                                 @click="declineInvitation(invitation.id)"
                             >
-                                Р С›РЎвЂљР СР ВµР Р…Р С‘РЎвЂљРЎРЉ
+                                Отменить
                             </button>
                         </div>
                     </div>
 
                     <div class="mt-3 rounded-2xl border border-[#403e41] bg-[#221f22] p-3">
                         <div class="mb-2 flex items-center justify-between gap-2">
-                            <p class="text-xs font-semibold uppercase tracking-[0.14em] text-[#9f9a9d]">Р С›РЎвЂљР С—РЎР‚Р В°Р Р†Р В»Р ВµР Р…Р Р…РЎвЂ№Р Вµ (Р С•Р В¶Р С‘Р Т‘Р В°РЎР‹РЎвЂљ)</p>
+                            <p class="text-xs font-semibold uppercase tracking-[0.14em] text-[#9f9a9d]">Отправленные (ожидают)</p>
                             <span class="text-xs text-[#9f9a9d]">{{ outgoingInvitations.length }}</span>
                         </div>
 
                         <div v-if="outgoingInvitations.length === 0" class="text-xs text-[#9f9a9d]">
-                            Р СњР ВµРЎвЂљ Р С‘РЎРѓРЎвЂ¦Р С•Р Т‘РЎРЏРЎвЂ°Р С‘РЎвЂ¦ Р С—РЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘Р в„– Р Р† Р С•Р В¶Р С‘Р Т‘Р В°Р Р…Р С‘Р С‘.
+                            Нет исходящих приглашений в ожидании.
                         </div>
 
                         <div v-else class="space-y-2">
@@ -9052,7 +9052,7 @@ onBeforeUnmount(() => {
                                 class="rounded-2xl border border-[#403e41] bg-[#2d2a2c] px-3 py-3"
                             >
                                 <div class="mb-1 text-sm font-medium text-[#fcfcfa]">
-                                    {{ invitation.invitee?.name || 'Р СџР С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЉ' }}
+                                    {{ invitation.invitee?.name || 'Пользователь' }}
                                 </div>
                                 <div class="mb-2 text-xs text-[#9f9a9d]">
                                     @{{ invitation.invitee?.tag || 'tag' }}
@@ -9062,7 +9062,7 @@ onBeforeUnmount(() => {
                                     class="rounded-xl bg-[#ee5c81]/20 px-3 py-1.5 text-xs font-semibold text-[#ee5c81]"
                                     @click="declineInvitation(invitation.id)"
                                 >
-                                    Р С›РЎвЂљР СР ВµР Р…Р С‘РЎвЂљРЎРЉ
+                                    Отменить
                                 </button>
                             </div>
                         </div>
@@ -9076,14 +9076,14 @@ onBeforeUnmount(() => {
                             class="rounded-2xl border border-[#5b7fff]/30 bg-[#5b7fff]/12 px-3 py-2.5 text-left text-sm font-semibold text-[#d8e7ff]"
                             @click="createListPrompt"
                         >
-                            РќРѕРІС‹Р№ СЃРїРёСЃРѕРє
+                            Новый список
                         </button>
                         <button
                             type="button"
                             class="rounded-2xl border border-[#56b982]/30 bg-[#56b982]/10 px-3 py-2.5 text-left text-sm font-semibold text-[#baf0d1]"
                             @click="saveCurrentListAsTemplate"
                         >
-                            РЎРѕС…СЂР°РЅРёС‚СЊ С‚РµРєСѓС‰РёР№ РєР°Рє С€Р°Р±Р»РѕРЅ
+                            Сохранить текущий как шаблон
                         </button>
                     </div>
 
@@ -9101,11 +9101,11 @@ onBeforeUnmount(() => {
                                             v-if="Number(list.list_id) === Number(selectedListId)"
                                             class="rounded-full border border-[#5b7fff]/35 bg-[#5b7fff]/12 px-2 py-0.5 text-[10px] font-semibold text-[#d8e7ff]"
                                         >
-                                            РЎРµР№С‡Р°СЃ РѕС‚РєСЂС‹С‚
+                                            Сейчас открыт
                                         </span>
                                     </div>
                                     <p class="mt-1 text-xs text-[#9f9a9d]">
-                                        {{ list.member_count }} СѓС‡Р°СЃС‚РЅРёРє(Р°) В· {{ list.total_pending_count }} РЅРµР·Р°РІРµСЂС€С‘РЅРЅС‹С…
+                                        {{ list.member_count }} участник(а) · {{ list.total_pending_count }} незавершённых
                                     </p>
                                 </div>
                                 <button
@@ -9113,7 +9113,7 @@ onBeforeUnmount(() => {
                                     class="rounded-xl bg-[#fcfcfa] px-3 py-1.5 text-xs font-semibold text-[#19181a]"
                                     @click="selectedOwnerId = list.owner_id"
                                 >
-                                    РћС‚РєСЂС‹С‚СЊ
+                                    Открыть
                                 </button>
                             </div>
 
@@ -9123,7 +9123,7 @@ onBeforeUnmount(() => {
                                     class="rounded-xl border border-[#5b7fff]/25 bg-[#5b7fff]/10 px-3 py-1.5 text-xs font-semibold text-[#d8e7ff]"
                                     @click="persistDefaultOwner(list.owner_id)"
                                 >
-                                    РЎРґРµР»Р°С‚СЊ РѕСЃРЅРѕРІРЅС‹Рј
+                                    Сделать основным
                                 </button>
                                 <button
                                     v-if="list.role === 'owner'"
@@ -9131,7 +9131,7 @@ onBeforeUnmount(() => {
                                     class="rounded-xl border border-[#403e41] bg-[#2d2a2c] px-3 py-1.5 text-xs font-semibold text-[#fcfcfa]"
                                     @click="renameListPrompt(list)"
                                 >
-                                    РџРµСЂРµРёРјРµРЅРѕРІР°С‚СЊ
+                                    Переименовать
                                 </button>
                                 <button
                                     v-if="list.role === 'owner'"
@@ -9139,7 +9139,7 @@ onBeforeUnmount(() => {
                                     class="rounded-xl bg-[#ee5c81]/20 px-3 py-1.5 text-xs font-semibold text-[#ee5c81]"
                                     @click="deleteListEntry(list)"
                                 >
-                                    РЈРґР°Р»РёС‚СЊ
+                                    Удалить
                                 </button>
                             </div>
 
@@ -9157,7 +9157,7 @@ onBeforeUnmount(() => {
                                         class="text-[#ee5c81]"
                                         @click="removeMemberFromList(list, member)"
                                     >
-                                        РЈР±СЂР°С‚СЊ
+                                        Убрать
                                     </button>
                                 </div>
                             </div>
@@ -9166,12 +9166,12 @@ onBeforeUnmount(() => {
 
                     <div class="rounded-2xl border border-[#403e41] bg-[#221f22] p-3">
                         <div class="mb-2 flex items-center justify-between gap-2">
-                            <p class="text-xs font-semibold uppercase tracking-[0.14em] text-[#9f9a9d]">РЁР°Р±Р»РѕРЅС‹</p>
+                            <p class="text-xs font-semibold uppercase tracking-[0.14em] text-[#9f9a9d]">Шаблоны</p>
                             <span class="text-xs text-[#9f9a9d]">{{ templates.length }}</span>
                         </div>
 
                         <div v-if="templates.length === 0" class="text-xs text-[#9f9a9d]">
-                            РџРѕРєР° РЅРµС‚ С€Р°Р±Р»РѕРЅРѕРІ.
+                            Пока нет шаблонов.
                         </div>
 
                         <div v-else class="space-y-2">
@@ -9184,7 +9184,7 @@ onBeforeUnmount(() => {
                                     <div class="min-w-0">
                                         <p class="truncate text-sm font-medium text-[#fcfcfa]">{{ template.name }}</p>
                                         <p class="mt-1 text-xs text-[#9f9a9d]">
-                                            {{ template.product_count }} РїРѕРєСѓРїРѕРє В· {{ template.todo_count }} РґРµР»
+                                            {{ template.product_count }} покупок · {{ template.todo_count }} дел
                                         </p>
                                     </div>
                                     <div class="flex gap-2">
@@ -9193,14 +9193,14 @@ onBeforeUnmount(() => {
                                             class="rounded-xl bg-[#fcfcfa] px-3 py-1.5 text-xs font-semibold text-[#19181a]"
                                             @click="createListFromTemplate(template)"
                                         >
-                                            РЎРѕР·РґР°С‚СЊ СЃРїРёСЃРѕРє
+                                            Создать список
                                         </button>
                                         <button
                                             type="button"
                                             class="rounded-xl bg-[#ee5c81]/20 px-3 py-1.5 text-xs font-semibold text-[#ee5c81]"
                                             @click="deleteTemplateEntry(template)"
                                         >
-                                            РЈРґР°Р»РёС‚СЊ
+                                            Удалить
                                         </button>
                                     </div>
                                 </div>
@@ -9374,7 +9374,7 @@ onBeforeUnmount(() => {
                                     {{
                                         isResettingSuggestionKey(entry.suggestion_key)
                                             ? '...'
-                                            : (isSuggestionResetDone(entry.suggestion_key) ? 'Р РЋР В±РЎР‚Р С•РЎв‚¬Р ВµР Р…Р С•' : '\u0421\u0431\u0440\u043e\u0441')
+                                            : (isSuggestionResetDone(entry.suggestion_key) ? 'Сброшено' : '\u0421\u0431\u0440\u043e\u0441')
                                     }}
                                 </button>
                             </div>
