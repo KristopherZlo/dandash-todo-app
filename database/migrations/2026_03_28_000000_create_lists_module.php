@@ -9,93 +9,112 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('lists', function (Blueprint $table): void {
-            $table->id();
-            $table->foreignId('owner_user_id')->constrained('users')->cascadeOnDelete();
-            $table->string('name', 120);
-            $table->boolean('is_template')->default(false)->index();
-            $table->timestamp('last_activity_at')->nullable()->index();
-            $table->timestamps();
+        if (! Schema::hasTable('lists')) {
+            Schema::create('lists', function (Blueprint $table): void {
+                $table->id();
+                $table->foreignId('owner_user_id')->constrained('users')->cascadeOnDelete();
+                $table->string('name', 120);
+                $table->boolean('is_template')->default(false)->index();
+                $table->timestamp('last_activity_at')->nullable()->index();
+                $table->timestamps();
 
-            $table->index(['owner_user_id', 'is_template']);
-        });
+                $table->index(['owner_user_id', 'is_template']);
+            });
+        }
 
-        Schema::create('list_members', function (Blueprint $table): void {
-            $table->id();
-            $table->foreignId('list_id')->constrained('lists')->cascadeOnDelete();
-            $table->foreignId('user_id')->constrained('users')->cascadeOnDelete();
-            $table->string('role', 24);
-            $table->timestamps();
+        if (! Schema::hasTable('list_members')) {
+            Schema::create('list_members', function (Blueprint $table): void {
+                $table->id();
+                $table->foreignId('list_id')->constrained('lists')->cascadeOnDelete();
+                $table->foreignId('user_id')->constrained('users')->cascadeOnDelete();
+                $table->string('role', 24);
+                $table->timestamps();
 
-            $table->unique(['list_id', 'user_id']);
-            $table->index(['user_id', 'role']);
-        });
+                $table->unique(['list_id', 'user_id']);
+                $table->index(['user_id', 'role']);
+            });
+        }
 
-        Schema::table('users', function (Blueprint $table): void {
-            $table->foreignId('preferred_list_id')
-                ->nullable()
-                ->after('preferred_owner_id')
-                ->constrained('lists')
-                ->nullOnDelete();
-            $table->json('mood_fire_recent_emojis')
-                ->nullable()
-                ->after('mood_fire_emoji');
-            $table->json('mood_battery_recent_emojis')
-                ->nullable()
-                ->after('mood_battery_emoji');
-            $table->string('mood_fire_emoji', 64)->nullable()->change();
-            $table->string('mood_battery_emoji', 64)->nullable()->change();
-        });
+        if (! Schema::hasColumn('users', 'preferred_list_id')) {
+            Schema::table('users', function (Blueprint $table): void {
+                $table->foreignId('preferred_list_id')
+                    ->nullable()
+                    ->after('preferred_owner_id')
+                    ->constrained('lists')
+                    ->nullOnDelete();
+                $table->json('mood_fire_recent_emojis')
+                    ->nullable()
+                    ->after('mood_fire_emoji');
+                $table->json('mood_battery_recent_emojis')
+                    ->nullable()
+                    ->after('mood_battery_emoji');
+                $table->string('mood_fire_emoji', 64)->nullable()->change();
+                $table->string('mood_battery_emoji', 64)->nullable()->change();
+            });
+        }
 
-        Schema::table('list_items', function (Blueprint $table): void {
-            $table->foreignId('list_id')
-                ->nullable()
-                ->after('list_link_id')
-                ->constrained('lists')
-                ->cascadeOnDelete();
-            $table->index(['list_id', 'type', 'is_completed', 'sort_order'], 'list_items_list_type_completed_sort_idx');
-        });
+        if (! Schema::hasColumn('list_items', 'list_id')) {
+            Schema::table('list_items', function (Blueprint $table): void {
+                $table->foreignId('list_id')
+                    ->nullable()
+                    ->after('list_link_id')
+                    ->constrained('lists')
+                    ->cascadeOnDelete();
+                $table->index(['list_id', 'type', 'is_completed', 'sort_order'], 'list_items_list_type_completed_sort_idx');
+            });
+        }
 
-        Schema::table('list_item_events', function (Blueprint $table): void {
-            $table->foreignId('list_id')
-                ->nullable()
-                ->after('list_link_id')
-                ->constrained('lists')
-                ->cascadeOnDelete();
-            $table->index(['list_id', 'type', 'event_type'], 'list_item_events_list_type_event_idx');
-        });
+        if (! Schema::hasColumn('list_item_events', 'list_id')) {
+            Schema::table('list_item_events', function (Blueprint $table): void {
+                $table->foreignId('list_id')
+                    ->nullable()
+                    ->after('list_link_id')
+                    ->constrained('lists')
+                    ->cascadeOnDelete();
+                $table->index(['list_id', 'type', 'event_type'], 'list_item_events_list_type_event_idx');
+            });
+        }
 
-        Schema::table('list_item_suggestion_states', function (Blueprint $table): void {
-            $table->foreignId('list_id')
-                ->nullable()
-                ->after('owner_id')
-                ->constrained('lists')
-                ->cascadeOnDelete();
-        });
+        if (! Schema::hasColumn('list_item_suggestion_states', 'list_id')) {
+            Schema::table('list_item_suggestion_states', function (Blueprint $table): void {
+                $table->foreignId('list_id')
+                    ->nullable()
+                    ->after('owner_id')
+                    ->constrained('lists')
+                    ->cascadeOnDelete();
+            });
+        }
 
-        Schema::table('list_sync_versions', function (Blueprint $table): void {
-            $table->foreignId('list_id')
-                ->nullable()
-                ->after('list_link_id')
-                ->constrained('lists')
-                ->cascadeOnDelete();
-            $table->index(['list_id', 'type'], 'list_sync_versions_list_type_idx');
-        });
+        if (! Schema::hasColumn('list_sync_versions', 'list_id')) {
+            Schema::table('list_sync_versions', function (Blueprint $table): void {
+                $table->foreignId('list_id')
+                    ->nullable()
+                    ->after('list_link_id')
+                    ->constrained('lists')
+                    ->cascadeOnDelete();
+                $table->index(['list_id', 'type'], 'list_sync_versions_list_type_idx');
+            });
+        }
 
-        Schema::table('list_invitations', function (Blueprint $table): void {
-            $table->foreignId('list_id')
-                ->nullable()
-                ->after('invitee_id')
-                ->constrained('lists')
-                ->cascadeOnDelete();
-            $table->index(['list_id', 'status'], 'list_invitations_list_status_idx');
-        });
+        if (! Schema::hasColumn('list_invitations', 'list_id')) {
+            Schema::table('list_invitations', function (Blueprint $table): void {
+                $table->foreignId('list_id')
+                    ->nullable()
+                    ->after('invitee_id')
+                    ->constrained('lists')
+                    ->cascadeOnDelete();
+                $table->index(['list_id', 'status'], 'list_invitations_list_status_idx');
+            });
+        }
 
+        $this->resetPartialBackfillState();
         $this->backfillLists();
 
-        Schema::table('list_item_suggestion_states', function (Blueprint $table): void {
-            $table->unique(['list_id', 'type', 'suggestion_key'], 'list_item_suggestion_states_list_type_key_unique');
-        });
+        if (! $this->indexExists('list_item_suggestion_states', 'list_item_suggestion_states_list_type_key_unique')) {
+            Schema::table('list_item_suggestion_states', function (Blueprint $table): void {
+                $table->unique(['list_id', 'type', 'suggestion_key'], 'list_item_suggestion_states_list_type_key_unique');
+            });
+        }
     }
 
     public function down(): void
@@ -303,30 +322,61 @@ return new class extends Migration
 
     private function backfillSyncVersions(array $personalListIds, array $sharedListIds): void
     {
+        $groupedVersions = [];
+
         DB::table('list_sync_versions')
-            ->select(['id', 'owner_id', 'list_link_id', 'type'])
+            ->select(['id', 'owner_id', 'list_link_id', 'type', 'version', 'created_at', 'updated_at'])
             ->orderBy('id')
-            ->chunkById(500, function ($versions) use ($personalListIds, $sharedListIds): void {
-                foreach ($versions as $version) {
-                    $listId = $this->resolveLegacyListId(
-                        (int) ($version->owner_id ?? 0),
-                        $version->list_link_id !== null ? (int) $version->list_link_id : null,
-                        $personalListIds,
-                        $sharedListIds,
-                    );
+            ->get()
+            ->each(function ($version) use ($personalListIds, $sharedListIds, &$groupedVersions): void {
+                $listId = $this->resolveLegacyListId(
+                    (int) ($version->owner_id ?? 0),
+                    $version->list_link_id !== null ? (int) $version->list_link_id : null,
+                    $personalListIds,
+                    $sharedListIds,
+                );
 
-                    if (! $listId) {
-                        continue;
-                    }
-
-                    DB::table('list_sync_versions')
-                        ->where('id', (int) $version->id)
-                        ->update([
-                            'list_id' => $listId,
-                            'scope_key' => sprintf('list:%d|type:%s', $listId, (string) ($version->type ?? '')),
-                        ]);
+                if (! $listId) {
+                    return;
                 }
+
+                $type = (string) ($version->type ?? '');
+                $groupKey = sprintf('%d|%s', $listId, $type);
+
+                $groupedVersions[$groupKey][] = [
+                    'id' => (int) $version->id,
+                    'list_id' => $listId,
+                    'type' => $type,
+                    'version' => (int) ($version->version ?? 0),
+                    'created_at' => $version->created_at,
+                    'updated_at' => $version->updated_at,
+                ];
             });
+
+        foreach ($groupedVersions as $versions) {
+            usort($versions, static function (array $left, array $right): int {
+                return [$right['version'], (string) ($right['updated_at'] ?? ''), (string) ($right['created_at'] ?? ''), $right['id']]
+                    <=> [$left['version'], (string) ($left['updated_at'] ?? ''), (string) ($left['created_at'] ?? ''), $left['id']];
+            });
+
+            $primary = $versions[0];
+            $duplicateIds = array_slice(array_column($versions, 'id'), 1);
+            $maxVersion = max(array_column($versions, 'version'));
+
+            DB::table('list_sync_versions')
+                ->where('id', (int) $primary['id'])
+                ->update([
+                    'list_id' => (int) $primary['list_id'],
+                    'scope_key' => sprintf('list:%d|type:%s', (int) $primary['list_id'], (string) $primary['type']),
+                    'version' => $maxVersion,
+                ]);
+
+            if ($duplicateIds !== []) {
+                DB::table('list_sync_versions')
+                    ->whereIn('id', $duplicateIds)
+                    ->delete();
+            }
+        }
     }
 
     private function backfillInvitations(array $personalListIds, array $sharedListIds): void
@@ -451,5 +501,54 @@ return new class extends Migration
         }
 
         return json_encode([$normalized], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+    }
+
+    private function resetPartialBackfillState(): void
+    {
+        if (! Schema::hasTable('lists')) {
+            return;
+        }
+
+        if (Schema::hasColumn('users', 'preferred_list_id')) {
+            DB::table('users')->update(['preferred_list_id' => null]);
+        }
+
+        foreach ([
+            'list_items',
+            'list_item_events',
+            'list_item_suggestion_states',
+            'list_sync_versions',
+            'list_invitations',
+        ] as $tableName) {
+            if (Schema::hasColumn($tableName, 'list_id')) {
+                DB::table($tableName)->update(['list_id' => null]);
+            }
+        }
+
+        if (Schema::hasTable('list_members')) {
+            DB::table('list_members')->delete();
+        }
+
+        DB::table('lists')->delete();
+    }
+
+    private function indexExists(string $tableName, string $indexName): bool
+    {
+        if (DB::getDriverName() === 'sqlite') {
+            $rows = DB::select(
+                "select name from sqlite_master where type = 'index' and tbl_name = ? and name = ? limit 1",
+                [$tableName, $indexName],
+            );
+
+            return $rows !== [];
+        }
+
+        $databaseName = DB::getDatabaseName();
+
+        return DB::table('information_schema.statistics')
+            ->where('table_schema', $databaseName)
+            ->where('table_name', $tableName)
+            ->where('index_name', $indexName)
+            ->exists();
     }
 };
