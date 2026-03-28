@@ -26,11 +26,8 @@ function matchesScope(localPendingItem, incomingItem, options = {}) {
         return false;
     }
 
-    if (Number(incomingItem?.owner_id ?? 0) !== Number(ownerId)) {
-        return false;
-    }
-
-    return normalizeLinkId(incomingItem?.list_link_id) === normalizeLinkId(resolvedLinkId);
+    return normalizeLinkId(incomingItem?.list_id ?? incomingItem?.list_link_id ?? incomingItem?.owner_id)
+        === normalizeLinkId(resolvedLinkId ?? ownerId);
 }
 
 export function findBestPendingCreateMatch(localPendingItem, incomingItems, options = {}) {

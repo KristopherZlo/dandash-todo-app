@@ -76,7 +76,7 @@ export function areItemsEquivalent(leftItems, rightItems, options = {}) {
             return false;
         }
 
-        if (normalizeLinkId(leftItem.list_link_id) !== normalizeLinkId(rightItem.list_link_id)) {
+        if (normalizeLinkId(leftItem.list_id ?? leftItem.list_link_id) !== normalizeLinkId(rightItem.list_id ?? rightItem.list_link_id)) {
             return false;
         }
 
@@ -139,11 +139,15 @@ export function normalizeItem(item, options = {}) {
         normalizeLinkId = (value) => value,
         normalizeTodoPriority = (value) => value,
     } = options;
+    const normalizedListId = normalizeLinkId(
+        linkIdOverride ?? item?.list_id ?? item?.list_link_id ?? ownerIdOverride ?? item?.owner_id,
+    );
 
     return {
         ...item,
-        owner_id: Number(ownerIdOverride ?? item?.owner_id ?? 0),
-        list_link_id: normalizeLinkId(linkIdOverride ?? item?.list_link_id),
+        owner_id: Number(ownerIdOverride ?? item?.list_id ?? item?.owner_id ?? 0),
+        list_id: normalizedListId,
+        list_link_id: normalizedListId,
         sort_order: normalizeSortOrderValue(item?.sort_order, 1000),
         local_id: item?.local_id ?? `srv-${item?.id}`,
         priority: item?.type === 'todo' ? normalizeTodoPriority(item?.priority) : null,
@@ -203,6 +207,7 @@ export function normalizeItems(items, previousItems = [], options = {}) {
             ...normalized,
             ...previousItem,
             owner_id: normalized.owner_id,
+            list_id: normalized.list_id,
             list_link_id: normalized.list_link_id,
             local_id: preservedLocalId || String(previousItem?.local_id ?? '').trim() || normalized.local_id,
             client_request_id: normalized.client_request_id || previousItem?.client_request_id || null,

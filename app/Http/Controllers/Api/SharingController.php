@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ListInvitation;
 use App\Models\UserList;
 use App\Services\Sharing\ListSharingService;
+use App\Services\Lists\ListCatalogService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -13,6 +14,7 @@ class SharingController extends Controller
 {
     public function __construct(
         private readonly ListSharingService $listSharingService,
+        private readonly ListCatalogService $listCatalogService,
     ) {
     }
 
@@ -56,14 +58,16 @@ class SharingController extends Controller
     public function sendInvitation(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'list_id' => ['required', 'integer', 'exists:lists,id'],
+            'list_id' => ['nullable', 'integer', 'exists:lists,id'],
             'user_id' => ['required', 'integer', 'exists:users,id'],
         ]);
 
         return response()->json(
             $this->listSharingService->sendInvitation(
                 $request->user(),
-                UserList::query()->findOrFail((int) $validated['list_id']),
+                isset($validated['list_id'])
+                    ? UserList::query()->findOrFail((int) $validated['list_id'])
+                    : $this->listCatalogService->ensurePersonalListExists($request->user()),
                 (int) $validated['user_id'],
             ),
             201,

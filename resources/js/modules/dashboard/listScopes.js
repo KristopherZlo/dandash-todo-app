@@ -15,12 +15,16 @@ function resolveListOptions(getListOptions) {
     return Array.isArray(getListOptions()) ? getListOptions() : [];
 }
 
+function readOptionListId(option, normalizeLinkId) {
+    return normalizeLinkId(option?.list_id ?? option?.link_id ?? option?.owner_id);
+}
+
 export function isSameListScope(leftOwnerId, leftLinkId = undefined, rightOwnerId, rightLinkId = undefined, options = {}) {
     const normalizeLinkId = resolveNormalizer(options.normalizeLinkId);
-    const leftNormalizedLinkId = normalizeLinkId(leftLinkId);
-    const rightNormalizedLinkId = normalizeLinkId(rightLinkId);
+    const leftNormalizedLinkId = normalizeLinkId(leftLinkId ?? leftOwnerId);
+    const rightNormalizedLinkId = normalizeLinkId(rightLinkId ?? rightOwnerId);
 
-    if (leftNormalizedLinkId || rightNormalizedLinkId) {
+    if (leftNormalizedLinkId !== null || rightNormalizedLinkId !== null) {
         return leftNormalizedLinkId !== null && leftNormalizedLinkId === rightNormalizedLinkId;
     }
 
@@ -28,13 +32,20 @@ export function isSameListScope(leftOwnerId, leftLinkId = undefined, rightOwnerI
 }
 
 export function matchesScopedOperation(operation, ownerId, type, linkId = undefined, options = {}) {
+    const operationScopeId = operation?.list_id ?? operation?.link_id ?? operation?.owner_id;
+
     return String(operation?.type) === String(type)
-        && isSameListScope(operation?.owner_id, operation?.link_id, ownerId, linkId, options);
+        && isSameListScope(operationScopeId, operationScopeId, ownerId, linkId, options);
 }
 
 export function findListOptionByOwner(listOptions, ownerId) {
     const normalizedOptions = Array.isArray(listOptions) ? listOptions : [];
-    return normalizedOptions.find((option) => Number(option?.owner_id) === Number(ownerId)) ?? null;
+    return normalizedOptions.find((option) => {
+        const optionOwnerId = Number(option?.owner_id ?? option?.list_id ?? 0);
+        const optionListId = Number(option?.list_id ?? option?.link_id ?? 0);
+
+        return optionOwnerId === Number(ownerId) || optionListId === Number(ownerId);
+    }) ?? null;
 }
 
 export function resolveLinkIdForOwner(ownerId, explicitLinkId = undefined, listOptions = [], options = {}) {
@@ -44,17 +55,16 @@ export function resolveLinkIdForOwner(ownerId, explicitLinkId = undefined, listO
         return explicit;
     }
 
-    return normalizeLinkId(findListOptionByOwner(listOptions, ownerId)?.link_id);
+    const option = findListOptionByOwner(listOptions, ownerId);
+
+    return readOptionListId(option, normalizeLinkId) ?? normalizeLinkId(ownerId);
 }
 
 export function listCacheKey(ownerId, type, linkId = null, options = {}) {
     const normalizeLinkId = resolveNormalizer(options.normalizeLinkId);
-    const normalizedLinkId = normalizeLinkId(linkId);
-    if (normalizedLinkId) {
-        return `shared:${normalizedLinkId}:${type}`;
-    }
+    const normalizedLinkId = normalizeLinkId(linkId ?? ownerId) ?? 0;
 
-    return `owner:${Number(ownerId)}:personal:${type}`;
+    return `list:${normalizedLinkId}:${type}`;
 }
 
 export function suggestionsCacheKey(ownerId, type, linkId = undefined, listOptions = [], options = {}) {
@@ -69,20 +79,14 @@ export function suggestionsCacheKey(ownerId, type, linkId = undefined, listOptio
 export function suggestionStatsCacheKey(ownerId, type, linkId = undefined, listOptions = [], options = {}) {
     const normalizedLinkId = resolveLinkIdForOwner(ownerId, linkId, listOptions, options);
     const normalizedType = String(type ?? '').trim().toLowerCase();
-    if (normalizedLinkId) {
-        return `shared:${normalizedLinkId}:${normalizedType}`;
-    }
 
-    return `owner:${Number(ownerId)}:personal:${normalizedType}`;
+    return `list:${normalizedLinkId ?? 0}:${normalizedType}`;
 }
 
 export function buildListChannelName(ownerId, listOptions = [], options = {}) {
-    const linkId = resolveLinkIdForOwner(ownerId, undefined, listOptions, options);
-    if (linkId) {
-        return `lists.shared.${linkId}`;
-    }
+    const linkId = resolveLinkIdForOwner(ownerId, undefined, listOptions, options) ?? Number(ownerId);
 
-    return `lists.personal.${Number(ownerId)}`;
+    return `lists.${linkId}`;
 }
 
 export function createListScopeHelpers(options = {}) {

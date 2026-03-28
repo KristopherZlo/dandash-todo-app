@@ -4,6 +4,7 @@ import { useActionButtonSuccess } from '@/composables/useActionButtonSuccess';
 import { useActionLocks } from '@/composables/useActionLocks';
 import ToastStack from '@/Components/ToastStack.vue';
 import { useDashboardChrome } from '@/composables/useDashboardChrome';
+import { useCrossListReminders } from '@/composables/useCrossListReminders';
 import { useSuggestionStats } from '@/composables/useSuggestionStats';
 import { useToasts } from '@/composables/useToasts';
 import {
@@ -28,6 +29,12 @@ import {
 import {
     createListScopeHelpers,
 } from '@/modules/dashboard/listScopes';
+import {
+    buildCompatibilityLinks,
+    normalizeListOptions,
+    normalizeMoodPreferences,
+    normalizeTemplateOptions,
+} from '@/modules/dashboard/listState';
 import { findBestPendingCreateMatch } from '@/modules/dashboard/pendingCreateMatch';
 import {
     buildIncomingItemsFromRealtimeEvent,
@@ -114,15 +121,21 @@ const {
     resolvePublicAssetUrl,
 });
 
+const initialSyncState = normalizeSyncStatePayload(props.initialState);
 const listDropdownOpen = ref(false);
-const selectedOwnerId = ref(props.initialState.default_owner_id ?? localUser.id);
+const selectedOwnerId = ref(initialSyncState.default_owner_id ?? localUser.id);
 
-const listOptions = ref(props.initialState.list_options ?? []);
-const invitations = ref(props.initialState.invitations ?? []);
-const outgoingInvitations = ref(props.initialState.outgoing_pending_invitations ?? []);
-const links = ref(props.initialState.links ?? []);
-const pendingInvitationsCount = ref(props.initialState.pending_invitations_count ?? 0);
-const moodCards = ref(Array.isArray(props.initialState.mood_cards) ? props.initialState.mood_cards : []);
+const listOptions = ref(initialSyncState.list_options ?? []);
+const templates = ref(initialSyncState.templates ?? []);
+const invitations = ref(initialSyncState.invitations ?? []);
+const outgoingInvitations = ref(initialSyncState.outgoing_pending_invitations ?? []);
+const links = ref(initialSyncState.links ?? []);
+const pendingInvitationsCount = ref(initialSyncState.pending_invitations_count ?? 0);
+const moodCards = ref(Array.isArray(initialSyncState.mood_cards) ? initialSyncState.mood_cards : []);
+const selfMoodPreferences = ref(initialSyncState.self_mood_preferences ?? {
+    fire_recent_emojis: [],
+    battery_recent_emojis: [],
+});
 
 const productItems = ref([]);
 const todoItems = ref([]);
@@ -247,7 +260,7 @@ const cachedProductStatsByList = ref({});
 const cachedUserSearchByQuery = ref({});
 const cachedSyncState = ref(null);
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const OFFLINE_QUEUE_STORAGE_KEY = `dandash:offline-queue:${CACHE_VERSION}:user-${localUser.id}`;
 const ITEMS_CACHE_STORAGE_KEY = `dandash:items-cache:${CACHE_VERSION}:user-${localUser.id}`;
 const SUGGESTIONS_CACHE_STORAGE_KEY = `dandash:suggestions-cache:${CACHE_VERSION}:user-${localUser.id}`;
@@ -267,7 +280,7 @@ let moodRelativeTimeTimer = null;
 let listChannelName = null;
 let userChannelName = null;
 let swipeUndoTimer = null;
-let lastPersistedOwnerId = Number(props.initialState.default_owner_id ?? localUser.id);
+let lastPersistedOwnerId = Number(initialSyncState.default_owner_id ?? localUser.id);
 let queueSyncInProgress = false;
 let queueSyncPromise = null;
 let nextTempId = -1;
@@ -358,7 +371,8 @@ const {
 });
 
 const selectedListOption = computed(() => findListOptionByOwner(selectedOwnerId.value));
-const selectedListLinkId = computed(() => normalizeLinkId(selectedListOption.value?.link_id));
+const selectedListLinkId = computed(() => normalizeLinkId(selectedListOption.value?.list_id ?? selectedListOption.value?.link_id));
+const selectedListId = computed(() => normalizeLinkId(selectedListLinkId.value ?? selectedOwnerId.value));
 const {
     productStatsModalOpen,
     suggestionStatsType,
@@ -390,7 +404,24 @@ const {
     formatIntervalSeconds,
     normalizeSuggestionStatsType,
 });
-const selectedListLabel = computed(() => selectedListOption.value?.label ?? 'Личный');
+const {
+    crossListReminders,
+    hasCrossListReminders,
+} = useCrossListReminders({
+    listOptions,
+    selectedListId,
+});
+const selectedListLabel = computed(() => selectedListOption.value?.label ?? 'Р вЂєР С‘РЎвЂЎР Р…РЎвЂ№Р в„–');
+const fireMoodEmojiOptions = computed(() => (
+    selfMoodPreferences.value.fire_recent_emojis?.length
+        ? selfMoodPreferences.value.fire_recent_emojis
+        : MOOD_FIRE_EMOJIS
+));
+const batteryMoodEmojiOptions = computed(() => (
+    selfMoodPreferences.value.battery_recent_emojis?.length
+        ? selfMoodPreferences.value.battery_recent_emojis
+        : MOOD_BATTERY_EMOJIS
+));
 
 function buildCompletedStats(items) {
     const normalizedItems = Array.isArray(items) ? items : [];
@@ -614,18 +645,18 @@ const productivityDustParticles = computed(() => (
         };
     })
 ));
-const resolvedThemeLabel = computed(() => (resolvedTheme.value === 'light' ? 'Светлая' : 'Тёмная'));
+const resolvedThemeLabel = computed(() => (resolvedTheme.value === 'light' ? 'Р РЋР Р†Р ВµРЎвЂљР В»Р В°РЎРЏ' : 'Р СћРЎвЂР СР Р…Р В°РЎРЏ'));
 const activeTabTitle = computed(() => {
     if (activeTab.value === 'products') {
-        return 'Список продуктов';
+        return 'Р РЋР С—Р С‘РЎРѓР С•Р С” Р С—РЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљР С•Р Р†';
     }
 
     if (activeTab.value === 'todos') {
-        return 'Список дел';
+        return 'Р РЋР С—Р С‘РЎРѓР С•Р С” Р Т‘Р ВµР В»';
     }
 
     if (activeTab.value === 'mood') {
-        return 'Настроение';
+        return 'Р СњР В°РЎРѓРЎвЂљРЎР‚Р С•Р ВµР Р…Р С‘Р Вµ';
     }
 
     return '';
@@ -706,7 +737,7 @@ const visibleTodoSuggestions = computed(() => {
 const offlineMode = computed(() => !isBrowserOnline.value || !serverReachable.value);
 const browserOffline = computed(() => !isBrowserOnline.value);
 const queuedChangesCount = computed(() => offlineQueue.value.length);
-const offlineStatusText = computed(() => (isBrowserOnline.value ? 'Нет доступа к серверу' : 'Нет интернета'));
+const offlineStatusText = computed(() => (isBrowserOnline.value ? 'Р СњР ВµРЎвЂљ Р Т‘Р С•РЎРѓРЎвЂљРЎС“Р С—Р В° Р С” РЎРѓР ВµРЎР‚Р Р†Р ВµРЎР‚РЎС“' : 'Р СњР ВµРЎвЂљ Р С‘Р Р…РЎвЂљР ВµРЎР‚Р Р…Р ВµРЎвЂљР В°'));
 const swipeUndoState = ref(null);
 const swipeUndoMessage = computed(() => {
     if (!swipeUndoState.value) {
@@ -714,11 +745,11 @@ const swipeUndoMessage = computed(() => {
     }
 
     if (swipeUndoState.value.action === 'remove_completed_batch') {
-        return 'Удалены выполненные элементы';
+        return 'Р Р€Р Т‘Р В°Р В»Р ВµР Р…РЎвЂ№ Р Р†РЎвЂ№Р С—Р С•Р В»Р Р…Р ВµР Р…Р Р…РЎвЂ№Р Вµ РЎРЊР В»Р ВµР СР ВµР Р…РЎвЂљРЎвЂ№';
     }
 
     if (swipeUndoState.value.action === 'remove') {
-        return 'Элемент удален';
+        return 'Р В­Р В»Р ВµР СР ВµР Р…РЎвЂљ РЎС“Р Т‘Р В°Р В»Р ВµР Р…';
     }
 
     return '';
@@ -848,9 +879,9 @@ function cloneEntries(entries) {
 }
 
 const MOOD_COLOR_VALUES = Object.freeze(['red', 'yellow', 'green']);
-const MOOD_FIRE_EMOJIS = Object.freeze(['🥰', '😝', '😈', '😭']);
-const MOOD_BATTERY_EMOJIS = Object.freeze(['😴', '😡', '😄', '😊', '😭']);
-const MOOD_UNKNOWN_EMOJI = '❔';
+const MOOD_FIRE_EMOJIS = Object.freeze(['рџҐ°', 'рџќ', 'рџ€']);
+const MOOD_BATTERY_EMOJIS = Object.freeze(['рџґ', 'рџЎ', 'рџ„']);
+const MOOD_UNKNOWN_EMOJI = 'вќ”';
 const MOOD_STALE_RESET_AFTER_MS = 24 * 60 * 60 * 1000;
 
 function createDefaultMoodPayload() {
@@ -859,7 +890,7 @@ function createDefaultMoodPayload() {
         fire_level: 50,
         fire_emoji: MOOD_FIRE_EMOJIS[0],
         battery_level: 50,
-        battery_emoji: MOOD_BATTERY_EMOJIS[3],
+        battery_emoji: MOOD_BATTERY_EMOJIS[0],
         updated_at: null,
         updated_at_ms: null,
     };
@@ -885,7 +916,39 @@ function normalizeMoodEmoji(value, allowed, fallback) {
         return candidate;
     }
 
-    return allowed.includes(candidate) ? candidate : fallback;
+    if (candidate === '' || candidate.length > 64) {
+        return fallback;
+    }
+
+    return candidate;
+}
+
+function prependMoodRecentEmoji(list, emoji) {
+    const normalizedEmoji = normalizeMoodEmoji(emoji, null, '');
+    if (normalizedEmoji === '' || normalizedEmoji === MOOD_UNKNOWN_EMOJI) {
+        return Array.isArray(list) ? list.slice(0, 3) : [];
+    }
+
+    const source = Array.isArray(list) ? list : [];
+    const next = [normalizedEmoji];
+
+    for (const entry of source) {
+        const normalizedEntry = normalizeMoodEmoji(entry, null, '');
+        if (
+            normalizedEntry === ''
+            || normalizedEntry === MOOD_UNKNOWN_EMOJI
+            || next.includes(normalizedEntry)
+        ) {
+            continue;
+        }
+
+        next.push(normalizedEntry);
+        if (next.length >= 3) {
+            break;
+        }
+    }
+
+    return next.slice(0, 3);
 }
 
 function isMoodStale(updatedAtMs, nowMs = Date.now()) {
@@ -915,9 +978,9 @@ function normalizeMoodPayload(payload) {
     return {
         color: normalizeMoodColor(source.color),
         fire_level: normalizeMoodLevel(source.fire_level),
-        fire_emoji: normalizeMoodEmoji(source.fire_emoji, MOOD_FIRE_EMOJIS, MOOD_FIRE_EMOJIS[0]),
+        fire_emoji: normalizeMoodEmoji(source.fire_emoji, null, MOOD_FIRE_EMOJIS[0]),
         battery_level: normalizeMoodLevel(source.battery_level),
-        battery_emoji: normalizeMoodEmoji(source.battery_emoji, MOOD_BATTERY_EMOJIS, MOOD_BATTERY_EMOJIS[3]),
+        battery_emoji: normalizeMoodEmoji(source.battery_emoji, null, MOOD_BATTERY_EMOJIS[0]),
         updated_at: rawUpdatedAt,
         updated_at_ms: updatedAtMs,
     };
@@ -941,7 +1004,7 @@ function withMoodStaleFallback(payload, nowMs = Date.now()) {
 function resolveLinkedUserName(userId, linkEntries = links.value) {
     const numericUserId = Number(userId);
     if (!Number.isFinite(numericUserId) || numericUserId <= 0) {
-        return 'Пользователь';
+        return 'Р СџР С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЉ';
     }
 
     if (numericUserId === Number(localUser.id)) {
@@ -955,7 +1018,7 @@ function resolveLinkedUserName(userId, linkEntries = links.value) {
         return name;
     }
 
-    return `Пользователь ${numericUserId}`;
+    return `Р СџР С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЉ ${numericUserId}`;
 }
 
 function normalizeMoodCard(entry, linkEntries = links.value) {
@@ -1095,31 +1158,31 @@ function formatMoodUpdatedAgo(moodPayload) {
     const mood = normalizeMoodPayload(moodPayload);
     const updatedAtMs = Number(mood.updated_at_ms || 0);
     if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0) {
-        return 'обновлений нет';
+        return 'Р С•Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р…Р С‘Р в„– Р Р…Р ВµРЎвЂљ';
     }
 
     const diffSeconds = Math.max(0, Math.floor((moodRelativeNowMs.value - updatedAtMs) / 1000));
 
     if (diffSeconds < 45) {
-        return 'обновлено только что';
+        return 'Р С•Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р…Р С• РЎвЂљР С•Р В»РЎРЉР С”Р С• РЎвЂЎРЎвЂљР С•';
     }
 
     if (diffSeconds < 3600) {
         const minutes = Math.max(1, Math.floor(diffSeconds / 60));
-        return `обновлено ${moodRelativeTimeFormatter.format(-minutes, 'minute')}`;
+        return `Р С•Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р…Р С• ${moodRelativeTimeFormatter.format(-minutes, 'minute')}`;
     }
 
     if (diffSeconds < 86400) {
         const hours = Math.max(1, Math.floor(diffSeconds / 3600));
-        return `обновлено ${moodRelativeTimeFormatter.format(-hours, 'hour')}`;
+        return `Р С•Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р…Р С• ${moodRelativeTimeFormatter.format(-hours, 'hour')}`;
     }
 
     if (diffSeconds < 604800) {
         const days = Math.max(1, Math.floor(diffSeconds / 86400));
-        return `обновлено ${moodRelativeTimeFormatter.format(-days, 'day')}`;
+        return `Р С•Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р…Р С• ${moodRelativeTimeFormatter.format(-days, 'day')}`;
     }
 
-    return `обновлено ${moodUpdatedAtDateFormatter.format(new Date(updatedAtMs))}`;
+    return `Р С•Р В±Р Р…Р С•Р Р†Р В»Р ВµР Р…Р С• ${moodUpdatedAtDateFormatter.format(new Date(updatedAtMs))}`;
 }
 
 function persistSuggestionsCache() {
@@ -1508,7 +1571,7 @@ function queueSharedGamificationDelta(linkId, delta) {
     const existingIndex = findQueueIndexFromEnd(
         (operation) =>
             operation.action === 'apply_shared_gamification_delta'
-            && Number(operation?.payload?.link_id) === normalizedLinkId,
+            && Number(operation?.payload?.list_id) === normalizedLinkId,
     );
 
     if (existingIndex !== -1 && !isOperationBeingSynced(offlineQueue.value[existingIndex]?.op_id)) {
@@ -1525,7 +1588,7 @@ function queueSharedGamificationDelta(linkId, delta) {
             ...offlineQueue.value[existingIndex],
             payload: {
                 ...offlineQueue.value[existingIndex]?.payload,
-                link_id: normalizedLinkId,
+                list_id: normalizedLinkId,
                 delta: nextDelta,
             },
         };
@@ -1536,7 +1599,7 @@ function queueSharedGamificationDelta(linkId, delta) {
     enqueueOperation({
         action: 'apply_shared_gamification_delta',
         payload: {
-            link_id: normalizedLinkId,
+            list_id: normalizedLinkId,
             delta: normalizedDelta,
         },
     });
@@ -1600,8 +1663,15 @@ function normalizeSyncStatePayload(state) {
     const source = asPlainObject(state);
     const invitations = cloneEntries(source.invitations);
     const outgoingPendingInvitations = cloneEntries(source.outgoing_pending_invitations);
-    const links = cloneEntries(source.links);
-    const listOptions = cloneEntries(source.list_options);
+    const listOptions = normalizeListOptions(
+        Array.isArray(source.lists) && source.lists.length > 0
+            ? source.lists
+            : source.list_options,
+    );
+    const links = Array.isArray(source.links) && source.links.length > 0
+        ? cloneEntries(source.links)
+        : buildCompatibilityLinks(listOptions, localUser.id);
+    const templates = normalizeTemplateOptions(source.templates);
     const moodCardsSource = cloneEntries(source.mood_cards);
     const gamificationSource = source.gamification && typeof source.gamification === 'object'
         ? source.gamification
@@ -1613,8 +1683,10 @@ function normalizeSyncStatePayload(state) {
         outgoing_pending_invitations: outgoingPendingInvitations,
         links,
         list_options: listOptions,
+        templates,
         mood_cards: normalizeMoodCards(moodCardsSource, links),
-        default_owner_id: Number(source.default_owner_id) || Number(localUser.id),
+        self_mood_preferences: normalizeMoodPreferences(source.self_mood_preferences),
+        default_owner_id: Number(source.default_list_id ?? source.default_owner_id) || Number(localUser.id),
         gamification: gamificationSource ? normalizeGamificationStatePayload(gamificationSource) : null,
     };
 }
@@ -1626,8 +1698,10 @@ function buildCurrentSyncStatePayload() {
         outgoing_pending_invitations: outgoingInvitations.value,
         links: links.value,
         list_options: listOptions.value,
+        templates: templates.value,
         mood_cards: moodCards.value,
-        default_owner_id: selectedOwnerId.value,
+        self_mood_preferences: selfMoodPreferences.value,
+        default_list_id: selectedListId.value ?? selectedOwnerId.value,
         gamification: buildCurrentGamificationStatePayload(),
     });
 }
@@ -2915,6 +2989,7 @@ function createOptimisticItem({
         local_id: `tmp-${Math.abs(tempId)}`,
         client_request_id: clientRequestId,
         owner_id: Number(ownerId),
+        list_id: normalizeLinkId(linkId ?? ownerId),
         list_link_id: normalizeLinkId(linkId),
         type,
         text,
@@ -3099,6 +3174,7 @@ function queueCreate(ownerId, type, item, linkId = undefined) {
 
     enqueueOperation({
         action: 'create',
+        list_id: resolvedLinkId,
         owner_id: Number(ownerId),
         link_id: resolvedLinkId,
         type,
@@ -3146,6 +3222,7 @@ function queueReorder(ownerId, type, order, linkId = undefined) {
 
     enqueueOperation({
         action: 'reorder',
+        list_id: resolvedLinkId,
         owner_id: Number(ownerId),
         link_id: resolvedLinkId,
         type,
@@ -3207,6 +3284,7 @@ function queueUpdate(ownerId, type, itemId, payload, linkId = undefined) {
 
     enqueueOperation({
         action: 'update',
+        list_id: resolvedLinkId,
         owner_id: Number(ownerId),
         link_id: resolvedLinkId,
         type,
@@ -3290,6 +3368,7 @@ function queueDelete(ownerId, type, itemId, linkId = undefined) {
 
     enqueueOperation({
         action: 'delete',
+        list_id: resolvedLinkId,
         owner_id: Number(ownerId),
         link_id: resolvedLinkId,
         type,
@@ -3303,11 +3382,11 @@ function queueDefaultOwner(ownerId) {
         return;
     }
 
-    offlineQueue.value = offlineQueue.value.filter((operation) => operation.action !== 'set_default_owner');
+    offlineQueue.value = offlineQueue.value.filter((operation) => operation.action !== 'set_default_list');
     enqueueOperation({
-        action: 'set_default_owner',
+        action: 'set_default_list',
         payload: {
-            owner_id: normalizedOwnerId,
+            list_id: normalizedOwnerId,
         },
     });
 }
@@ -3320,6 +3399,7 @@ function queueSuggestionDismiss(ownerId, type, suggestionKey, averageIntervalSec
 
     enqueueOperation({
         action: 'dismiss_suggestion',
+        list_id: resolveLinkIdForOwner(ownerId, linkId),
         owner_id: Number(ownerId),
         link_id: resolveLinkIdForOwner(ownerId, linkId),
         type: String(type),
@@ -3357,6 +3437,7 @@ function queueSuggestionReset(ownerId, type, suggestionKey, linkId = undefined) 
 
     enqueueOperation({
         action: 'reset_suggestion',
+        list_id: resolvedLinkId,
         owner_id: Number(ownerId),
         link_id: resolvedLinkId,
         type: String(type),
@@ -3406,6 +3487,7 @@ function queueSuggestionSettingsUpdate(ownerId, type, suggestionKey, payload, li
 
     enqueueOperation({
         action: 'update_suggestion_settings',
+        list_id: resolvedLinkId,
         owner_id: Number(ownerId),
         link_id: resolvedLinkId,
         type: String(type),
@@ -3413,16 +3495,18 @@ function queueSuggestionSettingsUpdate(ownerId, type, suggestionKey, payload, li
     });
 }
 
-function queueSendInvitation(userId) {
+function queueSendInvitation(userId, listId = selectedListId.value) {
     const numericUserId = Number(userId);
-    if (!Number.isFinite(numericUserId) || numericUserId <= 0) {
+    const numericListId = Number(listId);
+    if (!Number.isFinite(numericUserId) || numericUserId <= 0 || !Number.isFinite(numericListId) || numericListId <= 0) {
         return '';
     }
 
     const existingIndex = findQueueIndexFromEnd(
         (operation) =>
             operation.action === 'send_invitation'
-            && Number(operation?.payload?.user_id) === numericUserId,
+            && Number(operation?.payload?.user_id) === numericUserId
+            && Number(operation?.payload?.list_id ?? operation?.list_id) === numericListId,
     );
 
     if (existingIndex !== -1) {
@@ -3432,6 +3516,7 @@ function queueSendInvitation(userId) {
     return enqueueOperation({
         action: 'send_invitation',
         payload: {
+            list_id: numericListId,
             user_id: numericUserId,
         },
     });
@@ -3497,6 +3582,108 @@ function queueBreakLink(linkId) {
         action: 'break_link',
         payload: {
             link_id: numericLinkId,
+        },
+    });
+}
+
+function queueCreateList(name = '') {
+    return enqueueOperation({
+        action: 'create_list',
+        payload: {
+            name: String(name ?? '').trim(),
+        },
+    });
+}
+
+function queueRenameList(listId, name) {
+    const numericListId = Number(listId);
+    if (!Number.isFinite(numericListId) || numericListId <= 0) {
+        return '';
+    }
+
+    return enqueueOperation({
+        action: 'rename_list',
+        list_id: numericListId,
+        payload: {
+            list_id: numericListId,
+            name: String(name ?? '').trim(),
+        },
+    });
+}
+
+function queueDeleteList(listId) {
+    const numericListId = Number(listId);
+    if (!Number.isFinite(numericListId) || numericListId <= 0) {
+        return '';
+    }
+
+    return enqueueOperation({
+        action: 'delete_list',
+        list_id: numericListId,
+        payload: {
+            list_id: numericListId,
+        },
+    });
+}
+
+function queueSaveTemplate(sourceListId, name = '') {
+    const numericListId = Number(sourceListId);
+    if (!Number.isFinite(numericListId) || numericListId <= 0) {
+        return '';
+    }
+
+    return enqueueOperation({
+        action: 'save_template',
+        payload: {
+            source_list_id: numericListId,
+            name: String(name ?? '').trim(),
+        },
+    });
+}
+
+function queueCreateFromTemplate(templateId, name = '') {
+    const numericTemplateId = Number(templateId);
+    if (!Number.isFinite(numericTemplateId) || numericTemplateId <= 0) {
+        return '';
+    }
+
+    return enqueueOperation({
+        action: 'create_from_template',
+        payload: {
+            template_id: numericTemplateId,
+            name: String(name ?? '').trim(),
+        },
+    });
+}
+
+function queueDeleteTemplate(templateId) {
+    const numericTemplateId = Number(templateId);
+    if (!Number.isFinite(numericTemplateId) || numericTemplateId <= 0) {
+        return '';
+    }
+
+    return enqueueOperation({
+        action: 'delete_template',
+        list_id: numericTemplateId,
+        payload: {
+            template_id: numericTemplateId,
+        },
+    });
+}
+
+function queueRemoveMember(listId, userId) {
+    const numericListId = Number(listId);
+    const numericUserId = Number(userId);
+    if (!Number.isFinite(numericListId) || numericListId <= 0 || !Number.isFinite(numericUserId) || numericUserId <= 0) {
+        return '';
+    }
+
+    return enqueueOperation({
+        action: 'remove_member',
+        list_id: numericListId,
+        payload: {
+            list_id: numericListId,
+            user_id: numericUserId,
         },
     });
 }
@@ -4613,12 +4800,17 @@ function shouldDropOperationOnClientError(operation, statusCode) {
         'reset_suggestion',
         'update_suggestion_settings',
         'apply_shared_gamification_delta',
-        'set_default_owner',
+        'create_list',
+        'rename_list',
+        'delete_list',
+        'set_default_list',
+        'save_template',
+        'create_from_template',
+        'delete_template',
         'send_invitation',
         'accept_invitation',
         'decline_invitation',
-        'set_mine',
-        'break_link',
+        'remove_member',
         'update_profile',
         'update_password',
         'sync_gamification',
@@ -4764,6 +4956,7 @@ function buildSyncChunkPayload(chunkOperations) {
     return chunkOperations.map((operation) => ({
         op_id: String(operation?.op_id ?? ''),
         action: String(operation?.action ?? ''),
+        list_id: normalizeLinkId(operation?.list_id ?? operation?.payload?.list_id ?? operation?.link_id),
         owner_id: operation?.owner_id ?? null,
         link_id: normalizeLinkId(operation?.link_id),
         type: operation?.type ?? null,
@@ -5022,15 +5215,25 @@ function applySuccessfulSyncedOperation(operation, resultData) {
 
     if (
         [
-            'set_default_owner',
+            'create_list',
+            'rename_list',
+            'delete_list',
+            'set_default_list',
+            'save_template',
+            'create_from_template',
+            'delete_template',
+            'send_invitation',
             'accept_invitation',
             'decline_invitation',
-            'set_mine',
-            'break_link',
+            'remove_member',
         ].includes(action)
     ) {
-        if (resultData && typeof resultData === 'object') {
-            applyState(resultData, { syncSelection: true });
+        const nextState = resultData?.state && typeof resultData.state === 'object'
+            ? resultData.state
+            : resultData;
+
+        if (nextState && typeof nextState === 'object') {
+            applyState(nextState, { syncSelection: true });
         }
         return;
     }
@@ -5219,7 +5422,7 @@ async function syncOfflineQueue() {
 
 function formatDueAt(isoValue) {
     if (!isoValue) {
-        return 'Без дедлайна';
+        return 'Р вЂР ВµР В· Р Т‘Р ВµР Т‘Р В»Р В°Р в„–Р Р…Р В°';
     }
 
     return new Intl.DateTimeFormat('ru-RU', {
@@ -5307,10 +5510,10 @@ function toIsoDatetime(localDatetime) {
 }
 
 function resolveItemContext(item, fallbackOwnerId = selectedOwnerId.value) {
-    const ownerId = Number(item?.owner_id ?? fallbackOwnerId);
+    const ownerId = Number(item?.list_id ?? item?.owner_id ?? fallbackOwnerId);
     return {
         ownerId,
-        linkId: resolveLinkIdForOwner(ownerId, item?.list_link_id),
+        linkId: resolveLinkIdForOwner(ownerId, item?.list_id ?? item?.list_link_id),
     };
 }
 
@@ -5493,6 +5696,8 @@ function applyState(state, options = {}) {
     outgoingInvitations.value = normalizedState.outgoing_pending_invitations;
     links.value = normalizedState.links;
     listOptions.value = normalizedState.list_options;
+    templates.value = normalizedState.templates;
+    selfMoodPreferences.value = normalizedState.self_mood_preferences;
     applyMoodCardsFromServer(normalizedState.mood_cards);
 
     const defaultOwnerId = Number(normalizedState.default_owner_id ?? localUser.id);
@@ -5509,7 +5714,7 @@ function applyState(state, options = {}) {
     } else if (!selectedExists && defaultExists) {
         selectedOwnerId.value = defaultOwnerId;
     } else if (!selectedExists) {
-        selectedOwnerId.value = localUser.id;
+        selectedOwnerId.value = Number(listOptions.value[0]?.owner_id ?? localUser.id);
     }
 
     if (normalizedState.gamification) {
@@ -5573,8 +5778,7 @@ async function loadItems(type, showErrors = false, ownerIdOverride = null, linkI
 
         const response = await requestApi(() => window.axios.get('api/items', {
             params: {
-                owner_id: ownerId,
-                link_id: linkId,
+                list_id: linkId,
                 type,
             },
         }));
@@ -5659,8 +5863,7 @@ async function loadSuggestions(type, showErrors = false) {
     try {
         const response = await requestApi(() => window.axios.get('api/items/suggestions', {
             params: {
-                owner_id: ownerId,
-                link_id: linkId,
+                list_id: linkId,
                 type,
                 limit: 6,
             },
@@ -5738,8 +5941,7 @@ async function loadSuggestionStats(type = suggestionStatsType.value, showErrors 
     try {
         const response = await requestApi(() => window.axios.get('api/items/suggestions/stats', {
             params: {
-                owner_id: suggestionContext.ownerId,
-                link_id: suggestionContext.linkId,
+                list_id: suggestionContext.linkId,
                 type: suggestionContext.statsType,
                 limit: 200,
             },
@@ -6328,6 +6530,10 @@ function upsertSelfMoodCard(nextMood, options = {}) {
 function applyMoodSyncPayload(payload, options = {}) {
     const source = asPlainObject(payload);
 
+    if (source.self_mood_preferences && typeof source.self_mood_preferences === 'object') {
+        selfMoodPreferences.value = normalizeMoodPreferences(source.self_mood_preferences);
+    }
+
     if (Array.isArray(source.mood_cards)) {
         applyMoodCardsFromServer(source.mood_cards, options);
         return;
@@ -6397,6 +6603,10 @@ function setMoodFireEmoji(emoji) {
         return;
     }
 
+    selfMoodPreferences.value = {
+        ...selfMoodPreferences.value,
+        fire_recent_emojis: prependMoodRecentEmoji(selfMoodPreferences.value.fire_recent_emojis, emoji),
+    };
     const normalizedMood = upsertSelfMoodCard({
         ...selfMoodCard.value.mood,
         fire_emoji: emoji,
@@ -6438,12 +6648,30 @@ function setMoodBatteryEmoji(emoji) {
         return;
     }
 
+    selfMoodPreferences.value = {
+        ...selfMoodPreferences.value,
+        battery_recent_emojis: prependMoodRecentEmoji(selfMoodPreferences.value.battery_recent_emojis, emoji),
+    };
     const normalizedMood = upsertSelfMoodCard({
         ...selfMoodCard.value.mood,
         battery_emoji: emoji,
     }, { markLocalUpdate: true });
     queueMoodUpdate(normalizedMood);
     syncOfflineQueue().catch(() => {});
+}
+
+function promptForCustomMoodEmoji(target) {
+    const nextEmoji = window.prompt('Введите любой эмоджи', '') ?? null;
+    if (nextEmoji === null) {
+        return;
+    }
+
+    if (target === 'battery') {
+        setMoodBatteryEmoji(nextEmoji);
+        return;
+    }
+
+    setMoodFireEmoji(nextEmoji);
 }
 
 async function findUsers() {
@@ -6468,7 +6696,10 @@ async function findUsers() {
 
     try {
         const response = await requestApi(() => window.axios.get('api/users/search', {
-            params: { query },
+            params: {
+                query,
+                list_id: selectedListId.value,
+            },
         }));
 
         const users = response.data.users ?? [];
@@ -6504,16 +6735,184 @@ async function sendInvite(userId) {
 
         if (browserOffline.value || isQueueOperationPending(queuedOpId)) {
             markActionButtonSuccess(inviteSendSuccessKey(userId), 2200);
-            showStatus('Приглашение в очереди и будет отправлено при синхронизации.');
+            showStatus('Р СџРЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘Р Вµ Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘Р С‘ Р С‘ Р В±РЎС“Р Т‘Р ВµРЎвЂљ Р С•РЎвЂљР С—РЎР‚Р В°Р Р†Р В»Р ВµР Р…Р С• Р С—РЎР‚Р С‘ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.');
             return;
         }
 
         await refreshState(false, false);
         markActionButtonSuccess(inviteSendSuccessKey(userId), 2200);
-        showStatus('Приглашение отправлено.');
+        showStatus('Р СџРЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘Р Вµ Р С•РЎвЂљР С—РЎР‚Р В°Р Р†Р В»Р ВµР Р…Р С•.');
     } finally {
         releaseSharingActionLock(actionLockKey);
     }
+}
+
+async function finalizeQueuedStateAction(opId, options = {}) {
+    if (!opId) {
+        return false;
+    }
+
+    const {
+        pendingMessage = 'Р ВР В·Р СР ВµР Р…Р ВµР Р…Р С‘Р Вµ Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р…Р С• Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
+        successMessage = '',
+        syncSelection = true,
+    } = options;
+
+    await syncOfflineQueue();
+
+    if (browserOffline.value || isQueueOperationPending(opId)) {
+        if (pendingMessage) {
+            showStatus(pendingMessage);
+        }
+        return false;
+    }
+
+    await refreshState(false, syncSelection);
+    if (successMessage) {
+        showStatus(successMessage);
+    }
+
+    return true;
+}
+
+async function createListPrompt() {
+    const nextName = window.prompt('Р СњР В°Р В·Р Р†Р В°Р Р…Р С‘Р Вµ РЎРѓР С—Р С‘РЎРѓР С”Р В°', '') ?? null;
+    if (nextName === null) {
+        return;
+    }
+
+    await finalizeQueuedStateAction(
+        queueCreateList(nextName),
+        {
+            pendingMessage: 'Р СњР С•Р Р†РЎвЂ№Р в„– РЎРѓР С—Р С‘РЎРѓР С•Р С” Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р… Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
+            successMessage: 'Р РЋР С—Р С‘РЎРѓР С•Р С” РЎРѓР С•Р В·Р Т‘Р В°Р Р….',
+            syncSelection: true,
+        },
+    );
+}
+
+async function renameListPrompt(list = selectedListOption.value) {
+    const listId = Number(list?.list_id ?? list?.owner_id ?? 0);
+    if (!Number.isFinite(listId) || listId <= 0) {
+        return;
+    }
+
+    const nextName = window.prompt('Р СњР С•Р Р†Р С•Р Вµ Р Р…Р В°Р В·Р Р†Р В°Р Р…Р С‘Р Вµ РЎРѓР С—Р С‘РЎРѓР С”Р В°', String(list?.name ?? list?.label ?? '')) ?? null;
+    if (nextName === null) {
+        return;
+    }
+
+    await finalizeQueuedStateAction(
+        queueRenameList(listId, nextName),
+        {
+            pendingMessage: 'Р СџР ВµРЎР‚Р ВµР С‘Р СР ВµР Р…Р С•Р Р†Р В°Р Р…Р С‘Р Вµ РЎРѓР С—Р С‘РЎРѓР С”Р В° Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р…Р С• Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
+            successMessage: 'Р РЋР С—Р С‘РЎРѓР С•Р С” Р С—Р ВµРЎР‚Р ВµР С‘Р СР ВµР Р…Р С•Р Р†Р В°Р Р….',
+            syncSelection: true,
+        },
+    );
+}
+
+async function deleteListEntry(list = selectedListOption.value) {
+    const listId = Number(list?.list_id ?? list?.owner_id ?? 0);
+    if (!Number.isFinite(listId) || listId <= 0) {
+        return;
+    }
+
+    if (!window.confirm(`Р Р€Р Т‘Р В°Р В»Р С‘РЎвЂљРЎРЉ РЎРѓР С—Р С‘РЎРѓР С•Р С” "${String(list?.name ?? list?.label ?? 'Р вЂР ВµР В· Р Р…Р В°Р В·Р Р†Р В°Р Р…Р С‘РЎРЏ')}"?`)) {
+        return;
+    }
+
+    await finalizeQueuedStateAction(
+        queueDeleteList(listId),
+        {
+            pendingMessage: 'Р Р€Р Т‘Р В°Р В»Р ВµР Р…Р С‘Р Вµ РЎРѓР С—Р С‘РЎРѓР С”Р В° Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р…Р С• Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
+            successMessage: 'Р РЋР С—Р С‘РЎРѓР С•Р С” РЎС“Р Т‘Р В°Р В»РЎвЂР Р….',
+            syncSelection: true,
+        },
+    );
+}
+
+async function saveCurrentListAsTemplate() {
+    const listId = Number(selectedListId.value ?? 0);
+    if (!Number.isFinite(listId) || listId <= 0) {
+        return;
+    }
+
+    const nextName = window.prompt('Р СњР В°Р В·Р Р†Р В°Р Р…Р С‘Р Вµ РЎв‚¬Р В°Р В±Р В»Р С•Р Р…Р В°', String(selectedListLabel.value ?? '')) ?? null;
+    if (nextName === null) {
+        return;
+    }
+
+    await finalizeQueuedStateAction(
+        queueSaveTemplate(listId, nextName),
+        {
+            pendingMessage: 'Р РЃР В°Р В±Р В»Р С•Р Р… Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р… Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
+            successMessage: 'Р РЃР В°Р В±Р В»Р С•Р Р… РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎвЂР Р….',
+            syncSelection: false,
+        },
+    );
+}
+
+async function createListFromTemplate(template) {
+    const templateId = Number(template?.id ?? 0);
+    if (!Number.isFinite(templateId) || templateId <= 0) {
+        return;
+    }
+
+    const nextName = window.prompt('Р СњР В°Р В·Р Р†Р В°Р Р…Р С‘Р Вµ Р Р…Р С•Р Р†Р С•Р С–Р С• РЎРѓР С—Р С‘РЎРѓР С”Р В°', String(template?.name ?? '')) ?? null;
+    if (nextName === null) {
+        return;
+    }
+
+    await finalizeQueuedStateAction(
+        queueCreateFromTemplate(templateId, nextName),
+        {
+            pendingMessage: 'Р СњР С•Р Р†РЎвЂ№Р в„– РЎРѓР С—Р С‘РЎРѓР С•Р С” Р С‘Р В· РЎв‚¬Р В°Р В±Р В»Р С•Р Р…Р В° Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р… Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
+            successMessage: 'Р РЋР С—Р С‘РЎРѓР С•Р С” Р С‘Р В· РЎв‚¬Р В°Р В±Р В»Р С•Р Р…Р В° РЎРѓР С•Р В·Р Т‘Р В°Р Р….',
+            syncSelection: true,
+        },
+    );
+}
+
+async function deleteTemplateEntry(template) {
+    const templateId = Number(template?.id ?? 0);
+    if (!Number.isFinite(templateId) || templateId <= 0) {
+        return;
+    }
+
+    if (!window.confirm(`Р Р€Р Т‘Р В°Р В»Р С‘РЎвЂљРЎРЉ РЎв‚¬Р В°Р В±Р В»Р С•Р Р… "${String(template?.name ?? 'Р вЂР ВµР В· Р Р…Р В°Р В·Р Р†Р В°Р Р…Р С‘РЎРЏ')}"?`)) {
+        return;
+    }
+
+    await finalizeQueuedStateAction(
+        queueDeleteTemplate(templateId),
+        {
+            pendingMessage: 'Р Р€Р Т‘Р В°Р В»Р ВµР Р…Р С‘Р Вµ РЎв‚¬Р В°Р В±Р В»Р С•Р Р…Р В° Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р…Р С• Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
+            successMessage: 'Р РЃР В°Р В±Р В»Р С•Р Р… РЎС“Р Т‘Р В°Р В»РЎвЂР Р….',
+            syncSelection: false,
+        },
+    );
+}
+
+async function removeMemberFromList(list, member) {
+    const listId = Number(list?.list_id ?? list?.owner_id ?? 0);
+    const userId = Number(member?.id ?? 0);
+    if (!Number.isFinite(listId) || listId <= 0 || !Number.isFinite(userId) || userId <= 0) {
+        return;
+    }
+
+    if (!window.confirm(`Р Р€Р В±РЎР‚Р В°РЎвЂљРЎРЉ ${String(member?.name ?? 'РЎС“РЎвЂЎР В°РЎРѓРЎвЂљР Р…Р С‘Р С”Р В°')} Р С‘Р В· РЎРѓР С—Р С‘РЎРѓР С”Р В°?`)) {
+        return;
+    }
+
+    await finalizeQueuedStateAction(
+        queueRemoveMember(listId, userId),
+        {
+            pendingMessage: 'Р ВР В·Р СР ВµР Р…Р ВµР Р…Р С‘Р Вµ РЎС“РЎвЂЎР В°РЎРѓРЎвЂљР Р…Р С‘Р С”Р С•Р Р† Р Т‘Р С•Р В±Р В°Р Р†Р В»Р ВµР Р…Р С• Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘РЎРЉ РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘Р С‘.',
+            successMessage: 'Р Р€РЎвЂЎР В°РЎРѓРЎвЂљР Р…Р С‘Р С” РЎС“Р Т‘Р В°Р В»РЎвЂР Р… Р С‘Р В· РЎРѓР С—Р С‘РЎРѓР С”Р В°.',
+            syncSelection: true,
+        },
+    );
 }
 
 async function acceptInvitation(invitationId) {
@@ -6541,7 +6940,7 @@ async function acceptInvitation(invitationId) {
             response: {
                 status: 422,
                 data: {
-                    message: 'Не удалось принять приглашение. Попробуйте ещё раз.',
+                    message: 'Р СњР Вµ РЎС“Р Т‘Р В°Р В»Р С•РЎРѓРЎРЉ Р С—РЎР‚Р С‘Р Р…РЎРЏРЎвЂљРЎРЉ Р С—РЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘Р Вµ. Р СџР С•Р С—РЎР‚Р С•Р В±РЎС“Р в„–РЎвЂљР Вµ Р ВµРЎвЂ°РЎвЂ РЎР‚Р В°Р В·.',
                 },
             },
         });
@@ -6581,7 +6980,7 @@ async function declineInvitation(invitationId) {
             response: {
                 status: 422,
                 data: {
-                    message: 'Не удалось обновить приглашение. Попробуйте ещё раз.',
+                    message: 'Р СњР Вµ РЎС“Р Т‘Р В°Р В»Р С•РЎРѓРЎРЉ Р С•Р В±Р Р…Р С•Р Р†Р С‘РЎвЂљРЎРЉ Р С—РЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘Р Вµ. Р СџР С•Р С—РЎР‚Р С•Р В±РЎС“Р в„–РЎвЂљР Вµ Р ВµРЎвЂ°РЎвЂ РЎР‚Р В°Р В·.',
                 },
             },
         });
@@ -6615,7 +7014,7 @@ async function setMine(linkId) {
     await syncOfflineQueue();
     if (browserOffline.value || (queuedOpId && isQueueOperationPending(queuedOpId))) {
         markActionButtonSuccess(setMineSuccessKey(linkId), 2200);
-        showStatus('Список в очереди на синхронизацию.');
+        showStatus('Р РЋР С—Р С‘РЎРѓР С•Р С” Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘Р С‘ Р Р…Р В° РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘РЎР‹.');
         return;
     }
     markActionButtonSuccess(setMineSuccessKey(linkId), 2200);
@@ -6648,7 +7047,7 @@ async function breakLink(linkId) {
     const queuedOpId = queueBreakLink(linkId);
     await syncOfflineQueue();
     if (browserOffline.value || (queuedOpId && isQueueOperationPending(queuedOpId))) {
-        showStatus('Изменение в очереди на синхронизацию.');
+        showStatus('Р ВР В·Р СР ВµР Р…Р ВµР Р…Р С‘Р Вµ Р Р† Р С•РЎвЂЎР ВµРЎР‚Р ВµР Т‘Р С‘ Р Р…Р В° РЎРѓР С‘Р Р…РЎвЂ¦РЎР‚Р С•Р Р…Р С‘Р В·Р В°РЎвЂ Р С‘РЎР‹.');
         return;
     }
     showStatus('\u0421\u0432\u044f\u0437\u044c \u0441\u043f\u0438\u0441\u043a\u043e\u0432 \u0440\u0430\u0437\u043e\u0440\u0432\u0430\u043d\u0430.');
@@ -6836,6 +7235,7 @@ function mergeRealtimeItemsWithLocalPending(ownerId, type, incomingItems, linkId
                 ...localItem,
                 id: itemId,
                 owner_id: Number(matchedIncomingCreateItem.owner_id ?? ownerId),
+                list_id: normalizeLinkId(matchedIncomingCreateItem.list_id ?? resolvedLinkId),
                 list_link_id: normalizeLinkId(matchedIncomingCreateItem.list_link_id ?? resolvedLinkId),
                 local_id: String(localItem?.local_id ?? '').trim()
                     || String(matchedIncomingCreateItem?.local_id ?? '').trim()
@@ -6852,6 +7252,7 @@ function mergeRealtimeItemsWithLocalPending(ownerId, type, incomingItems, linkId
             mergedById.set(itemId, {
                 ...localItem,
                 owner_id: Number(ownerId),
+                list_id: resolvedLinkId,
                 list_link_id: resolvedLinkId,
             });
             continue;
@@ -6861,6 +7262,7 @@ function mergeRealtimeItemsWithLocalPending(ownerId, type, incomingItems, linkId
             ...incomingItem,
             ...localItem,
             owner_id: Number(incomingItem.owner_id ?? ownerId),
+            list_id: normalizeLinkId(incomingItem.list_id ?? resolvedLinkId),
             list_link_id: normalizeLinkId(incomingItem.list_link_id ?? resolvedLinkId),
             local_id: String(localItem?.local_id ?? '').trim()
                 || String(incomingItem?.local_id ?? '').trim(),
@@ -6912,8 +7314,9 @@ function subscribeListChannel(ownerId) {
         }
 
         const type = resolveRealtimeListType(eventPayload);
-        const eventOwnerId = Number(eventPayload?.owner_id ?? selectedOwnerId.value);
-        const eventLinkId = resolveLinkIdForOwner(eventOwnerId, eventPayload?.list_link_id);
+        const eventListId = Number(eventPayload?.list_id ?? eventPayload?.list_link_id ?? eventPayload?.owner_id ?? selectedListId.value);
+        const eventOwnerId = eventListId;
+        const eventLinkId = normalizeLinkId(eventListId);
         if (!shouldApplyRealtimeListSnapshot(eventOwnerId, type, eventLinkId, eventPayload)) {
             return;
         }
@@ -7128,7 +7531,7 @@ onBeforeUnmount(() => {
                 <span class="inline-flex items-center gap-2">
                     <WifiOff class="h-4 w-4 text-[#fcfcfa]" />
                     <span>
-                        offline: {{ offlineStatusText }}, изменения сохраняются локально
+                        offline: {{ offlineStatusText }}, Р С‘Р В·Р СР ВµР Р…Р ВµР Р…Р С‘РЎРЏ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…РЎРЏРЎР‹РЎвЂљРЎРѓРЎРЏ Р В»Р С•Р С”Р В°Р В»РЎРЉР Р…Р С•
                     </span>
                 </span>
                 <span v-if="queuedChangesCount > 0" class="shrink-0 rounded-lg border border-[#403e41] px-2 py-0.5 text-[11px]">
@@ -7182,18 +7585,56 @@ onBeforeUnmount(() => {
                                 "
                                 @click="selectedOwnerId = option.owner_id"
                             >
-                                <span class="flex items-center justify-between gap-2">
-                                    <span class="truncate">{{ option.label }}</span>
-                                    <Check
-                                        v-if="Number(option.owner_id) === Number(selectedOwnerId)"
-                                        class="h-4 w-4 shrink-0"
-                                    />
+                                <span class="flex items-start justify-between gap-2">
+                                    <span class="min-w-0">
+                                        <span class="block truncate">{{ option.label }}</span>
+                                        <span class="mt-0.5 block text-[11px]" :class="Number(option.owner_id) === Number(selectedOwnerId) ? 'text-[#d7d2d5]' : 'text-[#8c878a]'">
+                                            {{ option.member_count }} РЎС“РЎвЂЎР В°РЎРѓРЎвЂљР Р…Р С‘Р С”(Р В°) Р’В· {{ option.total_pending_count }} Р Р…Р ВµР В·Р В°Р Р†Р ВµРЎР‚РЎв‚¬РЎвЂР Р…Р Р…РЎвЂ№РЎвЂ¦
+                                        </span>
+                                    </span>
+                                    <span class="inline-flex items-center gap-1">
+                                        <span
+                                            v-if="option.total_pending_count > 0"
+                                            class="inline-flex min-w-5 items-center justify-center rounded-full border border-[#5b7fff]/35 bg-[#5b7fff]/12 px-1.5 py-0.5 text-[10px] font-semibold text-[#d8e7ff]"
+                                        >
+                                            {{ option.total_pending_count }}
+                                        </span>
+                                        <Check
+                                            v-if="Number(option.owner_id) === Number(selectedOwnerId)"
+                                            class="h-4 w-4 shrink-0"
+                                        />
+                                    </span>
                                 </span>
                             </button>
                         </div>
                     </Transition>
                 </div>
             </section>
+
+            <div
+                v-if="(activeTab === 'products' || activeTab === 'todos') && hasCrossListReminders"
+                class="mb-3 rounded-2xl border border-[#5b7fff]/25 bg-[#5b7fff]/10 p-3"
+            >
+                <div class="mb-2 flex items-center justify-between gap-2">
+                    <div>
+                        <p class="text-[10px] uppercase tracking-[0.16em] text-[#b7c8ff]">Other Lists</p>
+                        <p class="mt-1 text-sm font-semibold text-[#fcfcfa]">Р вЂўРЎРѓРЎвЂљРЎРЉ Р Р…Р ВµР В·Р В°Р Р†Р ВµРЎР‚РЎв‚¬РЎвЂР Р…Р Р…Р С•Р Вµ Р Р† Р Т‘РЎР‚РЎС“Р С–Р С‘РЎвЂ¦ РЎРѓР С—Р С‘РЎРѓР С”Р В°РЎвЂ¦</p>
+                    </div>
+                    <span class="text-xs text-[#d7d2d5]">{{ crossListReminders.length }}</span>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button
+                        v-for="reminder in crossListReminders.slice(0, 4)"
+                        :key="`reminder-${reminder.list_id}`"
+                        type="button"
+                        class="inline-flex items-center gap-2 rounded-xl border border-[#5b7fff]/25 bg-[#221f22] px-3 py-2 text-left text-xs text-[#fcfcfa] transition hover:border-[#5b7fff]/45"
+                        @click="selectedOwnerId = reminder.owner_id"
+                    >
+                        <span class="truncate">{{ reminder.label }}</span>
+                        <span class="rounded-full bg-[#5b7fff]/15 px-2 py-0.5 text-[11px] text-[#d8e7ff]">{{ reminder.total_pending_count }}</span>
+                    </button>
+                </div>
+            </div>
 
             <Transition name="tab-panel" mode="out-in">
                 <div :key="`dashboard-tab-${activeTab}`" class="flex-1 flex flex-col">
@@ -7203,7 +7644,7 @@ onBeforeUnmount(() => {
                         <input
                             v-model="newProductText"
                             type="text"
-                            placeholder="Добавить продукт (например: молоко 2 л)..."
+                            placeholder="Р вЂќР С•Р В±Р В°Р Р†Р С‘РЎвЂљРЎРЉ Р С—РЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљ (Р Р…Р В°Р С—РЎР‚Р С‘Р СР ВµРЎР‚: Р СР С•Р В»Р С•Р С”Р С• 2 Р В»)..."
                             class="w-full rounded-2xl border border-[#403e41] bg-[#221f22] px-4 py-3 text-sm text-[#fcfcfa] placeholder:text-[#7f7b7e] focus:border-[#fcfcfa]/45 focus:outline-none"
                             @keyup.enter="addProduct"
                         >
@@ -7299,7 +7740,7 @@ onBeforeUnmount(() => {
                                     <button
                                         type="button"
                                         class="drag-handle absolute right-[-4px] top-0 inline-flex h-5 w-5 items-center justify-center rounded-md text-[11px] font-semibold leading-none tracking-[-0.08em] text-[#7f7b7e] transition hover:text-[#fcfcfa]"
-                                        aria-label="Перетащить карточку"
+                                        aria-label="Р СџР ВµРЎР‚Р ВµРЎвЂљР В°РЎвЂ°Р С‘РЎвЂљРЎРЉ Р С”Р В°РЎР‚РЎвЂљР С•РЎвЂЎР С”РЎС“"
                                     >
                                         :::
                                     </button>
@@ -7341,7 +7782,7 @@ onBeforeUnmount(() => {
                         <input
                             v-model="newTodoText"
                             type="text"
-                            placeholder="Добавить дело..."
+                            placeholder="Р вЂќР С•Р В±Р В°Р Р†Р С‘РЎвЂљРЎРЉ Р Т‘Р ВµР В»Р С•..."
                             class="w-full rounded-2xl border border-[#403e41] bg-[#221f22] px-4 py-3 text-sm text-[#fcfcfa] placeholder:text-[#7f7b7e] focus:border-[#fcfcfa]/45 focus:outline-none"
                             @keyup.enter="addTodo"
                         >
@@ -7355,7 +7796,7 @@ onBeforeUnmount(() => {
                         <label
                             class="relative inline-flex cursor-pointer items-center rounded-2xl border border-[#403e41] bg-[#221f22] px-3 text-[#fcfcfa] transition hover:border-[#fcfcfa]"
                             :class="{ 'border-[#fcfcfa]': !!newTodoDueAt }"
-                            aria-label="Выбрать дедлайн"
+                            aria-label="Р вЂ™РЎвЂ№Р В±РЎР‚Р В°РЎвЂљРЎРЉ Р Т‘Р ВµР Т‘Р В»Р В°Р в„–Р Р…"
                         >
                             <CalendarDays class="h-4 w-4 text-[#fcfcfa]" />
                             <input
@@ -7449,7 +7890,7 @@ onBeforeUnmount(() => {
                                     <button
                                         type="button"
                                         class="drag-handle absolute right-[-4px] top-0 inline-flex h-5 w-5 items-center justify-center rounded-md text-[11px] font-semibold leading-none tracking-[-0.08em] text-[#7f7b7e] transition hover:text-[#fcfcfa]"
-                                        aria-label="Перетащить карточку"
+                                        aria-label="Р СџР ВµРЎР‚Р ВµРЎвЂљР В°РЎвЂ°Р С‘РЎвЂљРЎРЉ Р С”Р В°РЎР‚РЎвЂљР С•РЎвЂЎР С”РЎС“"
                                     >
                                         :::
                                     </button>
@@ -7481,7 +7922,7 @@ onBeforeUnmount(() => {
                                                 type="button"
                                                 data-no-swipe
                                                 class="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-[#fcfcfa]/45 text-[#fcfcfa] transition hover:border-[#fcfcfa]"
-                                                aria-label="Изменить дедлайн"
+                                                aria-label="Р ВР В·Р СР ВµР Р…Р С‘РЎвЂљРЎРЉ Р Т‘Р ВµР Т‘Р В»Р В°Р в„–Р Р…"
                                                 @pointerdown.stop="markTodoControlInteraction"
                                                 @click.stop="openTodoItemDuePicker(item)"
                                             >
@@ -7520,7 +7961,7 @@ onBeforeUnmount(() => {
                                 {{ card.name }}
                             </p>
                             <p class="text-[10px] uppercase tracking-[0.14em] text-[#7f7b7e]">
-                                {{ card.is_self ? 'вы' : 'участник' }}
+                                {{ card.is_self ? 'Р Р†РЎвЂ№' : 'РЎС“РЎвЂЎР В°РЎРѓРЎвЂљР Р…Р С‘Р С”' }}
                             </p>
                             <p class="mt-0.5 text-[11px] text-[#9f9a9d]">
                                 {{ formatMoodUpdatedAgo(card.mood) }}
@@ -7571,7 +8012,7 @@ onBeforeUnmount(() => {
                     <div class="mt-2 flex items-center gap-2">
                         <template v-if="card.is_self">
                             <button
-                                v-for="emoji in MOOD_FIRE_EMOJIS"
+                                v-for="emoji in fireMoodEmojiOptions"
                                 :key="`mood-fire-emoji-${card.id}-${emoji}`"
                                 type="button"
                                 class="inline-flex h-9 w-9 items-center justify-center rounded-xl border text-lg transition"
@@ -7583,6 +8024,13 @@ onBeforeUnmount(() => {
                                 @click="setMoodFireEmoji(emoji)"
                             >
                                 {{ emoji }}
+                            </button>
+                            <button
+                                type="button"
+                                class="inline-flex min-w-16 items-center justify-center rounded-xl border border-[#403e41] bg-[#221f22] px-3 text-xs font-semibold text-[#d7d2d5] transition hover:border-[#fcfcfa]/35"
+                                @click="promptForCustomMoodEmoji('fire')"
+                            >
+                                Любой
                             </button>
                         </template>
                         <div
@@ -7611,7 +8059,7 @@ onBeforeUnmount(() => {
                     <div class="mt-2 flex items-center gap-2">
                         <template v-if="card.is_self">
                             <button
-                                v-for="emoji in MOOD_BATTERY_EMOJIS"
+                                v-for="emoji in batteryMoodEmojiOptions"
                                 :key="`mood-battery-emoji-${card.id}-${emoji}`"
                                 type="button"
                                 class="inline-flex h-9 w-9 items-center justify-center rounded-xl border text-lg transition"
@@ -7623,6 +8071,13 @@ onBeforeUnmount(() => {
                                 @click="setMoodBatteryEmoji(emoji)"
                             >
                                 {{ emoji }}
+                            </button>
+                            <button
+                                type="button"
+                                class="inline-flex min-w-16 items-center justify-center rounded-xl border border-[#403e41] bg-[#221f22] px-3 text-xs font-semibold text-[#d7d2d5] transition hover:border-[#fcfcfa]/35"
+                                @click="promptForCustomMoodEmoji('battery')"
+                            >
+                                Любой
                             </button>
                         </template>
                         <div
@@ -7663,7 +8118,7 @@ onBeforeUnmount(() => {
                                 <p class="text-[10px] uppercase tracking-[0.18em]" :class="isLightTheme ? 'text-[#7a8193]' : 'text-[#7f7b7e]'">PROFILE</p>
                                 <h2 class="mt-1 truncate text-lg font-semibold" :class="isLightTheme ? 'text-[#181b22]' : 'text-[#fcfcfa]'">{{ localUser.name }}</h2>
                                 <p class="mt-1 truncate text-xs" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">
-                                    @{{ localUser.tag || 'tag' }} · {{ localUser.email || 'email@example.com' }}
+                                    @{{ localUser.tag || 'tag' }} Р’В· {{ localUser.email || 'email@example.com' }}
                                 </p>
                             </div>
                         </div>
@@ -7688,7 +8143,7 @@ onBeforeUnmount(() => {
                             </div>
                             <div class="relative z-[1] min-w-0">
                                 <div class="min-w-0">
-                                    <p class="text-[10px] uppercase tracking-[0.18em]" :class="isLightTheme ? 'text-[#4f66d8]' : 'text-[#b7c8ff]'">Продуктивность</p>
+                                    <p class="text-[10px] uppercase tracking-[0.18em]" :class="isLightTheme ? 'text-[#4f66d8]' : 'text-[#b7c8ff]'">Р СџРЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљР С‘Р Р†Р Р…Р С•РЎРѓРЎвЂљРЎРЉ</p>
                                     <p class="mt-2 text-5xl font-black leading-none tracking-tight" :class="isLightTheme ? 'text-[#151922]' : 'text-[#fcfcfa]'">{{ productivityScore }}</p>
                                 </div>
                             </div>
@@ -7700,8 +8155,8 @@ onBeforeUnmount(() => {
                         >
                             <div class="mb-2 flex items-center justify-between gap-2">
                                 <div class="min-w-0">
-                                    <p class="truncate text-sm font-semibold" :class="isLightTheme ? 'text-[#1a1d24]' : 'text-[#fcfcfa]'">Люди и списки</p>
-                                    <p class="mt-0.5 text-xs" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">Единый центр поиска, приглашений и связей.</p>
+                                    <p class="truncate text-sm font-semibold" :class="isLightTheme ? 'text-[#1a1d24]' : 'text-[#fcfcfa]'">Р вЂєРЎР‹Р Т‘Р С‘ Р С‘ РЎРѓР С—Р С‘РЎРѓР С”Р С‘</p>
+                                    <p class="mt-0.5 text-xs" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">Р вЂўР Т‘Р С‘Р Р…РЎвЂ№Р в„– РЎвЂ Р ВµР Р…РЎвЂљРЎР‚ Р С—Р С•Р С‘РЎРѓР С”Р В°, Р С—РЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘Р в„– Р С‘ РЎРѓР Р†РЎРЏР В·Р ВµР в„–.</p>
                                 </div>
                                 <Share2 class="h-4 w-4 shrink-0" :class="isLightTheme ? 'text-[#5b7fff]' : 'text-[#d8e7ff]'" />
                             </div>
@@ -7716,8 +8171,8 @@ onBeforeUnmount(() => {
                                     "
                                     @click="openCollabHub('share')"
                                 >
-                                    <span class="truncate">Поделиться</span>
-                                    <span class="text-[11px]" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">Поиск</span>
+                                    <span class="truncate">Р СџР С•Р Т‘Р ВµР В»Р С‘РЎвЂљРЎРЉРЎРѓРЎРЏ</span>
+                                    <span class="text-[11px]" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">Р СџР С•Р С‘РЎРѓР С”</span>
                                 </button>
                                 <button
                                     type="button"
@@ -7729,7 +8184,7 @@ onBeforeUnmount(() => {
                                     "
                                     @click="openCollabHub('invitations')"
                                 >
-                                    <span class="truncate">Приглашения</span>
+                                    <span class="truncate">Р СџРЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘РЎРЏ</span>
                                     <span
                                         class="inline-flex min-w-6 items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-semibold"
                                         :class="
@@ -7751,8 +8206,8 @@ onBeforeUnmount(() => {
                                     "
                                     @click="openCollabHub('lists')"
                                 >
-                                    <span class="truncate">Списки</span>
-                                    <span class="text-[11px]" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">{{ links.length }}</span>
+                                    <span class="truncate">Р РЋР С—Р С‘РЎРѓР С”Р С‘</span>
+                                    <span class="text-[11px]" :class="isLightTheme ? 'text-[#6a7386]' : 'text-[#9f9a9d]'">{{ listOptions.length }}</span>
                                 </button>
                             </div>
                         </div>
@@ -7780,7 +8235,7 @@ onBeforeUnmount(() => {
                     @click="shareModalOpen = true"
                 >
                     <Share2 class="h-4 w-4" />
-                    Поделиться списками
+                    Р СџР С•Р Т‘Р ВµР В»Р С‘РЎвЂљРЎРЉРЎРѓРЎРЏ РЎРѓР С—Р С‘РЎРѓР С”Р В°Р СР С‘
                 </button>
 
                 <button
@@ -7791,7 +8246,7 @@ onBeforeUnmount(() => {
                         inviteModalTab = 'invitations';
                     "
                 >
-                    Мои приглашения ({{ pendingInvitationsCount }})
+                    Р СљР С•Р С‘ Р С—РЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘РЎРЏ ({{ pendingInvitationsCount }})
                 </button>
 
                 </div>
@@ -7822,7 +8277,7 @@ onBeforeUnmount(() => {
 
                 <div class="rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                     <h3 class="mb-3 text-sm font-semibold text-[#fcfcfa]">
-                        Тема интерфейса
+                        Р СћР ВµР СР В° Р С‘Р Р…РЎвЂљР ВµРЎР‚РЎвЂћР ВµР в„–РЎРѓР В°
                     </h3>
                     <div class="grid grid-cols-3 gap-2">
                         <button
@@ -7835,7 +8290,7 @@ onBeforeUnmount(() => {
                             "
                             @click="setThemeMode('system')"
                         >
-                            Система
+                            Р РЋР С‘РЎРѓРЎвЂљР ВµР СР В°
                         </button>
                         <button
                             type="button"
@@ -7847,7 +8302,7 @@ onBeforeUnmount(() => {
                             "
                             @click="setThemeMode('light')"
                         >
-                            Светлая
+                            Р РЋР Р†Р ВµРЎвЂљР В»Р В°РЎРЏ
                         </button>
                         <button
                             type="button"
@@ -7859,17 +8314,17 @@ onBeforeUnmount(() => {
                             "
                             @click="setThemeMode('dark')"
                         >
-                            Тёмная
+                            Р СћРЎвЂР СР Р…Р В°РЎРЏ
                         </button>
                     </div>
                     <p class="mt-2 text-xs text-[#9f9a9d]">
-                        Активно: {{ resolvedThemeLabel }}
+                        Р С’Р С”РЎвЂљР С‘Р Р†Р Р…Р С•: {{ resolvedThemeLabel }}
                     </p>
                 </div>
 
                 <div class="rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                     <h3 class="mb-3 text-sm font-semibold text-[#fcfcfa]">
-                        Настройки аккаунта
+                        Р СњР В°РЎРѓРЎвЂљРЎР‚Р С•Р в„–Р С”Р С‘ Р В°Р С”Р С”Р В°РЎС“Р Р…РЎвЂљР В°
                     </h3>
                     <div class="space-y-2">
                         <input
@@ -7896,33 +8351,33 @@ onBeforeUnmount(() => {
                             :disabled="profileForm.loading"
                             @click="saveProfile"
                         >
-                            Сохранить профиль
+                            Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…Р С‘РЎвЂљРЎРЉ Р С—РЎР‚Р С•РЎвЂћР С‘Р В»РЎРЉ
                         </button>
                     </div>
                 </div>
 
                 <div class="rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                     <h3 class="mb-3 text-sm font-semibold text-[#fcfcfa]">
-                        Смена пароля
+                        Р РЋР СР ВµР Р…Р В° Р С—Р В°РЎР‚Р С•Р В»РЎРЏ
                     </h3>
                     <div class="space-y-2">
                         <input
                             v-model="passwordForm.current_password"
                             type="password"
                             class="w-full rounded-xl border border-[#403e41] bg-[#2d2a2c] px-3 py-2 text-sm text-[#fcfcfa] focus:border-[#fcfcfa]/45 focus:outline-none"
-                            placeholder="Текущий пароль"
+                            placeholder="Р СћР ВµР С”РЎС“РЎвЂ°Р С‘Р в„– Р С—Р В°РЎР‚Р С•Р В»РЎРЉ"
                         >
                         <input
                             v-model="passwordForm.password"
                             type="password"
                             class="w-full rounded-xl border border-[#403e41] bg-[#2d2a2c] px-3 py-2 text-sm text-[#fcfcfa] focus:border-[#fcfcfa]/45 focus:outline-none"
-                            placeholder="Новый пароль"
+                            placeholder="Р СњР С•Р Р†РЎвЂ№Р в„– Р С—Р В°РЎР‚Р С•Р В»РЎРЉ"
                         >
                         <input
                             v-model="passwordForm.password_confirmation"
                             type="password"
                             class="w-full rounded-xl border border-[#403e41] bg-[#2d2a2c] px-3 py-2 text-sm text-[#fcfcfa] focus:border-[#fcfcfa]/45 focus:outline-none"
-                            placeholder="Повторите пароль"
+                            placeholder="Р СџР С•Р Р†РЎвЂљР С•РЎР‚Р С‘РЎвЂљР Вµ Р С—Р В°РЎР‚Р С•Р В»РЎРЉ"
                         >
                         <button
                             type="button"
@@ -7930,7 +8385,7 @@ onBeforeUnmount(() => {
                             :disabled="passwordForm.loading"
                             @click="savePassword"
                         >
-                            Сохранить пароль
+                            Р РЋР С•РЎвЂ¦РЎР‚Р В°Р Р…Р С‘РЎвЂљРЎРЉ Р С—Р В°РЎР‚Р С•Р В»РЎРЉ
                         </button>
                     </div>
                 </div>
@@ -7945,11 +8400,11 @@ onBeforeUnmount(() => {
 
                 <div class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-2 text-xs text-[#9f9a9d]">
                     <div class="flex items-center justify-between gap-3">
-                        <span>Версия приложения</span>
+                        <span>Р вЂ™Р ВµРЎР‚РЎРѓР С‘РЎРЏ Р С—РЎР‚Р С‘Р В»Р С•Р В¶Р ВµР Р…Р С‘РЎРЏ</span>
                         <span class="font-mono text-[#d7d2d5]">{{ appVersion }}</span>
                     </div>
                     <div class="mt-1 flex items-center justify-between gap-3">
-                        <span>Версия билда</span>
+                        <span>Р вЂ™Р ВµРЎР‚РЎРѓР С‘РЎРЏ Р В±Р С‘Р В»Р Т‘Р В°</span>
                         <span class="font-mono text-[#d7d2d5]">{{ buildVersion }}</span>
                     </div>
                 </div>
@@ -8143,7 +8598,7 @@ onBeforeUnmount(() => {
                         v-if="canShowRemoveCompletedButton"
                         type="button"
                         class="rounded-xl border border-[#ee5c81]/55 bg-[#ee5c81]/14 p-2 text-[#ee5c81] hover:border-[#ee5c81]"
-                        aria-label="Удалить выполненные"
+                        aria-label="Р Р€Р Т‘Р В°Р В»Р С‘РЎвЂљРЎРЉ Р Р†РЎвЂ№Р С—Р С•Р В»Р Р…Р ВµР Р…Р Р…РЎвЂ№Р Вµ"
                         @click="removeCompletedAfterSwipe($event)"
                     >
                         <Trash2 class="h-4 w-4" />
@@ -8151,7 +8606,7 @@ onBeforeUnmount(() => {
                     <button
                         type="button"
                         class="rounded-xl border border-[#403e41] p-2 text-[#fcfcfa] hover:border-[#fcfcfa]/45"
-                        aria-label="Отменить"
+                        aria-label="Р С›РЎвЂљР СР ВµР Р…Р С‘РЎвЂљРЎРЉ"
                         @click="undoSwipeAction"
                     >
                         <RotateCcw class="h-4 w-4" />
@@ -8214,7 +8669,7 @@ onBeforeUnmount(() => {
                 @click="activeTab = 'products'"
             >
                 <ShoppingCart class="bottom-menu-icon mb-1 h-4 w-4" />
-                Продукты
+                Р СџРЎР‚Р С•Р Т‘РЎС“Р С”РЎвЂљРЎвЂ№
             </button>
             <button
                 type="button"
@@ -8223,7 +8678,7 @@ onBeforeUnmount(() => {
                 @click="activeTab = 'todos'"
             >
                 <Check class="bottom-menu-icon mb-1 h-4 w-4" />
-                Дела
+                Р вЂќР ВµР В»Р В°
             </button>
             <button
                 type="button"
@@ -8232,7 +8687,7 @@ onBeforeUnmount(() => {
                 @click="activeTab = 'mood'"
             >
                 <Smile class="bottom-menu-icon mb-1 h-4 w-4" />
-                Настроение
+                Р СњР В°РЎРѓРЎвЂљРЎР‚Р С•Р ВµР Р…Р С‘Р Вµ
             </button>
             <button
                 type="button"
@@ -8242,7 +8697,7 @@ onBeforeUnmount(() => {
                 @click="activeTab = 'profile'"
             >
                 <UserRound class="bottom-menu-icon mb-1 h-4 w-4" />
-                Профиль
+                Р СџРЎР‚Р С•РЎвЂћР С‘Р В»РЎРЉ
             </button>
         </nav>
 
@@ -8260,7 +8715,7 @@ onBeforeUnmount(() => {
                     <button
                         type="button"
                         class="absolute right-3 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-black/35 text-white transition hover:bg-black/55"
-                        aria-label="Закрыть рекламу"
+                        aria-label="Р вЂ”Р В°Р С”РЎР‚РЎвЂ№РЎвЂљРЎРЉ РЎР‚Р ВµР С”Р В»Р В°Р СРЎС“"
                         data-testid="ads-modal-close"
                         @click="closeAdModal"
                     >
@@ -8269,7 +8724,7 @@ onBeforeUnmount(() => {
                     <img
                         v-if="activeAdBannerPath"
                         :src="activeAdBannerPath"
-                        alt="Рекламный баннер"
+                        alt="Р В Р ВµР С”Р В»Р В°Р СР Р…РЎвЂ№Р в„– Р В±Р В°Р Р…Р Р…Р ВµРЎР‚"
                         class="h-full w-full object-fill"
                     >
                 </div>
@@ -8281,7 +8736,7 @@ onBeforeUnmount(() => {
                 <div class="flex h-full flex-col rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                 <div class="mb-3 flex items-center justify-between">
                     <h2 class="text-base font-semibold">
-                        Поделиться списками
+                        Р СџР С•Р Т‘Р ВµР В»Р С‘РЎвЂљРЎРЉРЎРѓРЎРЏ РЎРѓР С—Р С‘РЎРѓР С”Р В°Р СР С‘
                     </h2>
                     <button
                         type="button"
@@ -8296,7 +8751,7 @@ onBeforeUnmount(() => {
                     <input
                         v-model="searchQuery"
                         type="text"
-                        placeholder="Введите тег..."
+                        placeholder="Р вЂ™Р Р†Р ВµР Т‘Р С‘РЎвЂљР Вµ РЎвЂљР ВµР С–..."
                         class="w-full rounded-xl border border-[#403e41] bg-[#221f22] px-3 py-2 text-sm text-[#fcfcfa] focus:border-[#fcfcfa]/45 focus:outline-none"
                         @keyup.enter="findUsers"
                     >
@@ -8307,7 +8762,7 @@ onBeforeUnmount(() => {
                         @click="findUsers"
                     >
                         <Search class="h-4 w-4" />
-                        Найти
+                        Р СњР В°Р в„–РЎвЂљР С‘
                     </button>
                 </div>
 
@@ -8338,8 +8793,8 @@ onBeforeUnmount(() => {
                         >
                             {{
                                 isInviteSentConfirmed(result.id)
-                                    ? 'Отправлено'
-                                    : (isSharingActionLocked(inviteSendActionLockKey(result.id)) ? '...' : 'Пригласить')
+                                    ? 'Р С›РЎвЂљР С—РЎР‚Р В°Р Р†Р В»Р ВµР Р…Р С•'
+                                    : (isSharingActionLocked(inviteSendActionLockKey(result.id)) ? '...' : 'Р СџРЎР‚Р С‘Р С–Р В»Р В°РЎРѓР С‘РЎвЂљРЎРЉ')
                             }}
                         </button>
                     </div>
@@ -8353,7 +8808,7 @@ onBeforeUnmount(() => {
             <div class="flex h-full flex-col rounded-3xl border border-[#403e41] bg-[#2d2a2c] p-4">
                 <div class="mb-3 flex items-center justify-between">
                     <h2 class="text-base font-semibold">
-                        Люди и списки
+                        Р вЂєРЎР‹Р Т‘Р С‘ Р С‘ РЎРѓР С—Р С‘РЎРѓР С”Р С‘
                     </h2>
                     <button
                         type="button"
@@ -8375,7 +8830,7 @@ onBeforeUnmount(() => {
                         "
                         @click="inviteModalTab = 'share'"
                     >
-                        Поиск
+                        Р СџР С•Р С‘РЎРѓР С”
                     </button>
                     <button
                         type="button"
@@ -8387,7 +8842,7 @@ onBeforeUnmount(() => {
                         "
                         @click="inviteModalTab = 'invitations'"
                     >
-                        Приглашения
+                        Р СџРЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘РЎРЏ
                     </button>
                     <button
                         type="button"
@@ -8406,7 +8861,7 @@ onBeforeUnmount(() => {
                 <div v-if="inviteModalTab === 'share'" class="flex-1 overflow-y-auto">
                     <div class="mb-3 rounded-2xl border border-[#403e41] bg-[#221f22] p-3">
                         <p class="text-xs text-[#9f9a9d]">
-                            Найдите пользователя по тегу и отправьте приглашение на общий список.
+                            Р СњР В°Р в„–Р Т‘Р С‘РЎвЂљР Вµ Р С—Р С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЏ Р С—Р С• РЎвЂљР ВµР С–РЎС“ Р С‘ Р С•РЎвЂљР С—РЎР‚Р В°Р Р†РЎРЉРЎвЂљР Вµ Р С—РЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘Р Вµ Р Р…Р В° Р С•Р В±РЎвЂ°Р С‘Р в„– РЎРѓР С—Р С‘РЎРѓР С•Р С”.
                         </p>
                     </div>
 
@@ -8414,7 +8869,7 @@ onBeforeUnmount(() => {
                         <input
                             v-model="searchQuery"
                             type="text"
-                            placeholder="Введите тег..."
+                            placeholder="Р вЂ™Р Р†Р ВµР Т‘Р С‘РЎвЂљР Вµ РЎвЂљР ВµР С–..."
                             class="w-full rounded-xl border border-[#403e41] bg-[#221f22] px-3 py-2 text-sm text-[#fcfcfa] focus:border-[#fcfcfa]/45 focus:outline-none"
                             @keyup.enter="findUsers"
                         >
@@ -8425,7 +8880,7 @@ onBeforeUnmount(() => {
                             @click="findUsers"
                         >
                             <Search class="h-4 w-4" />
-                            Найти
+                            Р СњР В°Р в„–РЎвЂљР С‘
                         </button>
                     </div>
 
@@ -8456,13 +8911,13 @@ onBeforeUnmount(() => {
                             >
                                 {{
                                     isInviteSentConfirmed(result.id)
-                                        ? 'Отправлено'
-                                        : (isSharingActionLocked(inviteSendActionLockKey(result.id)) ? '...' : 'Пригласить')
+                                        ? 'Р С›РЎвЂљР С—РЎР‚Р В°Р Р†Р В»Р ВµР Р…Р С•'
+                                        : (isSharingActionLocked(inviteSendActionLockKey(result.id)) ? '...' : 'Р СџРЎР‚Р С‘Р С–Р В»Р В°РЎРѓР С‘РЎвЂљРЎРЉ')
                                 }}
                             </button>
                         </div>
                         <p v-if="!searchBusy && searchResults.length === 0 && searchQuery.trim().length >= 2" class="px-1 text-xs text-[#9f9a9d]">
-                            Ничего не найдено.
+                            Р СњР С‘РЎвЂЎР ВµР С–Р С• Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р…Р С•.
                         </p>
                     </div>
                 </div>
@@ -8482,26 +8937,26 @@ onBeforeUnmount(() => {
                                 class="rounded-xl bg-[#a5d774]/20 px-3 py-1.5 text-xs font-semibold text-[#a5d774]"
                                 @click="acceptInvitation(invitation.id)"
                             >
-                                Принять
+                                Р СџРЎР‚Р С‘Р Р…РЎРЏРЎвЂљРЎРЉ
                             </button>
                             <button
                                 type="button"
                                 class="rounded-xl bg-[#ee5c81]/20 px-3 py-1.5 text-xs font-semibold text-[#ee5c81]"
                                 @click="declineInvitation(invitation.id)"
                             >
-                                Отменить
+                                Р С›РЎвЂљР СР ВµР Р…Р С‘РЎвЂљРЎРЉ
                             </button>
                         </div>
                     </div>
 
                     <div class="mt-3 rounded-2xl border border-[#403e41] bg-[#221f22] p-3">
                         <div class="mb-2 flex items-center justify-between gap-2">
-                            <p class="text-xs font-semibold uppercase tracking-[0.14em] text-[#9f9a9d]">Отправленные (ожидают)</p>
+                            <p class="text-xs font-semibold uppercase tracking-[0.14em] text-[#9f9a9d]">Р С›РЎвЂљР С—РЎР‚Р В°Р Р†Р В»Р ВµР Р…Р Р…РЎвЂ№Р Вµ (Р С•Р В¶Р С‘Р Т‘Р В°РЎР‹РЎвЂљ)</p>
                             <span class="text-xs text-[#9f9a9d]">{{ outgoingInvitations.length }}</span>
                         </div>
 
                         <div v-if="outgoingInvitations.length === 0" class="text-xs text-[#9f9a9d]">
-                            Нет исходящих приглашений в ожидании.
+                            Р СњР ВµРЎвЂљ Р С‘РЎРѓРЎвЂ¦Р С•Р Т‘РЎРЏРЎвЂ°Р С‘РЎвЂ¦ Р С—РЎР‚Р С‘Р С–Р В»Р В°РЎв‚¬Р ВµР Р…Р С‘Р в„– Р Р† Р С•Р В¶Р С‘Р Т‘Р В°Р Р…Р С‘Р С‘.
                         </div>
 
                         <div v-else class="space-y-2">
@@ -8511,7 +8966,7 @@ onBeforeUnmount(() => {
                                 class="rounded-2xl border border-[#403e41] bg-[#2d2a2c] px-3 py-3"
                             >
                                 <div class="mb-1 text-sm font-medium text-[#fcfcfa]">
-                                    {{ invitation.invitee?.name || 'Пользователь' }}
+                                    {{ invitation.invitee?.name || 'Р СџР С•Р В»РЎРЉР В·Р С•Р Р†Р В°РЎвЂљР ВµР В»РЎРЉ' }}
                                 </div>
                                 <div class="mb-2 text-xs text-[#9f9a9d]">
                                     @{{ invitation.invitee?.tag || 'tag' }}
@@ -8521,50 +8976,149 @@ onBeforeUnmount(() => {
                                     class="rounded-xl bg-[#ee5c81]/20 px-3 py-1.5 text-xs font-semibold text-[#ee5c81]"
                                     @click="declineInvitation(invitation.id)"
                                 >
-                                    Отменить
+                                    Р С›РЎвЂљР СР ВµР Р…Р С‘РЎвЂљРЎРЉ
                                 </button>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <div v-if="inviteModalTab === 'lists'" class="flex-1 space-y-2 overflow-y-auto">
-                    <div
-                        v-for="link in links"
-                        :key="`link-${link.id}`"
-                        class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-3"
-                    >
-                        <div class="mb-1 text-sm font-medium text-[#fcfcfa]">
-                            {{ link.other_user.name }}
+                <div v-if="inviteModalTab === 'lists'" class="flex-1 space-y-3 overflow-y-auto">
+                    <div class="grid gap-2 sm:grid-cols-2">
+                        <button
+                            type="button"
+                            class="rounded-2xl border border-[#5b7fff]/30 bg-[#5b7fff]/12 px-3 py-2.5 text-left text-sm font-semibold text-[#d8e7ff]"
+                            @click="createListPrompt"
+                        >
+                            РќРѕРІС‹Р№ СЃРїРёСЃРѕРє
+                        </button>
+                        <button
+                            type="button"
+                            class="rounded-2xl border border-[#56b982]/30 bg-[#56b982]/10 px-3 py-2.5 text-left text-sm font-semibold text-[#baf0d1]"
+                            @click="saveCurrentListAsTemplate"
+                        >
+                            РЎРѕС…СЂР°РЅРёС‚СЊ С‚РµРєСѓС‰РёР№ РєР°Рє С€Р°Р±Р»РѕРЅ
+                        </button>
+                    </div>
+
+                    <div class="space-y-2">
+                        <div
+                            v-for="list in listOptions"
+                            :key="`managed-list-${list.list_id}`"
+                            class="rounded-2xl border border-[#403e41] bg-[#221f22] px-3 py-3"
+                        >
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <div class="flex items-center gap-2">
+                                        <p class="truncate text-sm font-medium text-[#fcfcfa]">{{ list.label }}</p>
+                                        <span
+                                            v-if="Number(list.list_id) === Number(selectedListId)"
+                                            class="rounded-full border border-[#5b7fff]/35 bg-[#5b7fff]/12 px-2 py-0.5 text-[10px] font-semibold text-[#d8e7ff]"
+                                        >
+                                            РЎРµР№С‡Р°СЃ РѕС‚РєСЂС‹С‚
+                                        </span>
+                                    </div>
+                                    <p class="mt-1 text-xs text-[#9f9a9d]">
+                                        {{ list.member_count }} СѓС‡Р°СЃС‚РЅРёРє(Р°) В· {{ list.total_pending_count }} РЅРµР·Р°РІРµСЂС€С‘РЅРЅС‹С…
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    class="rounded-xl bg-[#fcfcfa] px-3 py-1.5 text-xs font-semibold text-[#19181a]"
+                                    @click="selectedOwnerId = list.owner_id"
+                                >
+                                    РћС‚РєСЂС‹С‚СЊ
+                                </button>
+                            </div>
+
+                            <div class="mt-3 flex flex-wrap gap-2">
+                                <button
+                                    type="button"
+                                    class="rounded-xl border border-[#5b7fff]/25 bg-[#5b7fff]/10 px-3 py-1.5 text-xs font-semibold text-[#d8e7ff]"
+                                    @click="persistDefaultOwner(list.owner_id)"
+                                >
+                                    РЎРґРµР»Р°С‚СЊ РѕСЃРЅРѕРІРЅС‹Рј
+                                </button>
+                                <button
+                                    v-if="list.role === 'owner'"
+                                    type="button"
+                                    class="rounded-xl border border-[#403e41] bg-[#2d2a2c] px-3 py-1.5 text-xs font-semibold text-[#fcfcfa]"
+                                    @click="renameListPrompt(list)"
+                                >
+                                    РџРµСЂРµРёРјРµРЅРѕРІР°С‚СЊ
+                                </button>
+                                <button
+                                    v-if="list.role === 'owner'"
+                                    type="button"
+                                    class="rounded-xl bg-[#ee5c81]/20 px-3 py-1.5 text-xs font-semibold text-[#ee5c81]"
+                                    @click="deleteListEntry(list)"
+                                >
+                                    РЈРґР°Р»РёС‚СЊ
+                                </button>
+                            </div>
+
+                            <div v-if="Array.isArray(list.members) && list.members.length > 0" class="mt-3 flex flex-wrap gap-2">
+                                <div
+                                    v-for="member in list.members"
+                                    :key="`list-member-${list.list_id}-${member.id}`"
+                                    class="inline-flex items-center gap-2 rounded-xl border border-[#403e41] bg-[#2d2a2c] px-2.5 py-1.5 text-xs text-[#d7d2d5]"
+                                >
+                                    <span>{{ member.name }}</span>
+                                    <span class="text-[10px] uppercase tracking-[0.12em] text-[#8f8a8d]">{{ member.role }}</span>
+                                    <button
+                                        v-if="list.role === 'owner' && member.role !== 'owner'"
+                                        type="button"
+                                        class="text-[#ee5c81]"
+                                        @click="removeMemberFromList(list, member)"
+                                    >
+                                        РЈР±СЂР°С‚СЊ
+                                    </button>
+                                </div>
+                            </div>
                         </div>
-                        <div class="mb-2 text-xs text-[#9f9a9d]">
-                            Нажмите "Установить моим", чтобы открыть этот список по умолчанию.
+                    </div>
+
+                    <div class="rounded-2xl border border-[#403e41] bg-[#221f22] p-3">
+                        <div class="mb-2 flex items-center justify-between gap-2">
+                            <p class="text-xs font-semibold uppercase tracking-[0.14em] text-[#9f9a9d]">РЁР°Р±Р»РѕРЅС‹</p>
+                            <span class="text-xs text-[#9f9a9d]">{{ templates.length }}</span>
                         </div>
-                        <div class="flex gap-2">
-                            <button
-                                type="button"
-                                class="rounded-xl px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50"
-                                :class="
-                                    isSetMineConfirmed(link.id)
-                                        ? 'bg-[#56b982]/20 text-[#56b982]'
-                                        : 'bg-[#fcfcfa] text-[#19181a]'
-                                "
-                                :disabled="!link.can_set_default || isSetMineConfirmed(link.id) || isSharingActionLocked(setMineActionLockKey(link.id))"
-                                @click="setMine(link.id)"
+
+                        <div v-if="templates.length === 0" class="text-xs text-[#9f9a9d]">
+                            РџРѕРєР° РЅРµС‚ С€Р°Р±Р»РѕРЅРѕРІ.
+                        </div>
+
+                        <div v-else class="space-y-2">
+                            <div
+                                v-for="template in templates"
+                                :key="`template-${template.id}`"
+                                class="rounded-2xl border border-[#403e41] bg-[#2d2a2c] px-3 py-3"
                             >
-                                {{
-                                    isSetMineConfirmed(link.id)
-                                        ? 'Установлено'
-                                        : (isSharingActionLocked(setMineActionLockKey(link.id)) ? '...' : 'Установить моим')
-                                }}
-                            </button>
-                            <button
-                                type="button"
-                                class="rounded-xl bg-[#ee5c81]/20 px-3 py-1.5 text-xs font-semibold text-[#ee5c81]"
-                                @click="breakLink(link.id)"
-                            >
-                                Разорвать
-                            </button>
+                                <div class="flex items-start justify-between gap-3">
+                                    <div class="min-w-0">
+                                        <p class="truncate text-sm font-medium text-[#fcfcfa]">{{ template.name }}</p>
+                                        <p class="mt-1 text-xs text-[#9f9a9d]">
+                                            {{ template.product_count }} РїРѕРєСѓРїРѕРє В· {{ template.todo_count }} РґРµР»
+                                        </p>
+                                    </div>
+                                    <div class="flex gap-2">
+                                        <button
+                                            type="button"
+                                            class="rounded-xl bg-[#fcfcfa] px-3 py-1.5 text-xs font-semibold text-[#19181a]"
+                                            @click="createListFromTemplate(template)"
+                                        >
+                                            РЎРѕР·РґР°С‚СЊ СЃРїРёСЃРѕРє
+                                        </button>
+                                        <button
+                                            type="button"
+                                            class="rounded-xl bg-[#ee5c81]/20 px-3 py-1.5 text-xs font-semibold text-[#ee5c81]"
+                                            @click="deleteTemplateEntry(template)"
+                                        >
+                                            РЈРґР°Р»РёС‚СЊ
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -8734,7 +9288,7 @@ onBeforeUnmount(() => {
                                     {{
                                         isResettingSuggestionKey(entry.suggestion_key)
                                             ? '...'
-                                            : (isSuggestionResetDone(entry.suggestion_key) ? 'Сброшено' : '\u0421\u0431\u0440\u043e\u0441')
+                                            : (isSuggestionResetDone(entry.suggestion_key) ? 'Р РЋР В±РЎР‚Р С•РЎв‚¬Р ВµР Р…Р С•' : '\u0421\u0431\u0440\u043e\u0441')
                                     }}
                                 </button>
                             </div>

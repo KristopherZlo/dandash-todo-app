@@ -71,11 +71,10 @@ export function canMatchPendingCreateToRealtimeServerItem(localPendingItem, inco
         return false;
     }
 
-    if (Number(incomingItem.owner_id ?? 0) !== Number(ownerId)) {
-        return false;
-    }
-
-    if (normalizeLinkId(incomingItem.list_link_id) !== normalizeLinkId(resolvedLinkId)) {
+    if (
+        normalizeLinkId(incomingItem.list_id ?? incomingItem.list_link_id ?? incomingItem.owner_id)
+        !== normalizeLinkId(resolvedLinkId ?? ownerId)
+    ) {
         return false;
     }
 

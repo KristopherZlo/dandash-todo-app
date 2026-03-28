@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
 
 class ListItem extends Model
 {
@@ -47,6 +48,17 @@ class ListItem extends Model
         ];
     }
 
+    protected static function booted(): void
+    {
+        static::creating(function (ListItem $item): void {
+            if ((int) ($item->list_id ?? 0) > 0 || (int) ($item->owner_id ?? 0) <= 0) {
+                return;
+            }
+
+            $item->list_id = static::ensureOwnerPersonalListId((int) $item->owner_id);
+        });
+    }
+
     public function owner(): BelongsTo
     {
         return $this->belongsTo(User::class, 'owner_id');
@@ -85,5 +97,46 @@ class ListItem extends Model
     public function scopeOfType(Builder $query, string $type): Builder
     {
         return $query->where('type', $type);
+    }
+
+    private static function ensureOwnerPersonalListId(int $ownerId): int
+    {
+        $existingListId = UserList::query()
+            ->regular()
+            ->where('owner_user_id', $ownerId)
+            ->whereHas('members', static function (Builder $query) use ($ownerId): void {
+                $query->where('user_id', $ownerId)
+                    ->where('role', ListMember::ROLE_OWNER);
+            })
+            ->whereDoesntHave('members', static function (Builder $query) use ($ownerId): void {
+                $query->where('user_id', '!=', $ownerId);
+            })
+            ->orderBy('id')
+            ->value('id');
+
+        if ($existingListId) {
+            return (int) $existingListId;
+        }
+
+        return DB::transaction(static function () use ($ownerId): int {
+            $list = UserList::query()->create([
+                'owner_user_id' => $ownerId,
+                'name' => 'Р›РёС‡РЅС‹Р№',
+                'is_template' => false,
+            ]);
+
+            ListMember::query()->create([
+                'list_id' => (int) $list->id,
+                'user_id' => $ownerId,
+                'role' => ListMember::ROLE_OWNER,
+            ]);
+
+            User::query()
+                ->whereKey($ownerId)
+                ->whereNull('preferred_list_id')
+                ->update(['preferred_list_id' => (int) $list->id]);
+
+            return (int) $list->id;
+        });
     }
 }

@@ -25,11 +25,11 @@ class ListItemApiService
     public function index(Request $request): array
     {
         $validated = $request->validate([
-            'list_id' => ['required', 'integer', 'exists:lists,id'],
+            'list_id' => ['nullable', 'integer', 'exists:lists,id'],
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
         ]);
 
-        $context = $this->accessService->resolveReadContext($request, (int) $validated['list_id']);
+        $context = $this->accessService->resolveReadContext($request, $this->accessService->resolveRequestedListId($request));
         $type = (string) $validated['type'];
 
         $items = ListItem::query()
@@ -54,7 +54,7 @@ class ListItemApiService
     public function store(Request $request): array
     {
         $validated = $request->validate([
-            'list_id' => ['required', 'integer', 'exists:lists,id'],
+            'list_id' => ['nullable', 'integer', 'exists:lists,id'],
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
             'text' => ['required', 'string', 'max:255'],
             'client_request_id' => ['nullable', 'string', 'max:120'],
@@ -65,7 +65,7 @@ class ListItemApiService
             'priority' => ['nullable', Rule::in([ListItem::PRIORITY_URGENT, ListItem::PRIORITY_TODAY, ListItem::PRIORITY_LATER])],
         ]);
 
-        $context = $this->accessService->resolveCreateContext($request, (int) $validated['list_id']);
+        $context = $this->accessService->resolveCreateContext($request, $this->accessService->resolveRequestedListId($request));
         $type = (string) $validated['type'];
         $isCompleted = (bool) ($validated['is_completed'] ?? false);
         $quantity = $type === ListItem::TYPE_PRODUCT
@@ -123,12 +123,12 @@ class ListItemApiService
     public function suggestions(Request $request): array
     {
         $validated = $request->validate([
-            'list_id' => ['required', 'integer', 'exists:lists,id'],
+            'list_id' => ['nullable', 'integer', 'exists:lists,id'],
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
             'limit' => ['nullable', 'integer', 'min:1', 'max:20'],
         ]);
 
-        $context = $this->accessService->resolveReadContext($request, (int) $validated['list_id']);
+        $context = $this->accessService->resolveReadContext($request, $this->accessService->resolveRequestedListId($request));
 
         return [
             'suggestions' => $this->listItemSuggestionService->suggestForList(
@@ -144,12 +144,12 @@ class ListItemApiService
     public function productStats(Request $request): array
     {
         $validated = $request->validate([
-            'list_id' => ['required', 'integer', 'exists:lists,id'],
+            'list_id' => ['nullable', 'integer', 'exists:lists,id'],
             'type' => ['nullable', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
             'limit' => ['nullable', 'integer', 'min:1', 'max:200'],
         ]);
 
-        $context = $this->accessService->resolveReadContext($request, (int) $validated['list_id']);
+        $context = $this->accessService->resolveReadContext($request, $this->accessService->resolveRequestedListId($request));
 
         return $this->listItemSuggestionService->suggestionStatsPayloadForList(
             $context->listId,
@@ -162,12 +162,12 @@ class ListItemApiService
     public function resetSuggestionData(Request $request): array
     {
         $validated = $request->validate([
-            'list_id' => ['required', 'integer', 'exists:lists,id'],
+            'list_id' => ['nullable', 'integer', 'exists:lists,id'],
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
             'suggestion_key' => ['required', 'string', 'max:190'],
         ]);
 
-        $context = $this->accessService->resolveReadContext($request, (int) $validated['list_id']);
+        $context = $this->accessService->resolveReadContext($request, $this->accessService->resolveRequestedListId($request));
 
         $this->listItemSuggestionService->resetSuggestionData(
             $context->listId,
@@ -182,14 +182,14 @@ class ListItemApiService
     public function updateSuggestionSettings(Request $request): array
     {
         $validated = $request->validate([
-            'list_id' => ['required', 'integer', 'exists:lists,id'],
+            'list_id' => ['nullable', 'integer', 'exists:lists,id'],
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
             'suggestion_key' => ['required', 'string', 'max:190'],
             'custom_interval_seconds' => ['nullable', 'integer', 'min:0', 'max:315360000'],
             'ignored' => ['nullable', 'boolean'],
         ]);
 
-        $context = $this->accessService->resolveReadContext($request, (int) $validated['list_id']);
+        $context = $this->accessService->resolveReadContext($request, $this->accessService->resolveRequestedListId($request));
         $state = $this->listItemSuggestionService->updateSuggestionSettings(
             $context->listId,
             $context->ownerId,
@@ -221,13 +221,13 @@ class ListItemApiService
     public function dismissSuggestion(Request $request): array
     {
         $validated = $request->validate([
-            'list_id' => ['required', 'integer', 'exists:lists,id'],
+            'list_id' => ['nullable', 'integer', 'exists:lists,id'],
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
             'suggestion_key' => ['required', 'string', 'max:190'],
             'average_interval_seconds' => ['nullable', 'integer', 'min:0'],
         ]);
 
-        $context = $this->accessService->resolveReadContext($request, (int) $validated['list_id']);
+        $context = $this->accessService->resolveReadContext($request, $this->accessService->resolveRequestedListId($request));
 
         $this->listItemSuggestionService->dismissSuggestion(
             $context->listId,
@@ -351,13 +351,13 @@ class ListItemApiService
     public function reorder(Request $request): array
     {
         $validated = $request->validate([
-            'list_id' => ['required', 'integer', 'exists:lists,id'],
+            'list_id' => ['nullable', 'integer', 'exists:lists,id'],
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
             'order' => ['required', 'array', 'min:1'],
             'order.*' => ['integer', 'distinct'],
         ]);
 
-        $context = $this->accessService->resolveReadContext($request, (int) $validated['list_id']);
+        $context = $this->accessService->resolveReadContext($request, $this->accessService->resolveRequestedListId($request));
         $type = (string) $validated['type'];
 
         $orderPayload = $this->orderingService->reorderItemsForScope(
