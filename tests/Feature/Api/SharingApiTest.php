@@ -126,6 +126,40 @@ class SharingApiTest extends TestCase
         $this->assertNotNull($invitation->responded_at);
     }
 
+    public function test_shared_list_can_include_more_than_two_users(): void
+    {
+        $owner = User::factory()->create();
+        $firstEditor = User::factory()->create();
+        $secondEditor = User::factory()->create();
+        $list = $this->personalList($owner);
+
+        foreach ([$firstEditor, $secondEditor] as $editor) {
+            $this->actingAs($owner)
+                ->postJson('/api/invitations', [
+                    'list_id' => $list->id,
+                    'user_id' => $editor->id,
+                ])
+                ->assertCreated();
+
+            $invitation = ListInvitation::query()
+                ->where('invitee_id', $editor->id)
+                ->latest('id')
+                ->firstOrFail();
+
+            $this->actingAs($editor)
+                ->postJson("/api/invitations/{$invitation->id}/accept")
+                ->assertOk();
+        }
+
+        $this->assertSame(3, ListMember::query()->where('list_id', $list->id)->count());
+
+        $this->actingAs($owner)
+            ->getJson('/api/sync/state')
+            ->assertOk()
+            ->assertJsonPath('lists.0.id', $list->id)
+            ->assertJsonPath('lists.0.member_count', 3);
+    }
+
     private function personalList(User $user): UserList
     {
         return app(ListCatalogService::class)->ensurePersonalListExists($user->fresh() ?? $user);

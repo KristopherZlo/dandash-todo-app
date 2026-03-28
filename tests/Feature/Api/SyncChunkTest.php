@@ -359,6 +359,196 @@ class SyncChunkTest extends TestCase
             ->assertJsonPath('results.0.data.mood.color', 'green');
     }
 
+    public function test_chunk_sync_can_manage_list_catalog_actions(): void
+    {
+        $user = User::factory()->create();
+        $personalList = $this->personalList($user);
+
+        $createResponse = $this->actingAs($user)->postJson('/api/sync/chunk', [
+            'operations' => [
+                [
+                    'op_id' => 'op-list-create-1',
+                    'action' => 'create_list',
+                    'payload' => [
+                        'name' => 'Trip',
+                    ],
+                ],
+            ],
+        ]);
+
+        $createResponse->assertOk()
+            ->assertJsonPath('results.0.status', 'ok');
+
+        $createdListId = (int) ($createResponse->json('results.0.data.list_id') ?? 0);
+        $this->assertGreaterThan(0, $createdListId);
+
+        $this->actingAs($user)->postJson('/api/sync/chunk', [
+            'operations' => [
+                [
+                    'op_id' => 'op-list-rename-1',
+                    'action' => 'rename_list',
+                    'list_id' => $createdListId,
+                    'payload' => [
+                        'list_id' => $createdListId,
+                        'name' => 'Trip 2026',
+                    ],
+                ],
+                [
+                    'op_id' => 'op-list-default-1',
+                    'action' => 'set_default_list',
+                    'list_id' => $createdListId,
+                    'payload' => [
+                        'list_id' => $createdListId,
+                    ],
+                ],
+            ],
+        ])
+            ->assertOk()
+            ->assertJsonPath('results.0.status', 'ok')
+            ->assertJsonPath('results.1.status', 'ok')
+            ->assertJsonPath('results.1.data.default_list_id', $createdListId);
+
+        $this->assertDatabaseHas('lists', [
+            'id' => $createdListId,
+            'name' => 'Trip 2026',
+        ]);
+
+        $this->actingAs($user)->postJson('/api/sync/chunk', [
+            'operations' => [
+                [
+                    'op_id' => 'op-list-delete-1',
+                    'action' => 'delete_list',
+                    'list_id' => $createdListId,
+                    'payload' => [
+                        'list_id' => $createdListId,
+                    ],
+                ],
+            ],
+        ])
+            ->assertOk()
+            ->assertJsonPath('results.0.status', 'ok')
+            ->assertJsonPath('results.0.data.state.lists.0.id', $personalList->id);
+
+        $this->assertDatabaseMissing('lists', ['id' => $createdListId]);
+    }
+
+    public function test_chunk_sync_can_save_template_and_create_list_from_it(): void
+    {
+        $user = User::factory()->create();
+        $sourceList = $this->personalList($user);
+
+        ListItem::query()->create([
+            'owner_id' => $user->id,
+            'list_id' => $sourceList->id,
+            'type' => ListItem::TYPE_PRODUCT,
+            'text' => 'Passport',
+            'sort_order' => 1000,
+            'quantity' => 1,
+            'unit' => 'pc',
+            'created_by_id' => $user->id,
+            'updated_by_id' => $user->id,
+        ]);
+        ListItem::query()->create([
+            'owner_id' => $user->id,
+            'list_id' => $sourceList->id,
+            'type' => ListItem::TYPE_TODO,
+            'text' => 'Charge camera',
+            'sort_order' => 1000,
+            'priority' => ListItem::PRIORITY_TODAY,
+            'is_completed' => true,
+            'completed_at' => now(),
+            'created_by_id' => $user->id,
+            'updated_by_id' => $user->id,
+        ]);
+
+        $saveTemplateResponse = $this->actingAs($user)->postJson('/api/sync/chunk', [
+            'operations' => [
+                [
+                    'op_id' => 'op-template-save-1',
+                    'action' => 'save_template',
+                    'payload' => [
+                        'source_list_id' => $sourceList->id,
+                        'name' => 'Travel pack',
+                    ],
+                ],
+            ],
+        ]);
+
+        $saveTemplateResponse->assertOk()
+            ->assertJsonPath('results.0.status', 'ok');
+
+        $templateId = (int) ($saveTemplateResponse->json('results.0.data.template_id') ?? 0);
+        $this->assertGreaterThan(0, $templateId);
+
+        $createFromTemplateResponse = $this->actingAs($user)->postJson('/api/sync/chunk', [
+            'operations' => [
+                [
+                    'op_id' => 'op-template-create-1',
+                    'action' => 'create_from_template',
+                    'payload' => [
+                        'template_id' => $templateId,
+                        'name' => 'April trip',
+                    ],
+                ],
+            ],
+        ]);
+
+        $createFromTemplateResponse->assertOk()
+            ->assertJsonPath('results.0.status', 'ok');
+
+        $createdListId = (int) ($createFromTemplateResponse->json('results.0.data.list_id') ?? 0);
+        $this->assertGreaterThan(0, $createdListId);
+
+        $copiedTodo = ListItem::query()
+            ->where('list_id', $createdListId)
+            ->where('text', 'Charge camera')
+            ->first();
+
+        $this->assertNotNull($copiedTodo);
+        $this->assertFalse((bool) $copiedTodo->is_completed);
+        $this->assertNull($copiedTodo->completed_at);
+    }
+
+    public function test_chunk_sync_tracks_recent_custom_mood_emojis(): void
+    {
+        $user = User::factory()->create();
+
+        $updates = [
+            ['fire' => '🧠', 'battery' => '🌧️'],
+            ['fire' => '🛼', 'battery' => '🛰️'],
+            ['fire' => '🫠', 'battery' => '🍵'],
+            ['fire' => '🧠', 'battery' => '🌧️'],
+        ];
+
+        foreach ($updates as $index => $update) {
+            $response = $this->actingAs($user)->postJson('/api/sync/chunk', [
+                'operations' => [
+                    [
+                        'op_id' => 'op-mood-recents-'.$index,
+                        'action' => 'update_mood',
+                        'payload' => [
+                            'color' => 'red',
+                            'fire_level' => 50 + $index,
+                            'fire_emoji' => $update['fire'],
+                            'battery_level' => 40 + $index,
+                            'battery_emoji' => $update['battery'],
+                            'updated_at_ms' => now()->addSeconds($index + 1)->valueOf(),
+                        ],
+                    ],
+                ],
+            ]);
+
+            $response->assertOk()
+                ->assertJsonPath('results.0.status', 'ok');
+        }
+
+        $this->actingAs($user)
+            ->getJson('/api/sync/state')
+            ->assertOk()
+            ->assertJsonPath('self_mood_preferences.fire_recent_emojis', ['🧠', '🫠', '🛼'])
+            ->assertJsonPath('self_mood_preferences.battery_recent_emojis', ['🌧️', '🍵', '🛰️']);
+    }
+
     public function test_sync_state_contains_gamification_payload(): void
     {
         $user = User::factory()->create([
