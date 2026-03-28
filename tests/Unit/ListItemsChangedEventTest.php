@@ -19,9 +19,9 @@ class ListItemsChangedEventTest extends TestCase
         ];
 
         $event = new ListItemsChanged(
+            listId: 13,
             ownerId: 7,
             type: 'product',
-            listLinkId: 13,
             actorUserId: 3,
             listVersion: 42,
             items: $items,
@@ -32,10 +32,10 @@ class ListItemsChangedEventTest extends TestCase
 
         $this->assertSame('list.items.changed', $event->broadcastAs());
         $this->assertInstanceOf(PrivateChannel::class, $channel);
-        $this->assertSame('private-lists.shared.13', $channel->name);
+        $this->assertSame('private-lists.13', $channel->name);
 
+        $this->assertSame(13, $payload['list_id']);
         $this->assertSame(7, $payload['owner_id']);
-        $this->assertSame(13, $payload['list_link_id']);
         $this->assertSame('product', $payload['type']);
         $this->assertSame(3, $payload['actor_user_id']);
         $this->assertSame(42, $payload['list_version']);
@@ -50,12 +50,12 @@ class ListItemsChangedEventTest extends TestCase
         $this->assertNotSame('', (string) ($payload['changed_at'] ?? ''));
     }
 
-    public function test_event_uses_personal_channel_when_shared_link_is_missing(): void
+    public function test_event_uses_list_channel_for_every_list_type(): void
     {
         $event = new ListItemsChanged(
+            listId: 9,
             ownerId: 9,
             type: 'todo',
-            listLinkId: null,
             actorUserId: null,
             listVersion: 5,
             items: [],
@@ -65,9 +65,9 @@ class ListItemsChangedEventTest extends TestCase
         $payload = $event->broadcastWith();
 
         $this->assertInstanceOf(PrivateChannel::class, $channel);
-        $this->assertSame('private-lists.personal.9', $channel->name);
+        $this->assertSame('private-lists.9', $channel->name);
         $this->assertSame('todo', $payload['type']);
-        $this->assertNull($payload['list_link_id']);
+        $this->assertSame(9, $payload['list_id']);
         $this->assertNull($payload['actor_user_id']);
         $this->assertSame(5, $payload['list_version']);
     }
@@ -75,9 +75,9 @@ class ListItemsChangedEventTest extends TestCase
     public function test_event_can_broadcast_delta_payload_without_snapshot_items(): void
     {
         $event = new ListItemsChanged(
+            listId: 17,
             ownerId: 11,
             type: 'product',
-            listLinkId: 17,
             actorUserId: 5,
             listVersion: 88,
             items: [],

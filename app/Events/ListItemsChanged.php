@@ -13,9 +13,9 @@ class ListItemsChanged implements ShouldBroadcastNow
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
     public function __construct(
+        public int $listId,
         public int $ownerId,
         public string $type,
-        public ?int $listLinkId = null,
         public ?int $actorUserId = null,
         public int $listVersion = 0,
         public array $items = [],
@@ -25,16 +25,13 @@ class ListItemsChanged implements ShouldBroadcastNow
         public ?int $removedItemId = null,
         public ?array $activeOrder = null,
         public ?array $completedOrder = null,
+        public ?array $listSummary = null,
     ) {
     }
 
     public function broadcastOn(): PrivateChannel
     {
-        if ($this->listLinkId) {
-            return new PrivateChannel('lists.shared.'.$this->listLinkId);
-        }
-
-        return new PrivateChannel('lists.personal.'.$this->ownerId);
+        return new PrivateChannel('lists.'.$this->listId);
     }
 
     public function broadcastAs(): string
@@ -45,8 +42,8 @@ class ListItemsChanged implements ShouldBroadcastNow
     public function broadcastWith(): array
     {
         return [
+            'list_id' => $this->listId,
             'owner_id' => $this->ownerId,
-            'list_link_id' => $this->listLinkId,
             'type' => $this->type,
             'actor_user_id' => $this->actorUserId,
             'list_version' => $this->listVersion,
@@ -57,6 +54,7 @@ class ListItemsChanged implements ShouldBroadcastNow
             'removed_item_id' => $this->removedItemId,
             'active_order' => $this->activeOrder,
             'completed_order' => $this->completedOrder,
+            'list_summary' => $this->listSummary,
             'changed_at' => now()->toISOString(),
         ];
     }

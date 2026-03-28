@@ -18,6 +18,7 @@ class ListItem extends Model
     protected $fillable = [
         'owner_id',
         'list_link_id',
+        'list_id',
         'type',
         'text',
         'client_request_id',
@@ -37,6 +38,7 @@ class ListItem extends Model
         return [
             'sort_order' => 'integer',
             'list_link_id' => 'integer',
+            'list_id' => 'integer',
             'quantity' => 'decimal:2',
             'due_at' => 'datetime',
             'priority' => 'string',
@@ -55,6 +57,11 @@ class ListItem extends Model
         return $this->belongsTo(ListLink::class, 'list_link_id');
     }
 
+    public function list(): BelongsTo
+    {
+        return $this->belongsTo(UserList::class, 'list_id');
+    }
+
     public function createdBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by_id');
@@ -68,6 +75,11 @@ class ListItem extends Model
     public function scopeForOwner(Builder $query, int $ownerId): Builder
     {
         return $query->where('owner_id', $ownerId);
+    }
+
+    public function scopeForList(Builder $query, int $listId): Builder
+    {
+        return $query->where('list_id', $listId);
     }
 
     public function scopeOfType(Builder $query, string $type): Builder

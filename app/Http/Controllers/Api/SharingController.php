@@ -4,7 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\ListInvitation;
-use App\Models\ListLink;
+use App\Models\UserList;
 use App\Services\Sharing\ListSharingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -12,7 +12,7 @@ use Illuminate\Http\Request;
 class SharingController extends Controller
 {
     public function __construct(
-        private readonly ListSharingService $listSharingService
+        private readonly ListSharingService $listSharingService,
     ) {
     }
 
@@ -21,14 +21,17 @@ class SharingController extends Controller
         return response()->json($this->listSharingService->getState($request->user()));
     }
 
-    public function setDefaultOwner(Request $request): JsonResponse
+    public function setDefaultList(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'owner_id' => ['required', 'integer', 'exists:users,id'],
+            'list_id' => ['required', 'integer', 'exists:lists,id'],
         ]);
 
         return response()->json(
-            $this->listSharingService->setDefaultOwner($request->user(), (int) $validated['owner_id'])
+            $this->listSharingService->setDefaultList(
+                $request->user(),
+                UserList::query()->findOrFail((int) $validated['list_id']),
+            )
         );
     }
 
@@ -36,22 +39,34 @@ class SharingController extends Controller
     {
         $validated = $request->validate([
             'query' => ['required', 'string', 'min:1', 'max:64'],
+            'list_id' => ['nullable', 'integer', 'exists:lists,id'],
         ]);
 
         return response()->json(
-            $this->listSharingService->searchUsers($request->user(), (string) $validated['query'])
+            $this->listSharingService->searchUsers(
+                $request->user(),
+                (string) $validated['query'],
+                isset($validated['list_id'])
+                    ? UserList::query()->findOrFail((int) $validated['list_id'])
+                    : null,
+            )
         );
     }
 
     public function sendInvitation(Request $request): JsonResponse
     {
         $validated = $request->validate([
+            'list_id' => ['required', 'integer', 'exists:lists,id'],
             'user_id' => ['required', 'integer', 'exists:users,id'],
         ]);
 
         return response()->json(
-            $this->listSharingService->sendInvitation($request->user(), (int) $validated['user_id']),
-            201
+            $this->listSharingService->sendInvitation(
+                $request->user(),
+                UserList::query()->findOrFail((int) $validated['list_id']),
+                (int) $validated['user_id'],
+            ),
+            201,
         );
     }
 
@@ -65,13 +80,10 @@ class SharingController extends Controller
         return response()->json($this->listSharingService->declineInvitation($request->user(), $invitation));
     }
 
-    public function setListAsMine(Request $request, ListLink $link): JsonResponse
+    public function removeMember(Request $request, UserList $list, int $userId): JsonResponse
     {
-        return response()->json($this->listSharingService->setListAsMine($request->user(), $link));
-    }
-
-    public function destroyLink(Request $request, ListLink $link): JsonResponse
-    {
-        return response()->json($this->listSharingService->destroyLink($request->user(), $link));
+        return response()->json(
+            $this->listSharingService->removeMember($request->user(), $list, $userId)
+        );
     }
 }

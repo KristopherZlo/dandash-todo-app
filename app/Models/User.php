@@ -22,6 +22,7 @@ class User extends Authenticatable
         'name',
         'tag',
         'preferred_owner_id',
+        'preferred_list_id',
         'xp_progress',
         'productivity_score',
         'productivity_reward_history',
@@ -30,8 +31,10 @@ class User extends Authenticatable
         'mood_color',
         'mood_fire_level',
         'mood_fire_emoji',
+        'mood_fire_recent_emojis',
         'mood_battery_level',
         'mood_battery_emoji',
+        'mood_battery_recent_emojis',
         'mood_updated_at',
         'email',
         'password',
@@ -63,7 +66,9 @@ class User extends Authenticatable
             'xp_color_seed' => 'integer',
             'gamification_updated_at' => 'datetime',
             'mood_fire_level' => 'integer',
+            'mood_fire_recent_emojis' => 'array',
             'mood_battery_level' => 'integer',
+            'mood_battery_recent_emojis' => 'array',
             'mood_updated_at' => 'datetime',
         ];
     }
@@ -88,6 +93,11 @@ class User extends Authenticatable
         return $this->hasMany(ListInvitation::class, 'invitee_id');
     }
 
+    public function ownedLists(): HasMany
+    {
+        return $this->hasMany(UserList::class, 'owner_user_id');
+    }
+
     public function listLinksAsUserOne(): HasMany
     {
         return $this->hasMany(ListLink::class, 'user_one_id');
@@ -101,5 +111,10 @@ class User extends Authenticatable
     public function listItems(): HasMany
     {
         return $this->hasMany(ListItem::class, 'owner_id');
+    }
+
+    public function listMembers(): HasMany
+    {
+        return $this->hasMany(ListMember::class, 'user_id');
     }
 }

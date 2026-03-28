@@ -23,15 +23,15 @@ class ListItemSuggestionService
     /**
      * @return array<int, array<string, mixed>>
      */
-    public function suggestForOwner(int $ownerId, string $type, int $limit = 8, ?int $listLinkId = null): array
+    public function suggestForList(int $listId, int $ownerId, string $type, int $limit = 8): array
     {
         $normalizedType = $this->normalizeSuggestionType($type);
-        $entries = $this->historySource->loadAdditionEntriesForOwner($ownerId, $normalizedType, $listLinkId);
-        $statesByKey = $this->stateManager->statesByKeyForOwner($ownerId, $normalizedType);
+        $entries = $this->historySource->loadAdditionEntriesForList($listId, $normalizedType);
+        $statesByKey = $this->stateManager->statesByKeyForList($listId, $normalizedType);
         $now = now()->toImmutable();
 
         $suggestions = $this->analytics->buildSuggestions($entries, $statesByKey, $normalizedType, $now);
-        $filtered = $this->stateManager->filterSuppressedSuggestions($ownerId, $normalizedType, $suggestions, $now);
+        $filtered = $this->stateManager->filterSuppressedSuggestions($listId, $normalizedType, $suggestions, $now);
         $deduplicated = $this->analytics->deduplicateSuggestions($filtered);
 
         return array_slice($deduplicated, 0, max(1, $limit));
@@ -40,20 +40,20 @@ class ListItemSuggestionService
     /**
      * @return array<int, array<string, mixed>>
      */
-    public function productStatsForOwner(int $ownerId, int $limit = 50, ?int $listLinkId = null): array
+    public function productStatsForList(int $listId, int $ownerId, int $limit = 50): array
     {
-        return $this->suggestionStatsForOwner($ownerId, ListItem::TYPE_PRODUCT, $limit, $listLinkId);
+        return $this->suggestionStatsForList($listId, $ownerId, ListItem::TYPE_PRODUCT, $limit);
     }
 
     /**
      * @return array<int, array<string, mixed>>
      */
-    public function suggestionStatsForOwner(int $ownerId, string $type, int $limit = 50, ?int $listLinkId = null): array
+    public function suggestionStatsForList(int $listId, int $ownerId, string $type, int $limit = 50): array
     {
         $normalizedType = $this->normalizeSuggestionType($type);
         $limit = max(1, min(200, $limit));
-        $entries = $this->historySource->loadCompletionEntriesForOwner($ownerId, $normalizedType, $listLinkId);
-        $statesByKey = $this->stateManager->statesByKeyForOwner($ownerId, $normalizedType);
+        $entries = $this->historySource->loadCompletionEntriesForList($listId, $normalizedType);
+        $statesByKey = $this->stateManager->statesByKeyForList($listId, $normalizedType);
 
         return $this->analytics->buildStats($entries, $statesByKey, $limit);
     }
@@ -61,48 +61,44 @@ class ListItemSuggestionService
     /**
      * @return array{stats: array<int, array<string, mixed>>, summary: array<string, mixed>}
      */
-    public function productStatsPayloadForOwner(int $ownerId, int $limit = 50, ?int $listLinkId = null): array
+    public function productStatsPayloadForList(int $listId, int $ownerId, int $limit = 50): array
     {
-        return $this->suggestionStatsPayloadForOwner($ownerId, ListItem::TYPE_PRODUCT, $limit, $listLinkId);
+        return $this->suggestionStatsPayloadForList($listId, $ownerId, ListItem::TYPE_PRODUCT, $limit);
     }
 
     /**
      * @return array{stats: array<int, array<string, mixed>>, summary: array<string, mixed>}
      */
-    public function suggestionStatsPayloadForOwner(int $ownerId, string $type, int $limit = 50, ?int $listLinkId = null): array
+    public function suggestionStatsPayloadForList(int $listId, int $ownerId, string $type, int $limit = 50): array
     {
         $normalizedType = $this->normalizeSuggestionType($type);
-        $stats = $this->suggestionStatsForOwner($ownerId, $normalizedType, $limit, $listLinkId);
+        $stats = $this->suggestionStatsForList($listId, $ownerId, $normalizedType, $limit);
 
-        $addedCount = $this->historySource->countEventsForOwner(
-            $ownerId,
+        $addedCount = $this->historySource->countEventsForList(
+            $listId,
             $normalizedType,
-            ListItemEvent::EVENT_ADDED,
-            $listLinkId
+            ListItemEvent::EVENT_ADDED
         );
-        $completedCount = $this->historySource->countEventsForOwner(
-            $ownerId,
+        $completedCount = $this->historySource->countEventsForList(
+            $listId,
             $normalizedType,
-            ListItemEvent::EVENT_COMPLETED,
-            $listLinkId
+            ListItemEvent::EVENT_COMPLETED
         );
-        $uniqueItems = $this->historySource->uniqueEventKeysForOwner($ownerId, $normalizedType, $listLinkId);
-        $lastActivityAt = $this->historySource->lastEventActivityForOwner($ownerId, $normalizedType, $listLinkId);
+        $uniqueItems = $this->historySource->uniqueEventKeysForList($listId, $normalizedType);
+        $lastActivityAt = $this->historySource->lastEventActivityForList($listId, $normalizedType);
 
         if ($addedCount === 0) {
             $itemsQuery = ListItem::query()
-                ->forOwner($ownerId)
+                ->forList($listId)
                 ->ofType($normalizedType);
-            $this->applyListLinkScope($itemsQuery, $listLinkId);
             $addedCount = (int) $itemsQuery->count();
         }
 
         if ($completedCount === 0) {
             $itemsQuery = ListItem::query()
-                ->forOwner($ownerId)
+                ->forList($listId)
                 ->ofType($normalizedType)
                 ->where('is_completed', true);
-            $this->applyListLinkScope($itemsQuery, $listLinkId);
             $completedCount = (int) $itemsQuery->count();
         }
 
@@ -110,7 +106,7 @@ class ListItemSuggestionService
             $uniqueItems = count($stats);
         }
 
-        $activeSuggestions = $this->suggestForOwner($ownerId, $normalizedType, 50, $listLinkId);
+        $activeSuggestions = $this->suggestForList($listId, $ownerId, $normalizedType, 50);
         $dueCount = count(array_filter(
             $activeSuggestions,
             static fn (array $entry): bool => (bool) ($entry['is_due'] ?? false),
@@ -131,12 +127,13 @@ class ListItemSuggestionService
         ];
     }
 
-    public function resetSuggestionData(int $ownerId, string $type, string $suggestionKey): void
+    public function resetSuggestionData(int $listId, int $ownerId, string $type, string $suggestionKey): void
     {
-        $this->stateManager->resetSuggestionData($ownerId, $this->normalizeSuggestionType($type), $suggestionKey);
+        $this->stateManager->resetSuggestionData($listId, $ownerId, $this->normalizeSuggestionType($type), $suggestionKey);
     }
 
     public function updateSuggestionSettings(
+        int $listId,
         int $ownerId,
         string $type,
         string $suggestionKey,
@@ -144,6 +141,7 @@ class ListItemSuggestionService
         ?bool $ignored = null
     ): ?ListItemSuggestionState {
         return $this->stateManager->updateSuggestionSettings(
+            $listId,
             $ownerId,
             $this->normalizeSuggestionType($type),
             $suggestionKey,
@@ -158,12 +156,14 @@ class ListItemSuggestionService
     }
 
     public function dismissSuggestion(
+        int $listId,
         int $ownerId,
         string $type,
         string $suggestionKey,
         int $averageIntervalSeconds
     ): void {
         $this->stateManager->dismissSuggestion(
+            $listId,
             $ownerId,
             $this->normalizeSuggestionType($type),
             $suggestionKey,
@@ -186,16 +186,5 @@ class ListItemSuggestionService
         return $type === ListItem::TYPE_TODO
             ? ListItem::TYPE_TODO
             : ListItem::TYPE_PRODUCT;
-    }
-
-    private function applyListLinkScope(Builder $query, ?int $listLinkId = null): void
-    {
-        if ($listLinkId) {
-            $query->where('list_link_id', $listLinkId);
-
-            return;
-        }
-
-        $query->whereNull('list_link_id');
     }
 }

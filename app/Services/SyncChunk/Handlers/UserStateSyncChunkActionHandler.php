@@ -2,7 +2,7 @@
 
 namespace App\Services\SyncChunk\Handlers;
 
-use App\Models\ListLink;
+use App\Models\ListMember;
 use App\Models\User;
 use App\Services\ListSyncService;
 use App\Services\Realtime\UserSyncStateBroadcaster;
@@ -62,7 +62,7 @@ class UserStateSyncChunkActionHandler implements SyncChunkActionHandler
         $applied = $this->moodStateService->applySyncPayload($user, $payload);
 
         if ($applied) {
-            $this->syncStateBroadcaster->broadcastToLinkedUsers((int) $user->id, 'mood_changed', (int) $user->id);
+            $this->syncStateBroadcaster->broadcastToRelatedListUsers((int) $user->id, 'mood_changed', (int) $user->id);
         }
 
         /** @var User $freshUser */
@@ -71,6 +71,7 @@ class UserStateSyncChunkActionHandler implements SyncChunkActionHandler
         return [
             'mood' => $this->listSyncService->getMoodState($freshUser),
             'mood_cards' => $this->listSyncService->getMoodCards($freshUser)->values()->all(),
+            'self_mood_preferences' => $this->moodStateService->buildPreferencesPayload($freshUser),
             'applied' => $applied,
         ];
     }
@@ -78,59 +79,69 @@ class UserStateSyncChunkActionHandler implements SyncChunkActionHandler
     private function handleApplySharedGamificationDeltaOperation(Request $request, array $operation): array
     {
         $payload = is_array($operation['payload'] ?? null) ? $operation['payload'] : [];
-        $linkId = (int) ($payload['link_id'] ?? 0);
+        $listId = (int) ($payload['list_id'] ?? 0);
         $delta = (float) ($payload['delta'] ?? 0.0);
         $user = $request->user();
-        $link = $this->resolveAccessibleActiveLink((int) $user->id, $linkId);
+        $partnerUserIds = $this->resolveAccessiblePartnerUserIds((int) $user->id, $listId);
 
-        if (! $link) {
+        if ($partnerUserIds === []) {
             return [
                 'applied' => false,
                 'partner_user_id' => null,
+                'partner_user_ids' => [],
             ];
         }
 
-        $partnerUserId = $link->otherUserId((int) $user->id);
-        if (! $partnerUserId) {
-            return [
-                'applied' => false,
-                'partner_user_id' => null,
-            ];
-        }
+        $appliedUserIds = [];
+        $partnerUsers = User::query()->whereIn('id', $partnerUserIds)->get();
 
-        $partnerUser = User::query()->find($partnerUserId);
-        if (! $partnerUser) {
-            return [
-                'applied' => false,
-                'partner_user_id' => (int) $partnerUserId,
-            ];
-        }
+        foreach ($partnerUsers as $partnerUser) {
+            $applied = $this->gamificationStateService->applyProgressDelta($partnerUser, $delta);
+            if (! $applied) {
+                continue;
+            }
 
-        $applied = $this->gamificationStateService->applyProgressDelta($partnerUser, $delta);
-
-        if ($applied) {
-            $this->syncStateBroadcaster->broadcastToUser((int) $partnerUserId, 'gamification_changed', (int) $user->id);
+            $appliedUserIds[] = (int) $partnerUser->id;
+            $this->syncStateBroadcaster->broadcastToUser((int) $partnerUser->id, 'gamification_changed', (int) $user->id);
         }
 
         return [
-            'applied' => $applied,
-            'partner_user_id' => (int) $partnerUserId,
+            'applied' => $appliedUserIds !== [],
+            'partner_user_id' => count($partnerUserIds) === 1 ? $partnerUserIds[0] : null,
+            'partner_user_ids' => $partnerUserIds,
+            'applied_user_ids' => $appliedUserIds,
         ];
     }
 
-    private function resolveAccessibleActiveLink(int $userId, int $linkId): ?ListLink
+    /**
+     * @return array<int, int>
+     */
+    private function resolveAccessiblePartnerUserIds(int $userId, int $listId): array
     {
-        if ($userId <= 0 || $linkId <= 0) {
-            return null;
+        if ($userId <= 0 || $listId <= 0) {
+            return [];
         }
 
-        return ListLink::query()
-            ->whereKey($linkId)
-            ->where('is_active', true)
-            ->where(function ($query) use ($userId): void {
-                $query->where('user_one_id', $userId)
-                    ->orWhere('user_two_id', $userId);
-            })
-            ->first();
+        $hasAccess = ListMember::query()
+            ->join('lists', 'lists.id', '=', 'list_members.list_id')
+            ->where('list_members.list_id', $listId)
+            ->where('list_members.user_id', $userId)
+            ->where('lists.is_template', false)
+            ->exists();
+
+        if (! $hasAccess) {
+            return [];
+        }
+
+        return ListMember::query()
+            ->join('lists', 'lists.id', '=', 'list_members.list_id')
+            ->where('list_members.list_id', $listId)
+            ->where('list_members.user_id', '!=', $userId)
+            ->where('lists.is_template', false)
+            ->pluck('list_members.user_id')
+            ->map(static fn ($value): int => (int) $value)
+            ->unique()
+            ->values()
+            ->all();
     }
 }

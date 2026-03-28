@@ -3,7 +3,7 @@
 namespace App\Services\Realtime;
 
 use App\Events\UserSyncStateChanged;
-use App\Models\ListLink;
+use App\Models\ListMember;
 use App\Models\User;
 use App\Services\ListSyncService;
 use Illuminate\Support\Facades\Log;
@@ -45,19 +45,18 @@ class UserSyncStateBroadcaster
         }
     }
 
-    public function broadcastToLinkedUsers(int $userId, string $reason, ?int $actorUserId = null): void
+    public function broadcastToRelatedListUsers(int $userId, string $reason, ?int $actorUserId = null): void
     {
-        $targets = ListLink::query()
-            ->where('is_active', true)
-            ->where(function ($query) use ($userId): void {
-                $query->where('user_one_id', $userId)
-                    ->orWhere('user_two_id', $userId);
+        $targets = ListMember::query()
+            ->join('lists', 'lists.id', '=', 'list_members.list_id')
+            ->whereIn('list_members.list_id', function ($query) use ($userId): void {
+                $query->from('list_members')
+                    ->select('list_id')
+                    ->where('user_id', $userId);
             })
-            ->get(['user_one_id', 'user_two_id'])
-            ->flatMap(static fn (ListLink $link): array => [
-                (int) $link->user_one_id,
-                (int) $link->user_two_id,
-            ])
+            ->where('lists.is_template', false)
+            ->pluck('list_members.user_id')
+            ->map(static fn ($value): int => (int) $value)
             ->unique()
             ->values()
             ->all();

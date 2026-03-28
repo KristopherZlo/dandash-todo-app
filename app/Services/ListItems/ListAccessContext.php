@@ -6,6 +6,6 @@ final readonly class ListAccessContext
 {
     public function __construct(
         public int $ownerId,
-        public ?int $linkId = null
+        public int $listId,
     ) {}
 }

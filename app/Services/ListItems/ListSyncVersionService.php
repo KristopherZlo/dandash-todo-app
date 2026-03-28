@@ -8,9 +8,9 @@ use Illuminate\Support\Facades\DB;
 
 class ListSyncVersionService
 {
-    public function getVersion(int $ownerId, string $type, ?int $listLinkId = null): int
+    public function getVersion(int $listId, string $type): int
     {
-        $scopeKey = $this->scopeKey($ownerId, $type, $listLinkId);
+        $scopeKey = $this->scopeKey($listId, $type);
 
         try {
             return (int) (ListSyncVersion::query()
@@ -25,12 +25,12 @@ class ListSyncVersionService
         }
     }
 
-    public function bumpVersion(int $ownerId, string $type, ?int $listLinkId = null): int
+    public function bumpVersion(int $listId, string $type, ?int $ownerId = null): int
     {
-        $scopeKey = $this->scopeKey($ownerId, $type, $listLinkId);
+        $scopeKey = $this->scopeKey($listId, $type);
 
         try {
-            return DB::transaction(function () use ($scopeKey, $ownerId, $type, $listLinkId): int {
+            return DB::transaction(function () use ($scopeKey, $listId, $ownerId, $type): int {
                 $record = ListSyncVersion::query()
                     ->where('scope_key', $scopeKey)
                     ->lockForUpdate()
@@ -40,8 +40,9 @@ class ListSyncVersionService
                     try {
                         $created = ListSyncVersion::query()->create([
                             'scope_key' => $scopeKey,
-                            'owner_id' => $ownerId,
-                            'list_link_id' => $listLinkId,
+                            'owner_id' => (int) ($ownerId ?? 0),
+                            'list_link_id' => null,
+                            'list_id' => $listId,
                             'type' => $type,
                             'version' => 1,
                         ]);
@@ -73,14 +74,9 @@ class ListSyncVersionService
         }
     }
 
-    private function scopeKey(int $ownerId, string $type, ?int $listLinkId): string
+    private function scopeKey(int $listId, string $type): string
     {
-        return sprintf(
-            'owner:%d|type:%s|link:%d',
-            $ownerId,
-            $type,
-            $listLinkId ? (int) $listLinkId : 0
-        );
+        return sprintf('list:%d|type:%s', $listId, $type);
     }
 
     private function isDuplicateKeyException(QueryException $exception): bool

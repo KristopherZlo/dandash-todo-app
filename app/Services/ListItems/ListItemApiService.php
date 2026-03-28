@@ -4,6 +4,7 @@ namespace App\Services\ListItems;
 
 use App\Models\ListItem;
 use App\Services\ListItemSuggestionService;
+use App\Services\Lists\ListSummaryService;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
@@ -16,57 +17,45 @@ class ListItemApiService
         private readonly ListItemInputNormalizer $inputNormalizer,
         private readonly ListItemOrderingService $orderingService,
         private readonly ListItemRealtimeNotifier $realtimeNotifier,
-        private readonly ListSyncVersionService $listSyncVersionService
+        private readonly ListSyncVersionService $listSyncVersionService,
+        private readonly ListSummaryService $listSummaryService,
     ) {
     }
 
     public function index(Request $request): array
     {
         $validated = $request->validate([
-            'owner_id' => ['required', 'integer', 'exists:users,id'],
+            'list_id' => ['required', 'integer', 'exists:lists,id'],
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
-            'link_id' => ['nullable', 'integer', 'exists:list_links,id'],
         ]);
 
-        $ownerId = (int) $validated['owner_id'];
+        $context = $this->accessService->resolveReadContext($request, (int) $validated['list_id']);
         $type = (string) $validated['type'];
-        $linkId = isset($validated['link_id']) ? (int) $validated['link_id'] : null;
 
-        $context = $this->accessService->resolveReadContext($request, $ownerId, $linkId);
-
-        $query = ListItem::query()
+        $items = ListItem::query()
+            ->forList($context->listId)
             ->ofType($type)
             ->orderBy('is_completed')
             ->orderBy('sort_order')
             ->orderByDesc('created_at')
-            ->orderByDesc('id');
-
-        if ($context->linkId) {
-            $query->where('list_link_id', $context->linkId);
-        } else {
-            $query->forOwner($context->ownerId)->whereNull('list_link_id');
-        }
-
-        $items = $query
+            ->orderByDesc('id')
             ->get()
-            ->map(fn (ListItem $item): array => $this->itemSerializer->serialize($item));
+            ->map(fn (ListItem $item): array => $this->itemSerializer->serialize($item))
+            ->values()
+            ->all();
 
         return [
             'items' => $items,
-            'list_version' => $this->listSyncVersionService->getVersion(
-                $context->ownerId,
-                $type,
-                $context->linkId
-            ),
+            'list_version' => $this->listSyncVersionService->getVersion($context->listId, $type),
+            'list_summary' => $this->listSummaryService->summaryForUser($request->user(), $context->listId),
         ];
     }
 
     public function store(Request $request): array
     {
         $validated = $request->validate([
-            'owner_id' => ['required', 'integer', 'exists:users,id'],
+            'list_id' => ['required', 'integer', 'exists:lists,id'],
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
-            'link_id' => ['nullable', 'integer', 'exists:list_links,id'],
             'text' => ['required', 'string', 'max:255'],
             'client_request_id' => ['nullable', 'string', 'max:120'],
             'is_completed' => ['sometimes', 'boolean'],
@@ -76,11 +65,8 @@ class ListItemApiService
             'priority' => ['nullable', Rule::in([ListItem::PRIORITY_URGENT, ListItem::PRIORITY_TODAY, ListItem::PRIORITY_LATER])],
         ]);
 
-        $ownerId = (int) $validated['owner_id'];
+        $context = $this->accessService->resolveCreateContext($request, (int) $validated['list_id']);
         $type = (string) $validated['type'];
-        $linkId = isset($validated['link_id']) ? (int) $validated['link_id'] : null;
-
-        $context = $this->accessService->resolveCreateContext($request, $ownerId, $linkId);
         $isCompleted = (bool) ($validated['is_completed'] ?? false);
         $quantity = $type === ListItem::TYPE_PRODUCT
             ? $this->inputNormalizer->normalizeQuantity($validated['quantity'] ?? null)
@@ -88,15 +74,16 @@ class ListItemApiService
 
         $item = ListItem::query()->create([
             'owner_id' => $context->ownerId,
-            'list_link_id' => $context->linkId,
+            'list_id' => $context->listId,
+            'list_link_id' => null,
             'type' => $type,
-            'text' => trim($validated['text']),
+            'text' => trim((string) $validated['text']),
             'client_request_id' => isset($validated['client_request_id'])
                 ? (trim((string) $validated['client_request_id']) !== ''
                     ? trim((string) $validated['client_request_id'])
                     : null)
                 : null,
-            'sort_order' => $this->orderingService->nextSortOrder($context->ownerId, $type, $isCompleted, $context->linkId),
+            'sort_order' => $this->orderingService->nextSortOrder($context->listId, $type, $isCompleted),
             'is_completed' => $isCompleted,
             'completed_at' => $isCompleted ? now() : null,
             'quantity' => $quantity,
@@ -107,49 +94,49 @@ class ListItemApiService
             'priority' => $type === ListItem::TYPE_TODO
                 ? $this->inputNormalizer->normalizePriority($validated['priority'] ?? null)
                 : null,
-            'created_by_id' => $request->user()->id,
-            'updated_by_id' => $request->user()->id,
+            'created_by_id' => (int) $request->user()->id,
+            'updated_by_id' => (int) $request->user()->id,
         ]);
+
         $this->listItemSuggestionService->recordAddedEvent($item);
         if ($isCompleted) {
             $this->listItemSuggestionService->recordCompletedEvent($item);
         }
-        $listVersion = $this->listSyncVersionService->bumpVersion(
-            (int) $item->owner_id,
-            (string) $item->type,
-            $item->list_link_id ? (int) $item->list_link_id : null
-        );
+
+        $this->listSummaryService->touchList($context->listId);
+        $listVersion = $this->listSyncVersionService->bumpVersion($context->listId, $type, $context->ownerId);
+        $freshItem = $item->fresh();
 
         $this->realtimeNotifier->dispatchItemCreatedSafely(
-            $item->fresh(),
+            $freshItem,
             (int) $request->user()->id,
-            $listVersion
+            $listVersion,
         );
 
         return [
-            'item' => $this->itemSerializer->serialize($item->fresh()),
+            'item' => $this->itemSerializer->serialize($freshItem),
             'list_version' => $listVersion,
+            'list_summary' => $this->listSummaryService->summaryForUser($request->user(), $context->listId),
         ];
     }
 
     public function suggestions(Request $request): array
     {
         $validated = $request->validate([
-            'owner_id' => ['required', 'integer', 'exists:users,id'],
+            'list_id' => ['required', 'integer', 'exists:lists,id'],
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
-            'link_id' => ['nullable', 'integer', 'exists:list_links,id'],
             'limit' => ['nullable', 'integer', 'min:1', 'max:20'],
         ]);
 
-        $ownerId = (int) $validated['owner_id'];
-        $type = (string) $validated['type'];
-        $linkId = isset($validated['link_id']) ? (int) $validated['link_id'] : null;
-        $limit = (int) ($validated['limit'] ?? 8);
-
-        $context = $this->accessService->resolveReadContext($request, $ownerId, $linkId);
+        $context = $this->accessService->resolveReadContext($request, (int) $validated['list_id']);
 
         return [
-            'suggestions' => $this->listItemSuggestionService->suggestForOwner($context->ownerId, $type, $limit, $context->linkId),
+            'suggestions' => $this->listItemSuggestionService->suggestForList(
+                $context->listId,
+                $context->ownerId,
+                (string) $validated['type'],
+                (int) ($validated['limit'] ?? 8),
+            ),
             'generated_at' => now()->toISOString(),
         ];
     }
@@ -157,71 +144,56 @@ class ListItemApiService
     public function productStats(Request $request): array
     {
         $validated = $request->validate([
-            'owner_id' => ['required', 'integer', 'exists:users,id'],
+            'list_id' => ['required', 'integer', 'exists:lists,id'],
             'type' => ['nullable', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
-            'link_id' => ['nullable', 'integer', 'exists:list_links,id'],
             'limit' => ['nullable', 'integer', 'min:1', 'max:200'],
         ]);
 
-        $ownerId = (int) $validated['owner_id'];
-        $type = (string) ($validated['type'] ?? ListItem::TYPE_PRODUCT);
-        $linkId = isset($validated['link_id']) ? (int) $validated['link_id'] : null;
-        $limit = (int) ($validated['limit'] ?? 50);
+        $context = $this->accessService->resolveReadContext($request, (int) $validated['list_id']);
 
-        $context = $this->accessService->resolveReadContext($request, $ownerId, $linkId);
-
-        return $this->listItemSuggestionService->suggestionStatsPayloadForOwner(
+        return $this->listItemSuggestionService->suggestionStatsPayloadForList(
+            $context->listId,
             $context->ownerId,
-            $type,
-            $limit,
-            $context->linkId
+            (string) ($validated['type'] ?? ListItem::TYPE_PRODUCT),
+            (int) ($validated['limit'] ?? 50),
         );
     }
 
     public function resetSuggestionData(Request $request): array
     {
         $validated = $request->validate([
-            'owner_id' => ['required', 'integer', 'exists:users,id'],
+            'list_id' => ['required', 'integer', 'exists:lists,id'],
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
-            'link_id' => ['nullable', 'integer', 'exists:list_links,id'],
             'suggestion_key' => ['required', 'string', 'max:190'],
         ]);
 
-        $ownerId = (int) $validated['owner_id'];
-        $type = (string) $validated['type'];
-        $linkId = isset($validated['link_id']) ? (int) $validated['link_id'] : null;
-
-        $context = $this->accessService->resolveReadContext($request, $ownerId, $linkId);
+        $context = $this->accessService->resolveReadContext($request, (int) $validated['list_id']);
 
         $this->listItemSuggestionService->resetSuggestionData(
+            $context->listId,
             $context->ownerId,
-            $type,
-            (string) $validated['suggestion_key']
+            (string) $validated['type'],
+            (string) $validated['suggestion_key'],
         );
 
-        return [
-            'status' => 'ok',
-        ];
+        return ['status' => 'ok'];
     }
 
     public function updateSuggestionSettings(Request $request): array
     {
         $validated = $request->validate([
-            'owner_id' => ['required', 'integer', 'exists:users,id'],
+            'list_id' => ['required', 'integer', 'exists:lists,id'],
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
-            'link_id' => ['nullable', 'integer', 'exists:list_links,id'],
             'suggestion_key' => ['required', 'string', 'max:190'],
             'custom_interval_seconds' => ['nullable', 'integer', 'min:0', 'max:315360000'],
             'ignored' => ['nullable', 'boolean'],
         ]);
 
-        $ownerId = (int) $validated['owner_id'];
-        $type = (string) $validated['type'];
-        $linkId = isset($validated['link_id']) ? (int) $validated['link_id'] : null;
-        $context = $this->accessService->resolveReadContext($request, $ownerId, $linkId);
+        $context = $this->accessService->resolveReadContext($request, (int) $validated['list_id']);
         $state = $this->listItemSuggestionService->updateSuggestionSettings(
+            $context->listId,
             $context->ownerId,
-            $type,
+            (string) $validated['type'],
             (string) $validated['suggestion_key'],
             array_key_exists('custom_interval_seconds', $validated)
                 ? max(0, (int) ($validated['custom_interval_seconds'] ?? 0))
@@ -249,30 +221,23 @@ class ListItemApiService
     public function dismissSuggestion(Request $request): array
     {
         $validated = $request->validate([
-            'owner_id' => ['required', 'integer', 'exists:users,id'],
+            'list_id' => ['required', 'integer', 'exists:lists,id'],
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
-            'link_id' => ['nullable', 'integer', 'exists:list_links,id'],
             'suggestion_key' => ['required', 'string', 'max:190'],
             'average_interval_seconds' => ['nullable', 'integer', 'min:0'],
         ]);
 
-        $ownerId = (int) $validated['owner_id'];
-        $type = (string) $validated['type'];
-        $linkId = isset($validated['link_id']) ? (int) $validated['link_id'] : null;
-        $averageIntervalSeconds = (int) ($validated['average_interval_seconds'] ?? 0);
-
-        $context = $this->accessService->resolveReadContext($request, $ownerId, $linkId);
+        $context = $this->accessService->resolveReadContext($request, (int) $validated['list_id']);
 
         $this->listItemSuggestionService->dismissSuggestion(
+            $context->listId,
             $context->ownerId,
-            $type,
+            (string) $validated['type'],
             (string) $validated['suggestion_key'],
-            $averageIntervalSeconds
+            (int) ($validated['average_interval_seconds'] ?? 0),
         );
 
-        return [
-            'status' => 'ok',
-        ];
+        return ['status' => 'ok'];
     }
 
     public function update(Request $request, ListItem $item): array
@@ -345,95 +310,79 @@ class ListItemApiService
             $item->sort_order = (int) $validated['sort_order'];
         } elseif ($completionChanged) {
             $item->sort_order = $this->orderingService->nextSortOrder(
-                $item->owner_id,
-                $item->type,
+                (int) $item->list_id,
+                (string) $item->type,
                 (bool) $item->is_completed,
-                $item->list_link_id ? (int) $item->list_link_id : null
             );
         }
 
         if (! $item->isDirty()) {
             return [
                 'item' => $this->itemSerializer->serialize($item),
-                'list_version' => $this->listSyncVersionService->getVersion(
-                    (int) $item->owner_id,
-                    (string) $item->type,
-                    $item->list_link_id ? (int) $item->list_link_id : null
-                ),
+                'list_version' => $this->listSyncVersionService->getVersion((int) $item->list_id, (string) $item->type),
+                'list_summary' => $this->listSummaryService->summaryForUser($request->user(), (int) $item->list_id),
             ];
         }
 
-        $item->updated_by_id = $request->user()->id;
+        $item->updated_by_id = (int) $request->user()->id;
         $item->save();
 
         if ($completionChanged && (bool) $item->is_completed) {
             $this->listItemSuggestionService->recordCompletedEvent($item);
         }
-        $listVersion = $this->listSyncVersionService->bumpVersion(
-            (int) $item->owner_id,
-            (string) $item->type,
-            $item->list_link_id ? (int) $item->list_link_id : null
-        );
+
+        $this->listSummaryService->touchList((int) $item->list_id);
+        $listVersion = $this->listSyncVersionService->bumpVersion((int) $item->list_id, (string) $item->type, (int) $item->owner_id);
+        $freshItem = $item->fresh();
 
         $this->realtimeNotifier->dispatchItemUpdatedSafely(
-            $item->fresh(),
+            $freshItem,
             (int) $request->user()->id,
-            $listVersion
+            $listVersion,
         );
 
         return [
-            'item' => $this->itemSerializer->serialize($item->fresh()),
+            'item' => $this->itemSerializer->serialize($freshItem),
             'list_version' => $listVersion,
+            'list_summary' => $this->listSummaryService->summaryForUser($request->user(), (int) $item->list_id),
         ];
     }
 
     public function reorder(Request $request): array
     {
         $validated = $request->validate([
-            'owner_id' => ['required', 'integer', 'exists:users,id'],
+            'list_id' => ['required', 'integer', 'exists:lists,id'],
             'type' => ['required', Rule::in([ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO])],
-            'link_id' => ['nullable', 'integer', 'exists:list_links,id'],
             'order' => ['required', 'array', 'min:1'],
             'order.*' => ['integer', 'distinct'],
         ]);
 
-        $ownerId = (int) $validated['owner_id'];
+        $context = $this->accessService->resolveReadContext($request, (int) $validated['list_id']);
         $type = (string) $validated['type'];
-        $linkId = isset($validated['link_id']) ? (int) $validated['link_id'] : null;
-        $context = $this->accessService->resolveReadContext($request, $ownerId, $linkId);
-
-        $itemsQuery = ListItem::query()->ofType($type);
-
-        if ($context->linkId) {
-            $itemsQuery->where('list_link_id', $context->linkId);
-        } else {
-            $itemsQuery->forOwner($context->ownerId)->whereNull('list_link_id');
-        }
 
         $orderPayload = $this->orderingService->reorderItemsForScope(
-            $itemsQuery,
+            ListItem::query()->forList($context->listId)->ofType($type),
             (array) $validated['order'],
-            (int) $request->user()->id
-        );
-        $listVersion = $this->listSyncVersionService->bumpVersion(
-            (int) $context->ownerId,
-            (string) $type,
-            $context->linkId
+            (int) $request->user()->id,
         );
 
+        $this->listSummaryService->touchList($context->listId);
+        $listVersion = $this->listSyncVersionService->bumpVersion($context->listId, $type, $context->ownerId);
+
         $this->realtimeNotifier->dispatchListReorderedSafely(
+            $context->listId,
             $context->ownerId,
             $type,
             $orderPayload['active_order'] ?? [],
             $orderPayload['completed_order'] ?? [],
-            $context->linkId,
             (int) $request->user()->id,
-            $listVersion
+            $listVersion,
         );
 
         return [
             'status' => 'ok',
             'list_version' => $listVersion,
+            'list_summary' => $this->listSummaryService->summaryForUser($request->user(), $context->listId),
         ];
     }
 
@@ -441,28 +390,29 @@ class ListItemApiService
     {
         $this->accessService->ensureCanAccessItem($request, $item);
 
-        $ownerId = $item->owner_id;
-        $type = $item->type;
-        $linkId = $item->list_link_id ? (int) $item->list_link_id : null;
+        $listId = (int) ($item->list_id ?? 0);
+        $ownerId = (int) $item->owner_id;
+        $type = (string) $item->type;
+        $itemId = (int) $item->id;
+
         $item->delete();
-        $listVersion = $this->listSyncVersionService->bumpVersion(
-            (int) $ownerId,
-            (string) $type,
-            $linkId
-        );
+
+        $this->listSummaryService->touchList($listId);
+        $listVersion = $this->listSyncVersionService->bumpVersion($listId, $type, $ownerId);
 
         $this->realtimeNotifier->dispatchItemDeletedSafely(
+            $listId,
             $ownerId,
             $type,
-            (int) $item->id,
-            $linkId,
+            $itemId,
             (int) $request->user()->id,
-            $listVersion
+            $listVersion,
         );
 
         return [
             'status' => 'ok',
             'list_version' => $listVersion,
+            'list_summary' => $this->listSummaryService->summaryForUser($request->user(), $listId),
         ];
     }
 }

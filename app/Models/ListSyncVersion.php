@@ -11,6 +11,7 @@ class ListSyncVersion extends Model
         'scope_key',
         'owner_id',
         'list_link_id',
+        'list_id',
         'type',
         'version',
     ];
@@ -20,6 +21,7 @@ class ListSyncVersion extends Model
         return [
             'owner_id' => 'integer',
             'list_link_id' => 'integer',
+            'list_id' => 'integer',
             'version' => 'integer',
         ];
     }
@@ -33,5 +35,9 @@ class ListSyncVersion extends Model
     {
         return $this->belongsTo(ListLink::class, 'list_link_id');
     }
-}
 
+    public function list(): BelongsTo
+    {
+        return $this->belongsTo(UserList::class, 'list_id');
+    }
+}

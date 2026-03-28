@@ -17,16 +17,16 @@ class SuggestionStateManager
     /**
      * @return Collection<string, ListItemSuggestionState>
      */
-    public function statesByKeyForOwner(int $ownerId, string $type): Collection
+    public function statesByKeyForList(int $listId, string $type): Collection
     {
         return ListItemSuggestionState::query()
-            ->forOwner($ownerId)
+            ->forList($listId)
             ->ofType($type)
             ->get()
             ->keyBy('suggestion_key');
     }
 
-    public function resetSuggestionData(int $ownerId, string $type, string $suggestionKey): void
+    public function resetSuggestionData(int $listId, int $ownerId, string $type, string $suggestionKey): void
     {
         $normalizedKey = $this->textNormalizer->normalizeSuggestionKey($suggestionKey);
 
@@ -35,6 +35,7 @@ class SuggestionStateManager
         }
 
         $state = ListItemSuggestionState::query()->firstOrNew([
+            'list_id' => $listId,
             'owner_id' => $ownerId,
             'type' => $type,
             'suggestion_key' => $normalizedKey,
@@ -49,6 +50,7 @@ class SuggestionStateManager
     }
 
     public function updateSuggestionSettings(
+        int $listId,
         int $ownerId,
         string $type,
         string $suggestionKey,
@@ -62,6 +64,7 @@ class SuggestionStateManager
         }
 
         $state = ListItemSuggestionState::query()->firstOrNew([
+            'list_id' => $listId,
             'owner_id' => $ownerId,
             'type' => $type,
             'suggestion_key' => $normalizedKey,
@@ -89,6 +92,7 @@ class SuggestionStateManager
     }
 
     public function dismissSuggestion(
+        int $listId,
         int $ownerId,
         string $type,
         string $suggestionKey,
@@ -101,6 +105,7 @@ class SuggestionStateManager
         }
 
         $state = ListItemSuggestionState::query()->firstOrNew([
+            'list_id' => $listId,
             'owner_id' => $ownerId,
             'type' => $type,
             'suggestion_key' => $normalizedKey,
@@ -137,7 +142,7 @@ class SuggestionStateManager
      * @return array<int, array<string, mixed>>
      */
     public function filterSuppressedSuggestions(
-        int $ownerId,
+        int $listId,
         string $type,
         array $suggestions,
         CarbonImmutable $now
@@ -154,7 +159,7 @@ class SuggestionStateManager
         }
 
         $states = ListItemSuggestionState::query()
-            ->forOwner($ownerId)
+            ->forList($listId)
             ->ofType($type)
             ->whereIn('suggestion_key', $keys)
             ->get()

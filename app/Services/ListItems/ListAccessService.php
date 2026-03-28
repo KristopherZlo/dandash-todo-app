@@ -3,94 +3,40 @@
 namespace App\Services\ListItems;
 
 use App\Models\ListItem;
-use App\Models\ListLink;
+use App\Models\ListMember;
+use App\Models\UserList;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 
 class ListAccessService
 {
-    public function ensureCanAccess(Request $request, int $ownerId): void
+    public function ensureCanAccess(Request $request, int $listId): UserList
     {
-        abort_unless(
-            (int) $request->user()->id === $ownerId,
-            403,
-            'You do not have access to this list.'
-        );
+        $list = UserList::query()->findOrFail($listId);
+        $hasAccess = ListMember::query()
+            ->where('list_id', (int) $list->id)
+            ->where('user_id', (int) $request->user()->id)
+            ->exists();
+
+        abort_unless($hasAccess, Response::HTTP_FORBIDDEN, 'You do not have access to this list.');
+
+        return $list;
     }
 
     public function ensureCanAccessItem(Request $request, ListItem $item): void
     {
-        if ($item->list_link_id) {
-            $this->resolveAccessibleLink($request, (int) $item->list_link_id);
-
-            return;
-        }
-
-        abort_unless(
-            (int) $request->user()->id === (int) $item->owner_id,
-            403,
-            'You do not have access to this list.'
-        );
+        $this->ensureCanAccess($request, (int) ($item->list_id ?? 0));
     }
 
-    public function resolveReadContext(Request $request, int $ownerId, ?int $linkId = null): ListAccessContext
+    public function resolveReadContext(Request $request, int $listId): ListAccessContext
     {
-        if ($linkId) {
-            $link = $this->resolveAccessibleLink($request, $linkId);
+        $list = $this->ensureCanAccess($request, $listId);
 
-            return new ListAccessContext((int) $link->user_one_id, (int) $link->id);
-        }
-
-        $this->ensureCanAccess($request, $ownerId);
-
-        return new ListAccessContext($ownerId, null);
+        return new ListAccessContext((int) $list->owner_user_id, (int) $list->id);
     }
 
-    public function resolveCreateContext(Request $request, int $ownerId, ?int $linkId = null): ListAccessContext
+    public function resolveCreateContext(Request $request, int $listId): ListAccessContext
     {
-        if ($linkId) {
-            $link = $this->resolveAccessibleLink($request, $linkId);
-
-            return new ListAccessContext((int) $link->user_one_id, (int) $link->id);
-        }
-
-        $currentUserId = (int) $request->user()->id;
-        if ($currentUserId === $ownerId) {
-            return new ListAccessContext($ownerId, null);
-        }
-
-        $link = $this->resolveAccessibleLinkByOwner($request, $ownerId);
-
-        return new ListAccessContext((int) $link->user_one_id, (int) $link->id);
-    }
-
-    public function resolveAccessibleLink(Request $request, int $linkId): ListLink
-    {
-        $link = ListLink::query()->findOrFail($linkId);
-
-        abort_unless(
-            $link->is_active && $link->involvesUser((int) $request->user()->id),
-            403,
-            'You do not have access to this shared list.'
-        );
-
-        return $link;
-    }
-
-    public function resolveAccessibleLinkByOwner(Request $request, int $ownerId): ListLink
-    {
-        $currentUserId = (int) $request->user()->id;
-
-        $link = ListLink::query()
-            ->where('is_active', true)
-            ->where('user_one_id', $ownerId)
-            ->where(function ($query) use ($currentUserId): void {
-                $query->where('user_one_id', $currentUserId)
-                    ->orWhere('user_two_id', $currentUserId);
-            })
-            ->first();
-
-        abort_unless($link, 403, 'You do not have access to this shared list.');
-
-        return $link;
+        return $this->resolveReadContext($request, $listId);
     }
 }

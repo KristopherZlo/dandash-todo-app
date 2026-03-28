@@ -51,8 +51,7 @@ class ListItemSyncChunkActionHandler implements SyncChunkActionHandler
         $type = (string) ($operation['type'] ?? '');
 
         $storeRequest = $this->requestFactory->make($request, [
-            'owner_id' => (int) ($operation['owner_id'] ?? 0),
-            'link_id' => $this->normalizeNullablePositiveInteger($operation['link_id'] ?? null),
+            'list_id' => (int) ($operation['list_id'] ?? 0),
             'type' => $type,
             'text' => (string) ($payload['text'] ?? ''),
             'client_request_id' => (string) ($payload['client_request_id'] ?? ''),
@@ -98,8 +97,7 @@ class ListItemSyncChunkActionHandler implements SyncChunkActionHandler
         $order = is_array($payload['order'] ?? null) ? $payload['order'] : [];
 
         $reorderRequest = $this->requestFactory->make($request, [
-            'owner_id' => (int) ($operation['owner_id'] ?? 0),
-            'link_id' => $this->normalizeNullablePositiveInteger($operation['link_id'] ?? null),
+            'list_id' => (int) ($operation['list_id'] ?? 0),
             'type' => (string) ($operation['type'] ?? ''),
             'order' => array_values($order),
         ]);
@@ -112,8 +110,7 @@ class ListItemSyncChunkActionHandler implements SyncChunkActionHandler
         $payload = is_array($operation['payload'] ?? null) ? $operation['payload'] : [];
 
         $dismissRequest = $this->requestFactory->make($request, [
-            'owner_id' => (int) ($operation['owner_id'] ?? 0),
-            'link_id' => $this->normalizeNullablePositiveInteger($operation['link_id'] ?? null),
+            'list_id' => (int) ($operation['list_id'] ?? 0),
             'type' => (string) ($operation['type'] ?? ''),
             'suggestion_key' => (string) ($payload['suggestion_key'] ?? ''),
             'average_interval_seconds' => (int) ($payload['average_interval_seconds'] ?? 0),
@@ -127,8 +124,7 @@ class ListItemSyncChunkActionHandler implements SyncChunkActionHandler
         $payload = is_array($operation['payload'] ?? null) ? $operation['payload'] : [];
 
         $resetRequest = $this->requestFactory->make($request, [
-            'owner_id' => (int) ($operation['owner_id'] ?? 0),
-            'link_id' => $this->normalizeNullablePositiveInteger($operation['link_id'] ?? null),
+            'list_id' => (int) ($operation['list_id'] ?? 0),
             'type' => (string) ($operation['type'] ?? ''),
             'suggestion_key' => (string) ($payload['suggestion_key'] ?? ''),
         ]);
@@ -141,8 +137,7 @@ class ListItemSyncChunkActionHandler implements SyncChunkActionHandler
         $payload = is_array($operation['payload'] ?? null) ? $operation['payload'] : [];
 
         $settingsRequest = $this->requestFactory->make($request, [
-            'owner_id' => (int) ($operation['owner_id'] ?? 0),
-            'link_id' => $this->normalizeNullablePositiveInteger($operation['link_id'] ?? null),
+            'list_id' => (int) ($operation['list_id'] ?? 0),
             'type' => (string) ($operation['type'] ?? ''),
             'suggestion_key' => (string) ($payload['suggestion_key'] ?? ''),
             'custom_interval_seconds' => array_key_exists('custom_interval_seconds', $payload)
@@ -154,12 +149,5 @@ class ListItemSyncChunkActionHandler implements SyncChunkActionHandler
         ]);
 
         return $this->listItemApiService->updateSuggestionSettings($settingsRequest);
-    }
-
-    private function normalizeNullablePositiveInteger(mixed $value): ?int
-    {
-        $parsed = (int) $value;
-
-        return $parsed > 0 ? $parsed : null;
     }
 }

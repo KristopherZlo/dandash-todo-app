@@ -9,13 +9,12 @@ use Illuminate\Support\Facades\DB;
 
 class ListItemOrderingService
 {
-    public function nextSortOrder(int $ownerId, string $type, bool $isCompleted, ?int $listLinkId = null): int
+    public function nextSortOrder(int $listId, string $type, bool $isCompleted): int
     {
         $query = ListItem::query()
             ->ofType($type)
-            ->where('is_completed', $isCompleted);
-
-        $this->applyScope($query, $ownerId, $listLinkId);
+            ->where('is_completed', $isCompleted)
+            ->forList($listId);
 
         $minSortOrder = $query->min('sort_order');
 
@@ -81,17 +80,6 @@ class ListItemOrderingService
             $completedIds->concat($remainingCompletedIds)->values(),
             $updatedById
         );
-    }
-
-    private function applyScope(Builder $query, int $ownerId, ?int $listLinkId = null): void
-    {
-        if ($listLinkId) {
-            $query->where('list_link_id', $listLinkId);
-
-            return;
-        }
-
-        $query->forOwner($ownerId)->whereNull('list_link_id');
     }
 
     private function persistOrders(

@@ -3,63 +3,52 @@
 namespace App\Services;
 
 use App\Models\ListInvitation;
-use App\Models\ListLink;
+use App\Models\ListMember;
 use App\Models\User;
+use App\Services\Lists\ListCatalogService;
+use App\Services\Lists\ListSummaryService;
 use App\Services\UserState\UserGamificationStateService;
 use App\Services\UserState\UserMoodStateService;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
 class ListSyncService
 {
     public function __construct(
         private readonly UserGamificationStateService $gamificationStateService,
-        private readonly UserMoodStateService $moodStateService
+        private readonly UserMoodStateService $moodStateService,
+        private readonly ListCatalogService $listCatalogService,
+        private readonly ListSummaryService $listSummaryService,
     ) {
     }
 
-    public function canonicalUserPair(int $firstUserId, int $secondUserId): array
+    public function canAccessList(User $user, int $listId): bool
     {
-        return $firstUserId < $secondUserId
-            ? [$firstUserId, $secondUserId]
-            : [$secondUserId, $firstUserId];
-    }
-
-    public function canAccessOwner(User $user, int $ownerId): bool
-    {
-        if ($user->id === $ownerId) {
-            return true;
+        if ($listId <= 0) {
+            return false;
         }
 
-        return ListLink::query()
-            ->where('is_active', true)
-            ->where(function (Builder $query) use ($user, $ownerId): void {
-                $query->where(function (Builder $pairQuery) use ($user, $ownerId): void {
-                    $pairQuery->where('user_one_id', $user->id)
-                        ->where('user_two_id', $ownerId);
-                })->orWhere(function (Builder $pairQuery) use ($user, $ownerId): void {
-                    $pairQuery->where('user_one_id', $ownerId)
-                        ->where('user_two_id', $user->id);
-                });
-            })
+        return ListMember::query()
+            ->where('list_id', $listId)
+            ->where('user_id', (int) $user->id)
             ->exists();
     }
 
     public function getState(User $user): array
     {
-        $invitations = $this->getPendingInvitations($user);
-        $outgoingInvitations = $this->getOutgoingPendingInvitations($user);
-        $listOptions = $this->getListOptions($user)->values();
+        $this->listCatalogService->ensurePersonalListExists($user);
+        $freshUser = $user->fresh() ?? $user;
+        $lists = $this->listSummaryService->summariesForUser($freshUser)->values();
 
         return [
-            'pending_invitations_count' => $invitations->count(),
-            'invitations' => $invitations->values()->all(),
-            'outgoing_pending_invitations' => $outgoingInvitations->values()->all(),
-            'links' => $this->getLinks($user)->values()->all(),
-            'list_options' => $listOptions->all(),
-            'default_owner_id' => $this->resolveDefaultOwnerId($user, $listOptions),
-            'gamification' => $this->getGamificationState($user),
-            'mood_cards' => $this->getMoodCards($user)->values()->all(),
+            'pending_invitations_count' => $this->getPendingInvitations($freshUser)->count(),
+            'invitations' => $this->getPendingInvitations($freshUser)->values()->all(),
+            'outgoing_pending_invitations' => $this->getOutgoingPendingInvitations($freshUser)->values()->all(),
+            'lists' => $lists->all(),
+            'templates' => $this->listSummaryService->templatesForUser($freshUser)->all(),
+            'default_list_id' => $this->resolveDefaultListId($freshUser, $lists),
+            'gamification' => $this->getGamificationState($freshUser),
+            'mood_cards' => $this->getMoodCards($freshUser)->values()->all(),
+            'self_mood_preferences' => $this->moodStateService->buildPreferencesPayload($freshUser),
         ];
     }
 
@@ -79,53 +68,76 @@ class ListSyncService
             $this->buildMoodCardPayload($user, true),
         ]);
 
-        $links = $this->baseLinksForUser($user)
-            ->with([
-                'userOne:id,name,mood_color,mood_fire_level,mood_fire_emoji,mood_battery_level,mood_battery_emoji,mood_updated_at',
-                'userTwo:id,name,mood_color,mood_fire_level,mood_fire_emoji,mood_battery_level,mood_battery_emoji,mood_updated_at',
-            ])
-            ->get();
+        $visibleListIds = ListMember::query()
+            ->join('lists', 'lists.id', '=', 'list_members.list_id')
+            ->where('list_members.user_id', (int) $user->id)
+            ->where('lists.is_template', false)
+            ->pluck('list_members.list_id')
+            ->map(static fn ($value): int => (int) $value)
+            ->values()
+            ->all();
 
-        foreach ($links as $link) {
-            $otherUser = $link->user_one_id === $user->id ? $link->userTwo : $link->userOne;
-            if (! $otherUser) {
-                continue;
-            }
+        if ($visibleListIds === []) {
+            return $cards;
+        }
 
+        $otherUserIds = ListMember::query()
+            ->join('lists', 'lists.id', '=', 'list_members.list_id')
+            ->whereIn('list_members.list_id', $visibleListIds)
+            ->where('lists.is_template', false)
+            ->where('list_members.user_id', '!=', (int) $user->id)
+            ->pluck('list_members.user_id')
+            ->map(static fn ($value): int => (int) $value)
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($otherUserIds === []) {
+            return $cards;
+        }
+
+        $otherUsers = User::query()
+            ->whereIn('id', $otherUserIds)
+            ->orderBy('name')
+            ->get([
+                'id',
+                'name',
+                'mood_color',
+                'mood_fire_level',
+                'mood_fire_emoji',
+                'mood_fire_recent_emojis',
+                'mood_battery_level',
+                'mood_battery_emoji',
+                'mood_battery_recent_emojis',
+                'mood_updated_at',
+            ]);
+
+        foreach ($otherUsers as $otherUser) {
             $cards->push($this->buildMoodCardPayload($otherUser, false));
         }
 
-        $uniqueCards = $cards
-            ->unique(fn (array $card): int => (int) ($card['id'] ?? 0))
-            ->values();
-        $selfCard = $uniqueCards->firstWhere('is_self', true) ?? $this->buildMoodCardPayload($user, true);
-        $otherCards = $uniqueCards
-            ->filter(fn (array $card): bool => ! ((bool) ($card['is_self'] ?? false)))
-            ->sortBy(fn (array $card): string => strtolower((string) ($card['name'] ?? '')))
-            ->values();
-
-        return collect([$selfCard])
-            ->merge($otherCards)
-            ->values();
+        return $cards->values();
     }
 
     public function getPendingInvitations(User $user): Collection
     {
         return ListInvitation::query()
-            ->with('inviter:id,name,email')
-            ->where('invitee_id', $user->id)
+            ->with(['inviter:id,name,email', 'list:id,name'])
+            ->where('invitee_id', (int) $user->id)
             ->where('status', ListInvitation::STATUS_PENDING)
             ->latest('id')
             ->get()
-            ->map(function (ListInvitation $invitation): array {
+            ->map(static function (ListInvitation $invitation): array {
                 return [
-                    'id' => $invitation->id,
-                    'status' => $invitation->status,
+                    'id' => (int) $invitation->id,
+                    'list_id' => (int) ($invitation->list_id ?? 0),
+                    'list_name' => (string) ($invitation->list?->name ?? ''),
+                    'status' => (string) $invitation->status,
                     'created_at' => optional($invitation->created_at)->toISOString(),
                     'inviter' => [
-                        'id' => $invitation->inviter_id,
-                        'name' => $invitation->inviter?->name,
-                        'email' => $invitation->inviter?->email,
+                        'id' => (int) $invitation->inviter_id,
+                        'name' => (string) ($invitation->inviter?->name ?? ''),
+                        'email' => (string) ($invitation->inviter?->email ?? ''),
                     ],
                 ];
             });
@@ -134,92 +146,25 @@ class ListSyncService
     public function getOutgoingPendingInvitations(User $user): Collection
     {
         return ListInvitation::query()
-            ->with('invitee:id,name,email,tag')
-            ->where('inviter_id', $user->id)
+            ->with(['invitee:id,name,email,tag', 'list:id,name'])
+            ->where('inviter_id', (int) $user->id)
             ->where('status', ListInvitation::STATUS_PENDING)
             ->latest('id')
             ->get()
-            ->map(function (ListInvitation $invitation): array {
+            ->map(static function (ListInvitation $invitation): array {
                 return [
-                    'id' => $invitation->id,
-                    'status' => $invitation->status,
+                    'id' => (int) $invitation->id,
+                    'list_id' => (int) ($invitation->list_id ?? 0),
+                    'list_name' => (string) ($invitation->list?->name ?? ''),
+                    'status' => (string) $invitation->status,
                     'created_at' => optional($invitation->created_at)->toISOString(),
                     'invitee' => [
-                        'id' => $invitation->invitee_id,
-                        'name' => $invitation->invitee?->name,
-                        'email' => $invitation->invitee?->email,
-                        'tag' => $invitation->invitee?->tag,
+                        'id' => (int) $invitation->invitee_id,
+                        'name' => (string) ($invitation->invitee?->name ?? ''),
+                        'email' => (string) ($invitation->invitee?->email ?? ''),
+                        'tag' => (string) ($invitation->invitee?->tag ?? ''),
                     ],
                 ];
-            });
-    }
-
-    public function getLinks(User $user): Collection
-    {
-        return $this->baseLinksForUser($user)
-            ->with(['userOne:id,name,email', 'userTwo:id,name,email', 'syncOwner:id,name,email'])
-            ->latest('updated_at')
-            ->get()
-            ->map(function (ListLink $link) use ($user): array {
-                $otherUser = $link->user_one_id === $user->id ? $link->userTwo : $link->userOne;
-
-                return [
-                    'id' => $link->id,
-                    'is_active' => (bool) $link->is_active,
-                    'sync_owner_id' => $link->sync_owner_id,
-                    'sync_owner_name' => $link->syncOwner?->name,
-                    'can_set_default' => $otherUser?->id
-                        ? $this->canAccessOwner($user, (int) $otherUser->id)
-                        : false,
-                    'accepted_at' => optional($link->accepted_at)->toISOString(),
-                    'other_user' => [
-                        'id' => $otherUser?->id,
-                        'name' => $otherUser?->name,
-                        'email' => $otherUser?->email,
-                    ],
-                ];
-            });
-    }
-
-    public function getListOptions(User $user): Collection
-    {
-        $options = collect([
-            [
-                'owner_id' => $user->id,
-                'link_id' => null,
-                'label' => 'Личный',
-                'is_personal' => true,
-            ],
-        ]);
-
-        $links = $this->baseLinksForUser($user)
-            ->with(['userOne:id,name', 'userTwo:id,name'])
-            ->get();
-
-        foreach ($links as $link) {
-            $otherUser = $link->user_one_id === $user->id ? $link->userTwo : $link->userOne;
-            if (! $otherUser) {
-                continue;
-            }
-
-            $options->push([
-                'owner_id' => (int) $otherUser->id,
-                'link_id' => (int) $link->id,
-                'label' => sprintf('Вы и %s', $otherUser->name),
-                'is_personal' => false,
-            ]);
-        }
-
-        return $options;
-    }
-
-    private function baseLinksForUser(User $user): Builder
-    {
-        return ListLink::query()
-            ->where('is_active', true)
-            ->where(function (Builder $query) use ($user): void {
-                $query->where('user_one_id', $user->id)
-                    ->orWhere('user_two_id', $user->id);
             });
     }
 
@@ -227,33 +172,31 @@ class ListSyncService
     {
         return [
             'id' => (int) $user->id,
-            'name' => $user->name,
+            'name' => (string) $user->name,
             'is_self' => $isSelf,
             'mood' => $this->getMoodState($user),
         ];
     }
 
-    private function resolveDefaultOwnerId(User $user, Collection $listOptions): int
+    private function resolveDefaultListId(User $user, Collection $lists): int
     {
-        $availableOwnerIds = $listOptions
-            ->pluck('owner_id')
-            ->map(fn (mixed $ownerId): int => (int) $ownerId)
+        $availableListIds = $lists
+            ->pluck('id')
+            ->map(static fn ($value): int => (int) $value)
             ->values();
 
-        if ($availableOwnerIds->isEmpty()) {
-            return $user->id;
+        if ($availableListIds->isEmpty()) {
+            $fallbackList = $this->listCatalogService->ensurePersonalListExists($user);
+
+            return (int) $fallbackList->id;
         }
 
-        $preferredOwnerId = (int) ($user->preferred_owner_id ?? 0);
+        $preferredListId = (int) ($user->preferred_list_id ?? 0);
 
-        if ($preferredOwnerId > 0 && $availableOwnerIds->contains($preferredOwnerId)) {
-            return $preferredOwnerId;
+        if ($preferredListId > 0 && $availableListIds->contains($preferredListId)) {
+            return $preferredListId;
         }
 
-        if ($availableOwnerIds->contains($user->id)) {
-            return $user->id;
-        }
-
-        return (int) $availableOwnerIds->first();
+        return (int) $availableListIds->first();
     }
 }

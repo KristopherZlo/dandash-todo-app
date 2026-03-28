@@ -17,6 +17,7 @@ class ListItemSerializer
     {
         return [
             'id' => $item->id,
+            'list_id' => (int) ($item->list_id ?? 0),
             'owner_id' => $item->owner_id,
             'list_link_id' => $item->list_link_id ? (int) $item->list_link_id : null,
             'type' => $item->type,

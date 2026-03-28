@@ -14,6 +14,7 @@ class ListItemEvent extends Model
     protected $fillable = [
         'owner_id',
         'list_link_id',
+        'list_id',
         'type',
         'event_type',
         'text',
@@ -27,6 +28,7 @@ class ListItemEvent extends Model
     {
         return [
             'list_link_id' => 'integer',
+            'list_id' => 'integer',
             'source_item_id' => 'integer',
             'occurred_at' => 'datetime',
             'meta' => 'array',
@@ -43,9 +45,19 @@ class ListItemEvent extends Model
         return $this->belongsTo(ListItem::class, 'source_item_id');
     }
 
+    public function list(): BelongsTo
+    {
+        return $this->belongsTo(UserList::class, 'list_id');
+    }
+
     public function scopeForOwner(Builder $query, int $ownerId): Builder
     {
         return $query->where('owner_id', $ownerId);
+    }
+
+    public function scopeForList(Builder $query, int $listId): Builder
+    {
+        return $query->where('list_id', $listId);
     }
 
     public function scopeOfType(Builder $query, string $type): Builder
@@ -58,4 +70,3 @@ class ListItemEvent extends Model
         return $query->where('event_type', $eventType);
     }
 }
-

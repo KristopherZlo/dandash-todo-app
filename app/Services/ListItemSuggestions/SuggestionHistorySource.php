@@ -21,11 +21,11 @@ class SuggestionHistorySource
     /**
      * @return array<int, array{text: string, timestamp: CarbonImmutable}>
      */
-    public function loadAdditionEntriesForOwner(int $ownerId, string $type, ?int $listLinkId = null): array
+    public function loadAdditionEntriesForList(int $listId, string $type): array
     {
         if ($this->canUseEventsTable()) {
             try {
-                $events = $this->eventQueryForOwner($ownerId, $type, $listLinkId)
+                $events = $this->eventQueryForList($listId, $type)
                     ->ofEventType(ListItemEvent::EVENT_ADDED)
                     ->orderBy('occurred_at')
                     ->get(['text', 'occurred_at']);
@@ -54,10 +54,9 @@ class SuggestionHistorySource
         }
 
         $itemsQuery = ListItem::query()
-            ->forOwner($ownerId)
+            ->forList($listId)
             ->ofType($type)
             ->orderBy('created_at');
-        $this->applyListLinkScope($itemsQuery, $listLinkId);
 
         return $itemsQuery
             ->get(['text', 'created_at'])
@@ -81,11 +80,11 @@ class SuggestionHistorySource
     /**
      * @return array<int, array{text: string, timestamp: CarbonImmutable}>
      */
-    public function loadCompletionEntriesForOwner(int $ownerId, string $type, ?int $listLinkId = null): array
+    public function loadCompletionEntriesForList(int $listId, string $type): array
     {
         if ($this->canUseEventsTable()) {
             try {
-                $events = $this->eventQueryForOwner($ownerId, $type, $listLinkId)
+                $events = $this->eventQueryForList($listId, $type)
                     ->ofEventType(ListItemEvent::EVENT_COMPLETED)
                     ->orderBy('occurred_at')
                     ->get(['text', 'occurred_at']);
@@ -114,12 +113,11 @@ class SuggestionHistorySource
         }
 
         $itemsQuery = ListItem::query()
-            ->forOwner($ownerId)
+            ->forList($listId)
             ->ofType($type)
             ->where('is_completed', true)
             ->orderBy('completed_at')
             ->orderBy('created_at');
-        $this->applyListLinkScope($itemsQuery, $listLinkId);
 
         return $itemsQuery
             ->get(['text', 'created_at', 'completed_at'])
@@ -140,14 +138,14 @@ class SuggestionHistorySource
             ->all();
     }
 
-    public function countEventsForOwner(int $ownerId, string $type, string $eventType, ?int $listLinkId = null): int
+    public function countEventsForList(int $listId, string $type, string $eventType): int
     {
         if (! $this->canUseEventsTable()) {
             return 0;
         }
 
         try {
-            return (int) $this->eventQueryForOwner($ownerId, $type, $listLinkId)
+            return (int) $this->eventQueryForList($listId, $type)
                 ->ofEventType($eventType)
                 ->count();
         } catch (QueryException $exception) {
@@ -157,14 +155,14 @@ class SuggestionHistorySource
         }
     }
 
-    public function uniqueEventKeysForOwner(int $ownerId, string $type, ?int $listLinkId = null): int
+    public function uniqueEventKeysForList(int $listId, string $type): int
     {
         if (! $this->canUseEventsTable()) {
             return 0;
         }
 
         try {
-            return (int) $this->eventQueryForOwner($ownerId, $type, $listLinkId)
+            return (int) $this->eventQueryForList($listId, $type)
                 ->where('normalized_text', '!=', '')
                 ->distinct()
                 ->count('normalized_text');
@@ -175,14 +173,14 @@ class SuggestionHistorySource
         }
     }
 
-    public function lastEventActivityForOwner(int $ownerId, string $type, ?int $listLinkId = null): ?CarbonImmutable
+    public function lastEventActivityForList(int $listId, string $type): ?CarbonImmutable
     {
         if (! $this->canUseEventsTable()) {
             return null;
         }
 
         try {
-            $value = $this->eventQueryForOwner($ownerId, $type, $listLinkId)
+            $value = $this->eventQueryForList($listId, $type)
                 ->max('occurred_at');
         } catch (QueryException $exception) {
             $this->markEventsUnavailable($exception);
@@ -235,6 +233,7 @@ class SuggestionHistorySource
             ListItemEvent::query()->create([
                 'owner_id' => (int) $item->owner_id,
                 'list_link_id' => $item->list_link_id ? (int) $item->list_link_id : null,
+                'list_id' => (int) $item->list_id,
                 'type' => (string) $item->type,
                 'event_type' => $eventType,
                 'text' => $text,
@@ -251,26 +250,13 @@ class SuggestionHistorySource
         }
     }
 
-    private function eventQueryForOwner(int $ownerId, string $type, ?int $listLinkId = null): Builder
+    private function eventQueryForList(int $listId, string $type): Builder
     {
         $query = ListItemEvent::query()
-            ->forOwner($ownerId)
+            ->forList($listId)
             ->ofType($type);
 
-        $this->applyListLinkScope($query, $listLinkId);
-
         return $query;
-    }
-
-    private function applyListLinkScope(Builder $query, ?int $listLinkId = null): void
-    {
-        if ($listLinkId) {
-            $query->where('list_link_id', $listLinkId);
-
-            return;
-        }
-
-        $query->whereNull('list_link_id');
     }
 
     private function canUseEventsTable(): bool

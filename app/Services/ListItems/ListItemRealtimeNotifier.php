@@ -4,32 +4,33 @@ namespace App\Services\ListItems;
 
 use App\Events\ListItemsChanged;
 use App\Models\ListItem;
+use App\Models\ListMember;
+use App\Models\UserList;
 use Illuminate\Support\Facades\Log;
 
 class ListItemRealtimeNotifier
 {
     public function __construct(
         private readonly ListItemSerializer $itemSerializer,
-        private readonly ListSyncVersionService $listSyncVersionService
+        private readonly ListSyncVersionService $listSyncVersionService,
     ) {
     }
 
     public function dispatchListItemsChangedSafely(
+        int $listId,
         int $ownerId,
         string $type,
-        ?int $listLinkId = null,
         ?int $actorUserId = null,
         ?int $listVersion = null,
-        ?array $changePayload = null
-    ): void
-    {
+        ?array $changePayload = null,
+    ): void {
         try {
-            $resolvedListVersion = $listVersion ?? $this->listSyncVersionService->getVersion($ownerId, $type, $listLinkId);
-            $payload = $this->buildBroadcastPayload($ownerId, $type, $listLinkId, $changePayload);
+            $resolvedListVersion = $listVersion ?? $this->listSyncVersionService->getVersion($listId, $type);
+            $payload = $this->buildBroadcastPayload($listId, $type, $changePayload);
             broadcast(new ListItemsChanged(
+                listId: $listId,
                 ownerId: $ownerId,
                 type: $type,
-                listLinkId: $listLinkId,
                 actorUserId: $actorUserId,
                 listVersion: $resolvedListVersion,
                 items: $payload['items'],
@@ -39,12 +40,13 @@ class ListItemRealtimeNotifier
                 removedItemId: $payload['removed_item_id'],
                 activeOrder: $payload['active_order'],
                 completedOrder: $payload['completed_order'],
+                listSummary: $this->buildListSummaryPayload($listId),
             ))->toOthers();
         } catch (\Throwable $exception) {
             Log::warning('Realtime list update dispatch failed.', [
+                'list_id' => $listId,
                 'owner_id' => $ownerId,
                 'type' => $type,
-                'list_link_id' => $listLinkId,
                 'actor_user_id' => $actorUserId,
                 'list_version' => $listVersion,
                 'error' => $exception->getMessage(),
@@ -55,9 +57,9 @@ class ListItemRealtimeNotifier
     public function dispatchItemCreatedSafely(ListItem $item, ?int $actorUserId = null, ?int $listVersion = null): void
     {
         $this->dispatchListItemsChangedSafely(
+            (int) $item->list_id,
             (int) $item->owner_id,
             (string) $item->type,
-            $item->list_link_id ? (int) $item->list_link_id : null,
             $actorUserId,
             $listVersion,
             [
@@ -71,9 +73,9 @@ class ListItemRealtimeNotifier
     public function dispatchItemUpdatedSafely(ListItem $item, ?int $actorUserId = null, ?int $listVersion = null): void
     {
         $this->dispatchListItemsChangedSafely(
+            (int) $item->list_id,
             (int) $item->owner_id,
             (string) $item->type,
-            $item->list_link_id ? (int) $item->list_link_id : null,
             $actorUserId,
             $listVersion,
             [
@@ -85,17 +87,17 @@ class ListItemRealtimeNotifier
     }
 
     public function dispatchItemDeletedSafely(
+        int $listId,
         int $ownerId,
         string $type,
         int $itemId,
-        ?int $listLinkId = null,
         ?int $actorUserId = null,
-        ?int $listVersion = null
+        ?int $listVersion = null,
     ): void {
         $this->dispatchListItemsChangedSafely(
+            $listId,
             $ownerId,
             $type,
-            $listLinkId,
             $actorUserId,
             $listVersion,
             [
@@ -111,18 +113,18 @@ class ListItemRealtimeNotifier
      * @param  array<int, int>  $completedOrder
      */
     public function dispatchListReorderedSafely(
+        int $listId,
         int $ownerId,
         string $type,
         array $activeOrder,
         array $completedOrder,
-        ?int $listLinkId = null,
         ?int $actorUserId = null,
-        ?int $listVersion = null
+        ?int $listVersion = null,
     ): void {
         $this->dispatchListItemsChangedSafely(
+            $listId,
             $ownerId,
             $type,
-            $listLinkId,
             $actorUserId,
             $listVersion,
             [
@@ -134,7 +136,7 @@ class ListItemRealtimeNotifier
         );
     }
 
-    private function buildBroadcastPayload(int $ownerId, string $type, ?int $listLinkId, ?array $changePayload): array
+    private function buildBroadcastPayload(int $listId, string $type, ?array $changePayload): array
     {
         if (! is_array($changePayload) || $changePayload === []) {
             return [
@@ -144,7 +146,7 @@ class ListItemRealtimeNotifier
                 'removed_item_id' => null,
                 'active_order' => null,
                 'completed_order' => null,
-                'items' => $this->buildItemsPayload($ownerId, $type, $listLinkId),
+                'items' => $this->buildItemsPayload($listId, $type),
             ];
         }
 
@@ -167,25 +169,50 @@ class ListItemRealtimeNotifier
         ];
     }
 
-    private function buildItemsPayload(int $ownerId, string $type, ?int $listLinkId): array
+    private function buildItemsPayload(int $listId, string $type): array
     {
-        $query = ListItem::query()
+        return ListItem::query()
+            ->forList($listId)
             ->ofType($type)
             ->orderBy('is_completed')
             ->orderBy('sort_order')
             ->orderByDesc('created_at')
-            ->orderByDesc('id');
-
-        if ($listLinkId) {
-            $query->where('list_link_id', $listLinkId);
-        } else {
-            $query->forOwner($ownerId)->whereNull('list_link_id');
-        }
-
-        return $query
+            ->orderByDesc('id')
             ->get()
             ->map(fn (ListItem $item): array => $this->itemSerializer->serialize($item))
             ->values()
             ->all();
+    }
+
+    private function buildListSummaryPayload(int $listId): ?array
+    {
+        /** @var UserList|null $list */
+        $list = UserList::query()->find($listId);
+        if (! $list) {
+            return null;
+        }
+
+        $counts = ListItem::query()
+            ->selectRaw(
+                'SUM(CASE WHEN type = ? AND is_completed = 0 THEN 1 ELSE 0 END) as open_products_count,
+                SUM(CASE WHEN type = ? AND is_completed = 0 THEN 1 ELSE 0 END) as open_todos_count',
+                [ListItem::TYPE_PRODUCT, ListItem::TYPE_TODO]
+            )
+            ->forList($listId)
+            ->first();
+
+        $openProductsCount = (int) ($counts?->open_products_count ?? 0);
+        $openTodosCount = (int) ($counts?->open_todos_count ?? 0);
+
+        return [
+            'id' => (int) $list->id,
+            'name' => (string) $list->name,
+            'owner_user_id' => (int) $list->owner_user_id,
+            'member_count' => (int) ListMember::query()->where('list_id', $listId)->count(),
+            'open_products_count' => $openProductsCount,
+            'open_todos_count' => $openTodosCount,
+            'total_pending_count' => $openProductsCount + $openTodosCount,
+            'last_activity_at' => optional($list->last_activity_at)->toISOString(),
+        ];
     }
 }

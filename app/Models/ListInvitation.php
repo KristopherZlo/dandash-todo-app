@@ -15,6 +15,7 @@ class ListInvitation extends Model
     protected $fillable = [
         'inviter_id',
         'invitee_id',
+        'list_id',
         'status',
         'responded_at',
     ];
@@ -22,6 +23,7 @@ class ListInvitation extends Model
     protected function casts(): array
     {
         return [
+            'list_id' => 'integer',
             'responded_at' => 'datetime',
         ];
     }
@@ -34,6 +36,11 @@ class ListInvitation extends Model
     public function invitee(): BelongsTo
     {
         return $this->belongsTo(User::class, 'invitee_id');
+    }
+
+    public function list(): BelongsTo
+    {
+        return $this->belongsTo(UserList::class, 'list_id');
     }
 
     public function isPending(): bool

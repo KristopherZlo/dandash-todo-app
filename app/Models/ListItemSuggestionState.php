@@ -10,6 +10,7 @@ class ListItemSuggestionState extends Model
 {
     protected $fillable = [
         'owner_id',
+        'list_id',
         'type',
         'suggestion_key',
         'dismissed_count',
@@ -23,6 +24,7 @@ class ListItemSuggestionState extends Model
     {
         return [
             'dismissed_count' => 'integer',
+            'list_id' => 'integer',
             'hidden_until' => 'datetime',
             'retired_at' => 'datetime',
             'reset_at' => 'datetime',
@@ -35,9 +37,19 @@ class ListItemSuggestionState extends Model
         return $this->belongsTo(User::class, 'owner_id');
     }
 
+    public function list(): BelongsTo
+    {
+        return $this->belongsTo(UserList::class, 'list_id');
+    }
+
     public function scopeForOwner(Builder $query, int $ownerId): Builder
     {
         return $query->where('owner_id', $ownerId);
+    }
+
+    public function scopeForList(Builder $query, int $listId): Builder
+    {
+        return $query->where('list_id', $listId);
     }
 
     public function scopeOfType(Builder $query, string $type): Builder
