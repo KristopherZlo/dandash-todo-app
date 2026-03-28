@@ -150,6 +150,9 @@ const todoItemDuePickerValue = ref('');
 const todoItemDueTarget = ref(null);
 const todoDueModalOpen = ref(false);
 const todoDueModalValue = ref('');
+const moodEmojiModalOpen = ref(false);
+const moodEmojiModalValue = ref('');
+const moodEmojiModalTarget = ref('fire');
 
 const editingItemId = ref(null);
 const editingText = ref('');
@@ -6661,17 +6664,36 @@ function setMoodBatteryEmoji(emoji) {
 }
 
 function promptForCustomMoodEmoji(target) {
-    const nextEmoji = window.prompt('Введите любой эмоджи', '') ?? null;
-    if (nextEmoji === null) {
+    openMoodEmojiModal(target);
+}
+
+function openMoodEmojiModal(target) {
+    moodEmojiModalTarget.value = target === 'battery' ? 'battery' : 'fire';
+    moodEmojiModalValue.value = moodEmojiModalTarget.value === 'battery'
+        ? String(selfMoodCard.value?.mood?.battery_emoji ?? '')
+        : String(selfMoodCard.value?.mood?.fire_emoji ?? '');
+    moodEmojiModalOpen.value = true;
+}
+
+function closeMoodEmojiModal() {
+    moodEmojiModalOpen.value = false;
+    moodEmojiModalValue.value = '';
+}
+
+function saveMoodEmojiModal() {
+    const nextEmoji = normalizeMoodEmoji(moodEmojiModalValue.value, null, '');
+    if (nextEmoji === '') {
+        closeMoodEmojiModal();
         return;
     }
 
-    if (target === 'battery') {
+    if (moodEmojiModalTarget.value === 'battery') {
         setMoodBatteryEmoji(nextEmoji);
-        return;
+    } else {
+        setMoodFireEmoji(nextEmoji);
     }
 
-    setMoodFireEmoji(nextEmoji);
+    closeMoodEmojiModal();
 }
 
 async function findUsers() {
@@ -8028,7 +8050,7 @@ onBeforeUnmount(() => {
                             <button
                                 type="button"
                                 class="inline-flex min-w-16 items-center justify-center rounded-xl border border-[#403e41] bg-[#221f22] px-3 text-xs font-semibold text-[#d7d2d5] transition hover:border-[#fcfcfa]/35"
-                                @click="promptForCustomMoodEmoji('fire')"
+                                @click="openMoodEmojiModal('fire')"
                             >
                                 Любой
                             </button>
@@ -8075,7 +8097,7 @@ onBeforeUnmount(() => {
                             <button
                                 type="button"
                                 class="inline-flex min-w-16 items-center justify-center rounded-xl border border-[#403e41] bg-[#221f22] px-3 text-xs font-semibold text-[#d7d2d5] transition hover:border-[#fcfcfa]/35"
-                                @click="promptForCustomMoodEmoji('battery')"
+                                @click="openMoodEmojiModal('battery')"
                             >
                                 Любой
                             </button>
@@ -8484,6 +8506,71 @@ onBeforeUnmount(() => {
                         >
                             {{ '\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c' }}
                         </button>
+                    </div>
+                </div>
+            </div>
+        </Transition>
+
+        <Transition name="app-modal">
+            <div
+                v-if="moodEmojiModalOpen"
+                class="fixed inset-0 z-[120] bg-[#19181a]/90 p-2.5"
+                @click.self="closeMoodEmojiModal"
+            >
+                <div class="mx-auto flex h-full max-w-md items-center justify-center">
+                    <div class="w-full rounded-[24px] border border-[#403e41] bg-[#221f22] p-4 shadow-[0_24px_60px_rgba(0,0,0,0.45)]">
+                        <div class="mb-3 flex items-start justify-between gap-3">
+                            <div class="min-w-0">
+                                <h2 class="text-sm font-semibold text-[#fcfcfa]">
+                                    {{
+                                        moodEmojiModalTarget === 'battery'
+                                            ? '\u042d\u043c\u043e\u0434\u0436\u0438 \u0431\u0430\u0442\u0430\u0440\u0435\u0438'
+                                            : '\u042d\u043c\u043e\u0434\u0436\u0438 \u043e\u0433\u043d\u044f'
+                                    }}
+                                </h2>
+                                <p class="mt-1 text-xs text-[#9f9a9d]">
+                                    {{ '\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043b\u044e\u0431\u043e\u0439 emoji \u0438\u043b\u0438 \u0432\u0441\u0442\u0430\u0432\u044c\u0442\u0435 \u0435\u0433\u043e \u0438\u0437 \u043a\u043b\u0430\u0432\u0438\u0430\u0442\u0443\u0440\u044b.' }}
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                class="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-[#403e41] text-[#bcb7ba] transition hover:border-[#fcfcfa]/40 hover:text-[#fcfcfa]"
+                                @click="closeMoodEmojiModal"
+                            >
+                                <X class="h-4 w-4" />
+                            </button>
+                        </div>
+
+                        <input
+                            v-model="moodEmojiModalValue"
+                            type="text"
+                            maxlength="64"
+                            class="h-11 w-full rounded-xl border border-[#403e41] bg-[#2d2a2c] px-3 text-2xl text-[#fcfcfa] outline-none transition focus:border-[#fcfcfa]/45"
+                            :placeholder="moodEmojiModalTarget === 'battery' ? '\ud83d\udd0b' : '\ud83d\udd25'"
+                            @keydown.enter.prevent="saveMoodEmojiModal"
+                        >
+
+                        <div class="mt-3 flex items-center justify-between gap-2">
+                            <p class="text-xs text-[#7f7b7e]">
+                                {{ '\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u043c \u044d\u043c\u043e\u0434\u0436\u0438 \u0432 \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0435 3 \u0431\u044b\u0441\u0442\u0440\u044b\u0445 \u0432\u044b\u0431\u043e\u0440\u0430.' }}
+                            </p>
+                            <div class="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    class="rounded-xl border border-[#403e41] bg-[#2d2a2c] px-3 py-2 text-sm font-semibold text-[#fcfcfa] transition hover:border-[#fcfcfa]/35"
+                                    @click="closeMoodEmojiModal"
+                                >
+                                    {{ '\u041e\u0442\u043c\u0435\u043d\u0430' }}
+                                </button>
+                                <button
+                                    type="button"
+                                    class="rounded-xl bg-[#fcfcfa] px-3 py-2 text-sm font-semibold text-[#19181a] transition hover:bg-[#f1f1ef]"
+                                    @click="saveMoodEmojiModal"
+                                >
+                                    {{ '\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c' }}
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
