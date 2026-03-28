@@ -98,6 +98,11 @@ const localUser = reactive({
 });
 const appVersion = computed(() => String(page.props.meta?.app_version ?? 'dev'));
 const buildVersion = computed(() => String(page.props.meta?.build_version ?? 'dev'));
+const MOOD_COLOR_VALUES = Object.freeze(['red', 'yellow', 'green']);
+const MOOD_FIRE_EMOJIS = Object.freeze(['СЂСџТђВ°', 'СЂСџВСњ', 'СЂСџВв‚¬']);
+const MOOD_BATTERY_EMOJIS = Object.freeze(['СЂСџВТ‘', 'СЂСџВРЋ', 'СЂСџВвЂћ']);
+const MOOD_UNKNOWN_EMOJI = 'РІСњвЂќ';
+const MOOD_STALE_RESET_AFTER_MS = 24 * 60 * 60 * 1000;
 
 const TOUCH_DRAG_HOLD_DELAY_MS = 500;
 const {
@@ -880,12 +885,6 @@ function cloneEntries(entries) {
         .filter((entry) => entry && typeof entry === 'object')
         .map((entry) => ({ ...entry }));
 }
-
-const MOOD_COLOR_VALUES = Object.freeze(['red', 'yellow', 'green']);
-const MOOD_FIRE_EMOJIS = Object.freeze(['рџҐ°', 'рџќ', 'рџ€']);
-const MOOD_BATTERY_EMOJIS = Object.freeze(['рџґ', 'рџЎ', 'рџ„']);
-const MOOD_UNKNOWN_EMOJI = 'вќ”';
-const MOOD_STALE_RESET_AFTER_MS = 24 * 60 * 60 * 1000;
 
 function createDefaultMoodPayload() {
     return {
